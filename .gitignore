@@ -1,0 +1,17 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Node / Tauri frontend
+node_modules/
+dist/
+src-tauri/target/
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

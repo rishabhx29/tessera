@@ -1,0 +1,13 @@
+[package]
+name = "tessera-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Tessera desktop shell (Tauri)"
+repository.workspace = true
+
+[[bin]]
+name = "tessera"
+path = "src/main.rs"
+
+[dependencies]

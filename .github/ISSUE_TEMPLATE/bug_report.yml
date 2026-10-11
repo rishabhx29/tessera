@@ -1,0 +1,50 @@
+name: Bug report
+description: Something does not work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please don't paste screenshots of private content (passwords, chats,
+        bank details) — the index can contain text extracted from images.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Folders indexed, exact query, what you saw.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Tessera version
+      placeholder: e.g. v0.1.0 (or "built from main at <commit>")
+  - type: dropdown
+    id: os
+    attributes:
+      label: Windows version
+      options:
+        - Windows 11
+        - Windows 10
+        - Other (say below)
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Index context
+      description: Approximate number of indexed files, languages involved
+        (e.g. English + Hindi screenshots), OneDrive folders involved or not.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      render: shell
+      description: If available, with any private paths redacted.

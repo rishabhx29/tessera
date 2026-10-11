@@ -1,0 +1,43 @@
+name: Feature request
+description: Suggest a capability, or challenge the roadmap
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem you're hitting
+      description: What can't you do today, in what situation?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Which roadmap phase does this belong to?
+      description: See the README roadmap. "None of these" is a fine answer —
+        it just means it needs arguing for.
+      options:
+        - v0.1 — images + documents
+        - v0.2 — video
+        - v0.3 — phone camera roll + MCP
+        - v0.4 — auto-organize
+        - None of these / needs discussion
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including existing tools that partly do this (Windows
+        Search, Google Photos, DocFetcher, FileScope, our OSS neighbors).
+  - type: checkboxes
+    id: willingness
+    attributes:
+      label: Involvement
+      options:
+        - label: I'd be willing to help build or test this

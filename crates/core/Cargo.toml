@@ -1,0 +1,9 @@
+[package]
+name = "tessera-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Tessera indexing and search engine"
+repository.workspace = true
+
+[dependencies]
