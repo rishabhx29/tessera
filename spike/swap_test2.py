@@ -93,7 +93,7 @@ class CLIP32:
         for im in imgs:
             arr = np_.asarray(im.convert("RGB").resize(size, PILImage.Resampling.BICUBIC), dtype=np.float32).transpose(2, 0, 1)
             batch.append((arr - mean[:, None, None]) / std[:, None, None])
-        x = np_.concatenate(batch, axis=0)
+        x = np_.concatenate([b[None, ...] for b in batch], axis=0)
         outs = self.vision.run(None, {self.vision.get_inputs()[0].name: x})
         for o in outs:
             a = np_.asarray(o, dtype=np.float32)

@@ -1,6 +1,8 @@
 # ADR-0004: Model choices and first-run model delivery
 
-- Status: Accepted
+- Status: Accepted — the OCR arm and the image-arm clause are superseded by
+  [ADR-0006](0006-week-1-spike-model-decisions.md), which activated this ADR's
+  own named fallback after the week-1 spike.
 - Date: 2026-10-11
 
 ## Context
