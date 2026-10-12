@@ -63,5 +63,21 @@
     "sha256": "6f638fb9401a6d6296feff533ee7efe657b787c49f954f82f5906b36ef2a1b1f",
     "url": "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/preprocessor_config.json",
     "bytes": 520
+  },
+  "ppocrv6_det": {
+    "sha256": "f42c0fbd294d95eac1a550e131b277dac97462c8025fa4b6c3cec1b7894bd3d5",
+    "bytes": 1829618,
+    "urls": [
+      "https://github.com/xevrion/gyotaku/releases/download/models-v1/PP-OCRv6_det_tiny.onnx",
+      "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv6/det/PP-OCRv6_det_tiny.onnx"
+    ]
+  },
+  "ppocrv6_rec": {
+    "sha256": "6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884",
+    "bytes": 21234383,
+    "urls": [
+      "https://github.com/xevrion/gyotaku/releases/download/models-v1/PP-OCRv6_rec_small.onnx",
+      "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv6/rec/PP-OCRv6_rec_small.onnx"
+    ]
   }
 }
