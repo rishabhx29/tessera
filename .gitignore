@@ -2,6 +2,9 @@
 /target
 **/*.rs.bk
 
+# Local issue tracker (working state; see docs/agents/issue-tracker.md)
+.scratch/
+
 # Node / Tauri frontend
 node_modules/
 dist/

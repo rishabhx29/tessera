@@ -43,3 +43,17 @@ contributors: see [CONTRIBUTING.md](CONTRIBUTING.md).
 The build plan in `docs/product-definition.md` is ordered: week-1 spike, then
 engine, then UI, then packaging, then launch. Work the current phase; don't
 pull later-phase features forward because they're interesting.
+
+## Agent skills
+
+### Issue tracker
+
+Local markdown files under `.scratch/<feature-slug>/` — spec at `spec.md`, one file per ticket under `issues/`. No hosted tracker. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default roles: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
