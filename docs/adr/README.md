@@ -13,6 +13,8 @@ editing the old one in place.
 | [0005](0005-phased-rollout-and-kill-criteria.md) | Phased rollout and pre-committed kill criteria |
 | [0006](0006-week-1-spike-model-decisions.md) | Week-1 spike model decisions (OCR → Windows.Media.Ocr; SigLIP retained) |
 | [0007](0007-cross-platform-ocr.md) | Cross-platform OCR: platform-native fast path (Windows.Media.Ocr / macOS Vision) + shared ONNX fallback |
+| [0008](0008-final-ocr-stack.md) | Final OCR stack: PP-OCRv6-tiny fallback measured; engine integration notes |
 
 Statuses: 0001–0003, 0005 **Accepted** (2026-10-11); 0004 **Accepted,
-partially superseded by 0006**; 0006, 0007 **Accepted** (2026-10-12).
+partially superseded by 0006**; 0006, 0007 **Accepted** (2026-10-12); 0008
+**Accepted** (2026-10-12), refining 0007's engine choice with measurements.

@@ -100,6 +100,32 @@ fused ≈ max(lexical 0.4, image 40, text 35) + fusion ≈ **~50 ms** at persona
 scale. At ~50k tiles the sqlite-vec KNN scan adds ~140 ms — accepted for
 v0.1, watched at v0.2 (options: int8 vec quantization, arm-aware top-k).
 
+## OCR bake-off (ADR-0008 evidence) — three engines, same 40 real screenshots, same session
+
+Script: `spike/ocr_bakeoff.py` (three runs, consistent within noise).
+
+| Engine | p50 | p95 | mean chars |
+|---|---|---|---|
+| Windows.Media.Ocr (en-US) | **35.3 ms** | 136.2 ms | 188 |
+| RapidOCR PP-OCRv5, package defaults | 2,819.7 ms | 5,854.2 ms | 267 |
+| PP-OCRv6 det-tiny + rec-small, gyotaku tuning | 2,412.3 ms | 6,104.4 ms | **287** |
+
+Findings:
+
+- **Quality**: PP-OCRv6-tuned extracts the most text, and its unified
+  18,710-character 50-script charset read everything in the test set — chat
+  text, timestamps, UI labels — at scores of 0.98–1.00, while icon misreads
+  score ≤0.73 and are dropped by the 0.5 gate.
+- **The tuning is not the speedup we hoped for on this machine**: the cost is
+  dominated by the recognizer's giant output head (100.7 s rec vs 9.3 s det
+  over the corpus), not the detector. gyotaku's 4.6× det win doesn't move the
+  total when rec is 90% of it. Their measured 0.67 s/screenshot (4 pinned
+  i7-14700HX cores, hand-written Rust, width-batching to bound the output
+  tensor) is the realistic target for our Rust engine; the Python spike's
+  2.4 s is an upper bound, not the engine's ceiling.
+- **Windows.Media.Ocr stays the Windows default**: 68× faster, and it missed
+  meaningful text in only 3 of 40 screenshots.
+
 ## Week-1 gate: PASS
 
 - image save→searchable: ~260–350 ms projected (target <1500 ms) — components measured
