@@ -266,6 +266,7 @@ def main():
     # ---------------- cross-modal sanity ----------------
     print("== cross-modal sanity ==")
     sanity = {}
+    best_text_variant = "pooler"
     sanity_ids = img_ids[: min(40, len(img_ids))]
     if len(sanity_ids) >= 8:
         img_embs = np.vstack(
@@ -283,6 +284,11 @@ def main():
                 "top1_rate": round(sum(1 for r in ranks if r == 1) / len(ranks), 3),
             }
             print(f"  text-embedding variant '{name}': mean rank {sanity[name]['mean_rank_of_correct']} of {len(sanity_ids)}")
+    if sanity:
+        best_text_variant = min(
+            sanity, key=lambda v: (sanity[v]["mean_rank_of_correct"], -sanity[v]["top1_rate"])
+        )
+        print(f"  --> using text embedding variant '{best_text_variant}' (best sanity score)")
 
     # ---------------- query benchmarks ----------------
     print("== query benchmarks (real corpus) ==")
@@ -313,8 +319,7 @@ def main():
 
     def q_image():
         emb = siglip.embed_texts([img_q_text])
-        key = "pooler" if "pooler" in sanity and sanity.get("pooler", {}).get("top1_rate", 0) >= sanity.get("last_hidden", {}).get("top1_rate", 0) else (list(emb.keys())[0])
-        return [r[0] for r in conn.execute("SELECT file_id, distance FROM img_vec WHERE embedding MATCH ? AND k = 20", (emb[key][0].astype(np.float32).tobytes(),))]
+        return [r[0] for r in conn.execute("SELECT file_id, distance FROM img_vec WHERE embedding MATCH ? AND k = 20", (emb[best_text_variant][0].astype(np.float32).tobytes(),))]
 
     def q_text():
         emb = minilm.embed_texts([doc_q])
@@ -336,8 +341,7 @@ def main():
 
         lex = q_lexical()
         emb_variants = siglip.embed_texts([img_q_text])
-        vkey = "pooler" if "pooler" in sanity and sanity.get("pooler", {}).get("top1_rate", 0) >= sanity.get("last_hidden", {}).get("top1_rate", 0) else list(emb_variants.keys())[0]
-        img = [r[0] for r in conn.execute("SELECT file_id, distance FROM img_vec WHERE embedding MATCH ? AND k = 20", (emb_variants[vkey][0].astype(np.float32).tobytes(),))]
+        img = [r[0] for r in conn.execute("SELECT file_id, distance FROM img_vec WHERE embedding MATCH ? AND k = 20", (emb_variants[best_text_variant][0].astype(np.float32).tobytes(),))]
         return rrf([lex, img, q_text()])
 
     timings.append(bench("fused (RRF of three arms)", q_fused))
@@ -398,8 +402,7 @@ def main():
 
         def s_vec():
             emb = siglip.embed_texts(["a screenshot"])
-            k = list(emb.keys())[0]
-            return [r[0] for r in sconn.execute("SELECT file_id, distance FROM img_vec WHERE embedding MATCH ? AND k = 20", (emb[k][0].astype(np.float32).tobytes(),))]
+            return [r[0] for r in sconn.execute("SELECT file_id, distance FROM img_vec WHERE embedding MATCH ? AND k = 20", (emb[best_text_variant][0].astype(np.float32).tobytes(),))]
 
         times = []
         for _ in range(args.query_runs):

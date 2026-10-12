@@ -141,14 +141,30 @@ class SigLIP:
         return self.text.run(None, feed)
 
     def embed_texts(self, texts):
+        """Returns candidates, all 2-D and L2-normalized:
+        'pooler' (2-D output if exported), 'text_lh_mean', 'text_lh_eos'.
+        The spike's cross-modal sanity check decides which one is real."""
         np = self.np
-        out = self._raw_text(texts)
-        # transformers.js SigLIP text model returns [last_hidden_state, pooler_output].
-        # Try pooler first; fall back to EOS-position hidden state if the export
-        # doesn't project. The spike's cross-modal sanity check decides.
-        cands = {"pooler": np.asarray(out[-1], dtype=np.float32)}
-        if len(out) > 1:
-            cands["last_hidden"] = np.asarray(out[0], dtype=np.float32)
+        enc = self.tokenizer.encode_batch(list(texts))
+        ids = np.array([e.ids for e in enc], dtype=np.int64)
+        mask = np.array([e.attention_mask for e in enc], dtype=np.int64)
+        input_names = {i.name for i in self.text.get_inputs()}
+        feed = {"input_ids": ids}
+        if "attention_mask" in input_names:
+            feed["attention_mask"] = mask
+        if "token_type_ids" in input_names:
+            feed["token_type_ids"] = np.zeros_like(ids)
+        outs = self.text.run(None, feed)
+        cands = {}
+        two_d = [np.asarray(o, dtype=np.float32) for o in outs if np.asarray(o).ndim == 2]
+        three_d = [np.asarray(o, dtype=np.float32) for o in outs if np.asarray(o).ndim == 3]
+        if two_d:
+            cands["pooler"] = two_d[0]
+        if three_d:
+            lh = three_d[0]
+            cands["text_lh_mean"] = lh.mean(axis=1)
+            lens = np.clip(mask.sum(axis=1) - 1, 0, lh.shape[1] - 1)
+            cands["text_lh_eos"] = lh[np.arange(len(lens)), lens]
         return {k: v / np.linalg.norm(v, axis=-1, keepdims=True) for k, v in cands.items()}
 
 
