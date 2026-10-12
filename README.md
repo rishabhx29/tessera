@@ -33,7 +33,7 @@ Not a screen recorder. Not a photo manager. Not cloud software. Not paid.
 ## Roadmap
 
 - [x] Research, product definition, architecture ([`docs/`](docs/))
-- [ ] **Week 1 — spike:** measure OCR / vision-embedding latency on real hardware → [`docs/performance.md`](docs/performance.md)
+- [x] **Week 1 — spike:** measure OCR / vision-embedding latency on real hardware → measured, targets met after model swap ([`docs/performance.md`](docs/performance.md), [ADR-0006](docs/adr/0006-week-1-spike-model-decisions.md))
 - [ ] **v0.1 — images + documents:** one search box, one index, Windows-first
 - [ ] **v0.2 — video:** search inside recorded meetings, calls, and screen recordings
 - [ ] **v0.3 — phone camera roll + MCP:** phone screenshots searchable on your PC; agents can query the index
