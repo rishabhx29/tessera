@@ -5,6 +5,11 @@
 # Local issue tracker (working state; see docs/agents/issue-tracker.md)
 .scratch/
 
+# Week-1 spike: model binaries and measured output stay local; the checksum
+# lock (spike/model-lock.json) IS committed as the verification record.
+spike/models/
+spike/results/
+
 # Node / Tauri frontend
 node_modules/
 dist/

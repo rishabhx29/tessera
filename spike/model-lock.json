@@ -1,0 +1,32 @@
+{
+  "siglip_vision": {
+    "sha256": "ef14a954f3d57e1806666432bd9785004c1dc27100aa260eee0cb0f10a5de058",
+    "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/onnx/vision_model_quantized.onnx",
+    "bytes": 99499129
+  },
+  "siglip_text": {
+    "sha256": "ad0329b1f35acc66d8953ff2559ce358da8eb0a7011794cf951523d63a4dbce2",
+    "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/onnx/text_model_quantized.onnx",
+    "bytes": 111475220
+  },
+  "siglip_tokenizer": {
+    "sha256": "4a17c975210be5ab4c36b47d8dae4eefb866dbfb1e676e394aad85dc30a3ae08",
+    "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/tokenizer.json",
+    "bytes": 2398744
+  },
+  "siglip_preprocessor": {
+    "sha256": "21ee046a8a52a65e5f9c177bf840bfb39ea66c9c54cf2760630efd58e0a3ec80",
+    "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/preprocessor_config.json",
+    "bytes": 368
+  },
+  "minilm_model": {
+    "sha256": "afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1",
+    "url": "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/onnx/model_quantized.onnx",
+    "bytes": 22972370
+  },
+  "minilm_tokenizer": {
+    "sha256": "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0",
+    "url": "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/tokenizer.json",
+    "bytes": 711661
+  }
+}
