@@ -7,7 +7,7 @@ description = "Tessera desktop shell (Tauri)"
 repository.workspace = true
 
 [[bin]]
-name = "tessera"
+name = "tessera-app"
 path = "src/main.rs"
 
 [dependencies]
