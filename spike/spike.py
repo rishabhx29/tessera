@@ -208,6 +208,8 @@ def main():
     t_decode, t_ocr, t_clip, t_e2e = [], [], [], []
     ocr_texts, img_ids = {}, []
     queries_lex, queries_desc = [], []
+    # NOTE: stage timers are in MILLISECONDS (the first spike run recorded
+    # seconds and printed them as ms; the data was right, the label was wrong).
     for i, path in enumerate(images):
         te = time.perf_counter()
         try:
@@ -215,14 +217,14 @@ def main():
             img.load()
         except Exception:
             continue
-        t_decode.append(time.perf_counter() - te)
+        t_decode.append((time.perf_counter() - te) * 1000)
         t1 = time.perf_counter()
         text = ocr.text(img)
-        t_ocr.append(time.perf_counter() - t1)
+        t_ocr.append((time.perf_counter() - t1) * 1000)
         t2 = time.perf_counter()
         emb = siglip.embed_images([img])
-        t_clip.append(time.perf_counter() - t2)
-        t_e2e.append(time.perf_counter() - te)
+        t_clip.append((time.perf_counter() - t2) * 1000)
+        t_e2e.append((time.perf_counter() - te) * 1000)
         ocr_texts[i] = text
         img_ids.append(i)
         conn.execute("INSERT INTO tiles(id, file_id, kind, text) VALUES (?,?,?,?)", (i, i, "image", path.name + "\n" + text))
@@ -257,9 +259,9 @@ def main():
                 (tile_id, emb[0].astype(np.float32).tobytes()),
             )
             tile_id += 1
-        t_extract.append(time.perf_counter() - t0d)
-        t_chunk.append(time.perf_counter() - t1d)
-        t_embed.append(time.perf_counter() - t2d)
+        t_extract.append((time.perf_counter() - t0d) * 1000)
+        t_chunk.append((time.perf_counter() - t1d) * 1000)
+        t_embed.append((time.perf_counter() - t2d) * 1000)
 
     rss_after_index = proc.memory_info().rss / 1e6
 
