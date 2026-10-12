@@ -81,7 +81,12 @@ class CLIP32:
         from PIL import Image as PILImage
 
         pre = _json.loads((MODELS / "preprocessor_config.json").read_text())
-        size = (pre["size"], pre["size"])
+        sz = pre["size"]
+        if isinstance(sz, dict):
+            side = sz.get("shortest_edge") or sz.get("width") or sz.get("height") or 224
+        else:
+            side = sz
+        size = (int(side), int(side))
         mean = np_.array(pre["image_mean"], dtype=np.float32) * 255
         std = np_.array(pre["image_std"], dtype=np.float32) * 255
         batch = []
@@ -207,19 +212,19 @@ def main():
     print("== Part 2: image arm candidates on the same screenshots ==")
     clip = CLIP32()
     imgs_only = [im for _, im in pil]
-    ts = []
+    vts = []
     for im in imgs_only[:40]:
         t = time.perf_counter()
         clip.embed_images([im])
-        ts.append((time.perf_counter() - t) * 1000)
-    print(f"  CLIP ViT-B/32 vision embed: p50 {np.median(ts):.1f} ms  p95 {np.percentile(ts, 95):.1f} ms")
-    ts = []
+        vts.append((time.perf_counter() - t) * 1000)
+    print(f"  CLIP ViT-B/32 vision embed: p50 {np.median(vts):.1f} ms  p95 {np.percentile(vts, 95):.1f} ms")
+    tts = []
     for q in ["the invoice from the airline", "a screenshot", "meeting notes q3 roadmap planning"]:
         for _ in range(3):
             t = time.perf_counter()
             clip.embed_texts([q])
-            ts.append((time.perf_counter() - t) * 1000)
-    print(f"  CLIP ViT-B/32 text embed:   p50 {np.median(ts):.1f} ms")
+            tts.append((time.perf_counter() - t) * 1000)
+    print(f"  CLIP ViT-B/32 text embed:   p50 {np.median(tts):.1f} ms")
 
     phrases = [
         "boarding pass seat 14A to lisbon", "wifi password hunter2 network",
@@ -259,8 +264,10 @@ def main():
         print(f"  real-screenshot retrieval: mean rank {np.mean(ranks):.2f}/{n}  top1 {sum(1 for r in ranks if r == 1) / n:.3f}  (n={len(pairs)})")
 
     print("\n== projected save->searchable (per file) ==")
-    print(f"  decode ~10-100ms + WinOCR p50 {np.median(win_times):.0f} ms + CLIP32 p50 {np.median(ts):.0f} ms"
-          f"  =>  ~{10 + np.median(win_times) + np.median(ts) if False else 10 + np.median(win_times):.0f}+{np.median(ts):.0f} ms")
+    print(
+        f"  decode ~10-100 ms + WinOCR p50 {np.median(win_times):.0f} ms "
+        f"+ CLIP32 vision p50 {np.median(vts):.0f} ms  =>  ~{10 + np.median(win_times) + np.median(vts):.0f} ms total"
+    )
 
 
 if __name__ == "__main__":
