@@ -40,6 +40,25 @@ pipeline emits tiles; the store and search code are format-agnostic. Video
 (v0.2) is a new pipeline that emits image tiles (keyframes) and text tiles
 (transcript chunks) — no store or search changes.
 
+### The OCR seam (cross-platform, ADR-0007)
+
+OCR itself is a trait with three implementations, chosen per platform:
+
+```rust
+trait OcrEngine {
+    fn name(&self) -> &'static str;
+    fn recognize(&self, image: &Image) -> Result<String>;
+}
+```
+
+- **WindowsOcr** — Windows.Media.Ocr (`windows` crate). Measured p50 50 ms.
+- **VisionOcr** — macOS Vision `VNRecognizeTextRequest` (`objc2-vision`).
+- **OnnxOcr** — RapidOCR PP-OCRv5 via `ort`, cross-platform fallback and
+  highest-quality extractor (measured p50 ~2.7–3.3 s).
+
+The image pipeline depends on the trait, never on a platform API, so adding a
+platform never touches the store, search, or UI.
+
 ## Data model (single SQLite file, WAL mode)
 
 ```sql

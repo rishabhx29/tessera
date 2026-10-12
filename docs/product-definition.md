@@ -127,7 +127,7 @@ the user can inspect, move, or delete.
 | Week | Milestone | Exit criteria |
 |---|---|---|
 | 1 | **Spike + scaffold**: measure RapidOCR + CLIP + MiniLM over 1,000 real images and 200 real PDFs/DOCX | Real numbers meet targets, or model swap decided (fallback: Windows.Media.Ocr). **If OCR > 1 s/image, stop and rethink — do not build on hope** |
-| 2–3 | Engine: watcher, queue, change detection, per-format pipelines, store schema, hybrid search, CLI | `tessera search "invoice airline"` returns the right screenshot *and* the right PDF from 5k mixed items |
+| 2–3 | Engine: watcher, queue, change detection, per-format pipelines, store schema, hybrid search, CLI, **OCR adapters for Windows / macOS / Linux (ADR-0007)** | `tessera search "invoice airline"` returns the right screenshot *and* the right PDF from 5k mixed items, on each platform's native OCR path |
 | 4–5 | UI: hotkey window, results grid, preview with highlighted matches, filters, tray, settings, indexing progress | Daily use replaces Explorer search |
 | 6 | Packaging: GitHub Actions releases, one-line install + setup.exe, autostart, uninstall, scoop manifest | A friend on a clean PC installs it and finds a file without asking for help |
 | 7 | Dogfood, measure everything (README numbers page), docs site, community files | Every README number has methodology behind it |
