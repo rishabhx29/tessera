@@ -844,6 +844,48 @@ mod tests {
     }
 
     #[test]
+    fn the_index_is_a_wal_database_under_the_data_dir() {
+        // SECURITY.md names "writes outside the index and cache directories"
+        // as a bug by definition. WAL mode is the half of that which was
+        // configured but never asserted: deleting `pragma_update(... "WAL")`
+        // would have left the whole suite green while the index silently ran in
+        // rollback-journal mode.
+        let (_dir, store) = tmp_store();
+        let mode: String = store
+            .conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            mode.to_lowercase(),
+            "wal",
+            "the index must be a WAL database"
+        );
+
+        // And the database file is inside the data dir we were handed, by the
+        // name the engine opens. Nothing else is written there.
+        let entries: Vec<String> = std::fs::read_dir(_dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            entries.contains(&"index.sqlite".to_string()),
+            "the index belongs at <data dir>/index.sqlite; found {entries:?}"
+        );
+        // WAL means the connection may also hold -wal/-shm sidecars; anything
+        // else appearing in the data dir is a file the engine did not mean to
+        // create.
+        for name in &entries {
+            assert!(
+                matches!(
+                    name.as_str(),
+                    "index.sqlite" | "index.sqlite-wal" | "index.sqlite-shm"
+                ),
+                "unexpected file in the data dir: {name}"
+            );
+        }
+    }
+
+    #[test]
     fn schema_version_is_pinned_once_in_both_places() {
         let (_dir, store) = tmp_store();
         let meta: String = store

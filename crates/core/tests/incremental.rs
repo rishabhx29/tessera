@@ -242,6 +242,47 @@ fn a_rename_moves_the_row_and_keeps_it_findable_by_its_new_name() {
 }
 
 #[test]
+fn a_move_into_another_folder_of_the_same_corpus_is_still_a_move() {
+    // Every other move test renames within one directory. "Moving" a file in
+    // practice means moving it somewhere else — `Documents/2024/` — and that is
+    // a different path shape through the same logic, so it gets its own test
+    // rather than being assumed to follow from the rename case.
+    let data = tempfile::tempdir().unwrap();
+    let corpus = tempfile::tempdir().unwrap();
+    let dir = corpus.path();
+    let archive = dir.join("archive");
+    fs::create_dir_all(&archive).unwrap();
+    write(dir, "scan-0042.txt", "the invoice from the airline arrived");
+
+    let store = store_at(data.path());
+    let recorder = Arc::new(Recorder::default());
+    assert_eq!(run(&store, &recorder, dir).indexed, 1);
+
+    fs::rename(dir.join("scan-0042.txt"), archive.join("airline-june.txt")).unwrap();
+    let moved = run(&store, &recorder, dir);
+    assert_eq!(
+        (moved.moved, moved.indexed, moved.unchanged, moved.removed),
+        (1, 0, 0, 0),
+        "a file moved between folders of one corpus is recognised by content"
+    );
+    assert_eq!(
+        recorder.opened().len(),
+        1,
+        "the moved file was extracted again instead of moved"
+    );
+    assert_eq!(store.stats().unwrap(), vec![("indexed".to_string(), 1)]);
+
+    // Findable at its new path, under its new name, and by the text it holds —
+    // all three, because a move updates the path and re-titles the first tile.
+    let moved_to = archive
+        .join("airline-june.txt")
+        .to_string_lossy()
+        .to_string();
+    assert_eq!(only_hit(&store, "airline-june"), moved_to);
+    assert_eq!(only_hit(&store, "arrived"), moved_to);
+}
+
+#[test]
 fn two_live_copies_of_the_same_bytes_stay_two_files() {
     let data = tempfile::tempdir().unwrap();
     let corpus = tempfile::tempdir().unwrap();

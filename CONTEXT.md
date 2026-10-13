@@ -18,11 +18,26 @@ one query returning results from several formats at once.
 **Week 2–3: engine build, ticket by ticket from `.scratch/tessera-v0.1/issues/`.**
 Tickets 01 (store + text pipeline + typo-tolerant lexical search + CLI), 02
 (change detection, skip rules, diagnostics), 03 (pinned model downloads,
-checksum verification, per-arm version pinning) and 04 (the OCR seam, the
-Windows native adapter, the image pipeline) are resolved. Screenshots are
-searchable by the text inside them: measured p50 43.8 ms per image
-(`docs/performance.md`). The frontier is ticket 05: the ONNX fallback, which is
-what makes OCR work on Linux and gives the quality pass.
+checksum verification, per-arm version pinning), 04 (the OCR seam, the
+Windows native adapter, the image pipeline) and 05 (the cross-platform
+PP-OCRv6 fallback and automatic engine selection) are resolved and committed.
+Screenshots are searchable by the text inside them, through either engine:
+measured p50 34.4 ms and 188 characters for the native engine, 949.6 ms and 288
+characters for the fallback, which also read the one screenshot in the corpus
+the native engine missed entirely (`docs/performance.md`).
+
+Tickets 01–05 were re-audited against their own acceptance criteria rather than
+against their own summaries. Two real defects were found and fixed — a failed
+file's reason that dropped the cause chain, and an atomicity guarantee asserted
+in prose with no test behind it — and both fixes are pinned by tests that were
+verified to fail against the old behaviour.
+
+**The frontier is ticket 06** (the macOS Vision adapter), but the bigger gap is
+that **no search arm beyond lexical exists yet**: there is no `img_vec`, no
+`txt_vec`, no SigLIP, no MiniLM and no RRF fusion, so search is keyword-only and
+the document pipelines that produce two of the three formats in the headline
+demo have not been built (ticket 08). Tickets 07–10 are the real remaining work
+in weeks 2–3.
 
 ## Glossary
 
@@ -41,9 +56,6 @@ what makes OCR work on Linux and gives the quality pass.
 - **Pin** — the SHA-256 a model file must hash to before the engine will use it,
   compiled into the binary (ADR-0009). A pin that lives beside the bytes it
   checks is not a pin.
-- **Fusion / RRF** — Reciprocal Rank Fusion. Merges arm rankings by rank
-  position rather than raw score, because BM25 and cosine scores are not
-  comparable quantities.
 - **Fusion / RRF** — Reciprocal Rank Fusion. Merges arm rankings by rank
   position rather than raw score, because BM25 and cosine scores are not
   comparable quantities.

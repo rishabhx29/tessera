@@ -263,7 +263,13 @@ pub(crate) fn index_folder_with(
                 summary.indexed += 1;
             }
             Err(err) => {
-                store.fail_file(folder, path, kind, &facts, &err.to_string())?;
+                // `{err:#}` walks the whole context chain. `to_string()` prints
+                // only the outermost context, which for the OCR adapters is
+                // "decoding <path>" — a reason that names the file and nothing
+                // else. The recorded reason is the only thing the user has to go
+                // on (SECURITY.md: skips are recorded, never swallowed), so the
+                // cause has to be in it.
+                store.fail_file(folder, path, kind, &facts, &format!("{err:#}"))?;
                 summary.failed += 1;
             }
         }

@@ -72,6 +72,54 @@ impl TestServer {
         }
     }
 
+    /// Serves `body`, pausing `delay` before each chunk. Long enough that a
+    /// test can observe the file mid-transfer, which is the only way to see
+    /// that a download writes to a temporary name rather than to its real one.
+    fn serving_slowly(body: Vec<u8>, chunk: usize, delay: std::time::Duration) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let requests = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let counter = Arc::clone(&requests);
+        let flag = Arc::clone(&stop);
+        listener.set_nonblocking(true).expect("nonblocking");
+        let handle = std::thread::spawn(move || {
+            while !flag.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = stream.set_nonblocking(false);
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        let mut buf = [0u8; 1024];
+                        let _ = stream.read(&mut buf);
+                        let head = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = stream.write_all(head.as_bytes());
+                        for piece in body.chunks(chunk) {
+                            if flag.load(Ordering::SeqCst) {
+                                break;
+                            }
+                            let _ = stream.write_all(piece);
+                            let _ = stream.flush();
+                            std::thread::sleep(delay);
+                        }
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        Self {
+            base,
+            requests,
+            stop,
+            handle: Some(handle),
+        }
+    }
+
     fn url(&self, path: &str) -> String {
         format!("{}{path}", self.base)
     }
@@ -211,6 +259,76 @@ fn a_tampered_file_is_replaced_rather_than_blocking_the_install() {
     );
     assert_eq!(std::fs::read(&installed).unwrap(), body);
     assert!(models.is_verified(&models.manifest().sets()[0].files[0]));
+}
+
+/// The atomicity claim, made observable.
+///
+/// Every other failure test here asserts the *destination* is clean afterwards,
+/// which a regression that streamed straight into the real name and deleted on
+/// mismatch would also satisfy. This one watches the file mid-transfer: while
+/// bytes are still arriving the models directory holds a `.part` and NOT the
+/// real name. That is the property — no reader can ever see a half-written
+/// model under the name the engine loads from — and it is the only thing the
+/// mechanism buys.
+#[test]
+fn a_download_is_invisible_under_its_real_name_until_it_is_verified() {
+    let body = vec![b'x'; 512 * 1024];
+    let server =
+        TestServer::serving_slowly(body.clone(), 4096, std::time::Duration::from_millis(12));
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("model.int8.onnx");
+
+    let worker = {
+        let models_path = dir.path().to_path_buf();
+        std::thread::spawn(move || {
+            // A fresh handle in this thread so the download is genuinely in
+            // flight while the main thread looks at the directory.
+            let manifest = Manifest::parse(&format!(
+                r#"{{"sets":[{{"name":"test-set","arm":"image","files":[
+                     {{"name":"model.int8.onnx","url":"{}","sha256":"{}","bytes":{}}}]}}]}}"#,
+                server.url("/model"),
+                sha256_of(&body),
+                body.len()
+            ))
+            .expect("valid manifest");
+            let m = Models::with_manifest(&models_path, manifest);
+            m.ensure(&["test-set"])
+        })
+    };
+
+    // Poll until the temporary file shows up, which is proof the bytes are
+    // landing somewhere before the rename.
+    let mut saw_partial = false;
+    for _ in 0..400 {
+        if downloaded_files(dir.path())
+            .iter()
+            .any(|name| name.ends_with(".part"))
+        {
+            saw_partial = true;
+            // The point of the test: mid-transfer, the real name does not exist.
+            assert!(
+                !dest.exists(),
+                "a partial download was visible under its real name"
+            );
+            break;
+        }
+        if worker.is_finished() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(
+        saw_partial,
+        "the download never showed a temporary file, so atomicity is unproven"
+    );
+
+    worker.join().unwrap().expect("the download succeeds");
+    assert!(dest.exists(), "the verified model was not installed");
+    assert_eq!(
+        downloaded_files(dir.path()),
+        vec!["model.int8.onnx".to_string()],
+        "the temporary file outlived the rename"
+    );
 }
 
 /// When the host keeps serving bytes that do not match the pin, that is the

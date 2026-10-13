@@ -23,3 +23,46 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Tests
         run: cargo test --all
+
+  # The Linux runner is not a second copy of the job above. It is the only place
+  # the non-Windows paths are ever compiled: `ocr::platform_engine` returns
+  # None there, so the ONNX fallback is the default engine on Linux and the
+  # `cfg(not(windows))` arms are dead code until something compiles them. This
+  # job exists so that "works on any platform" is checked rather than asserted.
+  linux:
+    name: fmt / clippy / test (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --all
+
+  # The one gate that needs the network: re-verifying that a SHA-256 in
+  # models/lock.json still matches what the source actually serves. It is
+  # #[ignore]d in the normal suite, so without this step a pin is only ever as
+  # trustworthy as the day somebody wrote it down. It checks one pin (a
+  # preprocessor JSON, not a weight file), which is more than nothing and less
+  # than the ticket implied â€” recorded in .scratch ticket 03.
+  pins:
+    name: pinned checksums vs upstream
+    runs-on: windows-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Re-verify pinned checksums
+        run: cargo test --all -- --ignored
+
+  # Note for whoever reads this log: the Windows OCR adapter tests print
+  # "skipping: no Windows OCR language pack" and return early when the runner
+  # has no pack installed, so they pass either way. A green `check` job does not
+  # by itself mean the native adapter was exercised. Recorded as a known gap in
+  # the ticket 04 answer rather than hidden here.

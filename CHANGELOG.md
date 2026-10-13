@@ -10,6 +10,10 @@ releases begin.
 
 ### Added
 
+- CI now also runs on Linux, which is the only place the non-Windows paths are
+  compiled at all (`ocr::platform_engine` returns None there, so the ONNX
+  fallback is the default engine), and re-verifies the pinned model checksums
+  against upstream — a step that was `#[ignore]`d and therefore never ran.
 - Repository scaffold: MIT license, Contributor Covenant, security policy,
   issue templates, PR template, CI (fmt / clippy / test).
 - Product Definition v1.0, architecture notes, and five ADRs (stack, license,
@@ -46,8 +50,30 @@ releases begin.
   recorded against that file with its reason and the run continues.
 - `--ocr-engine` overrides the OCR engine, which defaults to the platform's own.
 - `tessera stats` lists each failed file with the reason the engine gave.
+- The cross-platform OCR engine (PP-OCRv6 on ONNX Runtime) behind the same seam:
+  OCR now works on any platform, including Linux, with no language pack. Models
+  come from the same pinned manifest as everything else
+  (`tessera models install --set ppocr`, 23 MB).
+- Engine selection falls back automatically: the platform engine if there is one,
+  then the cross-platform engine, and the error tells you how to fix it if
+  neither. An engine you named and did not get still stops the run.
+- `tessera ocr <image> [--engine native|onnx] [--scores]` prints the text and the
+  timing, with each line's confidence, so the two engines are comparable from a
+  terminal.
+- Measured on this machine's 40-screenshot corpus: native p50 34.4 ms / 188
+  characters; fallback p50 949.6 ms / 288 characters, and it read the one image
+  the native engine found no text in at all.
 
 ### Changed
 
 - `tessera index` reports indexed / unchanged / moved / skipped / failed /
   removed counts.
+
+### Fixed
+
+- A failed file's recorded reason now carries the whole cause chain. It was
+  written with `to_string()`, which prints only the outermost `anyhow` context,
+  so a real decode failure was recorded as `decoding <path>` and the actual
+  cause — the HRESULT, the malformed header — was thrown away. The reason is
+  the only diagnostic the user has (SECURITY.md: skips are recorded, never
+  swallowed), so the cause now reaches it.
