@@ -1,0 +1,91 @@
+{
+  "comment": [
+    "The engine's pinned model manifest. Every checksum here is the authority:",
+    "a file that does not hash to its pin is never written to the models dir.",
+    "Embedded in the binary at compile time (include_str!), so it cannot be",
+    "tampered with at runtime.",
+    "",
+    "Derived from spike/model-lock.json — the week-1 spike's measured record",
+    "(ADR-0006, ADR-0008). Only the models v0.1 actually uses are listed; the",
+    "spike also measured MobileCLIP2-S0 and CLIP ViT-B/32, both rejected, and",
+    "they stay in the spike file as evidence rather than becoming pins here.",
+    "",
+    "To change a pin: update the URL and checksum here AND in",
+    "spike/model-lock.json, then let the engine re-embed that arm — a changed",
+    "pin marks its vector space invalid rather than silently mixing vectors."
+  ],
+  "sets": [
+    {
+      "name": "siglip",
+      "arm": "image",
+      "files": [
+        {
+          "name": "siglip-vision.int8.onnx",
+          "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/onnx/vision_model_quantized.onnx",
+          "sha256": "ef14a954f3d57e1806666432bd9785004c1dc27100aa260eee0cb0f10a5de058",
+          "bytes": 99499129
+        },
+        {
+          "name": "siglip-text.int8.onnx",
+          "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/onnx/text_model_quantized.onnx",
+          "sha256": "ad0329b1f35acc66d8953ff2559ce358da8eb0a7011794cf951523d63a4dbce2",
+          "bytes": 111475220
+        },
+        {
+          "name": "siglip-tokenizer.json",
+          "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/tokenizer.json",
+          "sha256": "4a17c975210be5ab4c36b47d8dae4eefb866dbfb1e676e394aad85dc30a3ae08",
+          "bytes": 2398744
+        },
+        {
+          "name": "siglip-preprocessor.json",
+          "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/preprocessor_config.json",
+          "sha256": "21ee046a8a52a65e5f9c177bf840bfb39ea66c9c54cf2760630efd58e0a3ec80",
+          "bytes": 368
+        }
+      ]
+    },
+    {
+      "name": "minilm",
+      "arm": "text",
+      "files": [
+        {
+          "name": "minilm.int8.onnx",
+          "url": "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/onnx/model_quantized.onnx",
+          "sha256": "afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1",
+          "bytes": 22972370
+        },
+        {
+          "name": "minilm-tokenizer.json",
+          "url": "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/tokenizer.json",
+          "sha256": "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0",
+          "bytes": 711661
+        }
+      ]
+    },
+    {
+      "name": "ppocr",
+      "arm": null,
+      "files": [
+        {
+          "name": "ppocrv6-det-tiny.onnx",
+          "url": "https://github.com/xevrion/gyotaku/releases/download/models-v1/PP-OCRv6_det_tiny.onnx",
+          "mirrors": [
+            "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv6/det/PP-OCRv6_det_tiny.onnx"
+          ],
+          "sha256": "f42c0fbd294d95eac1a550e131b277dac97462c8025fa4b6c3cec1b7894bd3d5",
+          "bytes": 1829618
+        },
+        {
+          "name": "ppocrv6-rec-small.onnx",
+          "url": "https://github.com/xevrion/gyotaku/releases/download/models-v1/PP-OCRv6_rec_small.onnx",
+          "mirrors": [
+            "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv6/rec/PP-OCRv6_rec_small.onnx"
+          ],
+          "sha256": "6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884",
+          "bytes": 21234383
+        }
+      ]
+    }
+  ]
+}

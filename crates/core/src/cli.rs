@@ -6,8 +6,28 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use crate::index::{index_folder, text::TextPipeline, Pipeline};
+use crate::models::Models;
 use crate::search::search;
 use crate::store::Store;
+
+/// Where the models live: the override if given, otherwise a `models` folder
+/// beside the index. One designated directory to back up, and one to delete.
+pub fn models_dir(data_dir: &Path, override_dir: Option<&Path>) -> PathBuf {
+    match override_dir {
+        Some(dir) => dir.to_path_buf(),
+        None => data_dir.join("models"),
+    }
+}
+
+/// Bytes, said the way a person reading a setup screen would want them.
+fn human_bytes(bytes: u64) -> String {
+    const MB: f64 = 1_000_000.0;
+    if bytes >= MB as u64 {
+        format!("{:.0} MB", bytes as f64 / MB)
+    } else {
+        format!("{bytes} B")
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -20,11 +40,15 @@ struct Cli {
     #[arg(long, global = true)]
     data_dir: Option<PathBuf>,
 
+    /// Where the models live. Defaults to a `models` folder beside the index.
+    #[arg(long, global = true)]
+    models_dir: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Command,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum Command {
     /// Index every supported file under a folder (text formats today).
     Index { folder: PathBuf },
@@ -36,6 +60,26 @@ enum Command {
     },
     /// Index counts by status.
     Stats,
+    /// Download and verify models. This is the only command that touches the
+    /// network, and it never runs on its own.
+    Models {
+        #[command(subcommand)]
+        action: ModelsAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ModelsAction {
+    /// Fetch every pinned model. Downloads happen once; a second run verifies
+    /// what is already there and touches no network.
+    Install {
+        /// Only these model sets, by name. Defaults to all of them.
+        #[arg(long)]
+        set: Vec<String>,
+    },
+    /// What is installed, what is missing, and which model version each arm's
+    /// vectors came from.
+    Status,
 }
 
 /// The default data dir: the OS local-data dir (e.g. %LOCALAPPDATA%\Tessera).
@@ -110,6 +154,64 @@ pub fn run() -> Result<()> {
             }
             Ok(())
         }
+        Command::Models { action } => {
+            let dir = models_dir(&data_dir, cli.models_dir.as_deref());
+            let models = Models::open(&dir)?;
+            match action {
+                ModelsAction::Install { set } => {
+                    let sets: Vec<&str> = if set.is_empty() {
+                        models.set_names()
+                    } else {
+                        set.iter().map(String::as_str).collect()
+                    };
+                    let report = models.ensure(&sets)?;
+                    for line in report.lines() {
+                        println!("{line}");
+                    }
+                    // Silence would be a lie here: "nothing to do" and "nothing
+                    // happened because nothing was asked for" look identical.
+                    println!(
+                        "{} file(s) downloaded, {} already verified, {} in {}",
+                        report.downloaded.len(),
+                        report.already_present.len(),
+                        human_bytes(report.bytes),
+                        models.dir().display()
+                    );
+                    Ok(())
+                }
+                ModelsAction::Status => {
+                    println!("models in {}", models.dir().display());
+                    for set in models.status()? {
+                        // A set with no arm has no vector space at all — OCR
+                        // models produce text — so it gets no version report.
+                        let arm = match set.arm {
+                            Some(arm) => format!(" [{arm:?} arm]"),
+                            None => String::new(),
+                        };
+                        println!("\n{}{arm}", set.name);
+                        for file in &set.installed {
+                            println!("  ok      {file}");
+                        }
+                        for file in &set.missing {
+                            println!("  missing {file}");
+                        }
+                        if let Some(arm) = set.arm {
+                            match store.arm_version(arm)? {
+                                Some(recorded) if recorded == set.version => {
+                                    println!("  vectors match this model version");
+                                }
+                                Some(recorded) => println!(
+                                    "  VECTORS STALE: built by {recorded}, pinned is {}",
+                                    set.version
+                                ),
+                                None => println!("  no vectors yet for this arm"),
+                            }
+                        }
+                    }
+                    Ok(())
+                }
+            }
+        }
     }
 }
 
@@ -174,6 +276,60 @@ mod tests {
             split_terms(&args),
             vec!["invoice", "from", "the", "airline"]
         );
+    }
+
+    #[test]
+    fn the_models_dir_flag_overrides_the_default_beside_the_index() {
+        // The override exists so tests — and people who keep models on another
+        // disk — can point somewhere else without moving anything.
+        assert_eq!(
+            models_dir(Path::new("/data"), None),
+            PathBuf::from("/data").join("models")
+        );
+        assert_eq!(
+            models_dir(Path::new("/data"), Some(Path::new("/elsewhere/models"))),
+            PathBuf::from("/elsewhere/models")
+        );
+    }
+
+    #[test]
+    fn the_models_commands_parse() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "tessera",
+            "--data-dir",
+            "/data",
+            "--models-dir",
+            "/models",
+            "models",
+            "install",
+            "--set",
+            "ppocr",
+        ])
+        .expect("the models command parses");
+        assert_eq!(cli.data_dir, Some(PathBuf::from("/data")));
+        assert_eq!(cli.models_dir, Some(PathBuf::from("/models")));
+        match cli.command {
+            Command::Models {
+                action: ModelsAction::Install { set },
+            } => assert_eq!(set, vec!["ppocr".to_string()]),
+            other => panic!("expected an install command, got {other:?}"),
+        }
+
+        let status = Cli::try_parse_from(["tessera", "models", "status"]).expect("status parses");
+        assert!(matches!(
+            status.command,
+            Command::Models {
+                action: ModelsAction::Status
+            }
+        ));
+    }
+
+    #[test]
+    fn human_bytes_reads_the_way_a_setup_screen_needs() {
+        assert_eq!(human_bytes(0), "0 B");
+        assert_eq!(human_bytes(999), "999 B");
+        assert_eq!(human_bytes(23_000_000), "23 MB");
     }
 
     #[test]

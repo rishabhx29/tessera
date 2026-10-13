@@ -14,6 +14,7 @@
 pub mod cli;
 pub mod hash;
 pub mod index;
+pub mod models;
 pub mod search;
 pub mod store;
 

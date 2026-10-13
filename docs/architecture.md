@@ -121,7 +121,7 @@ txt_vec(   -- sqlite-vec virtual table, 384-d MiniLM, one row per text tile
   embedding float[384]
 );
 meta(
-  key TEXT PRIMARY KEY,      -- schema_version, clip_model, minilm_model, ocr_model ...
+  key TEXT PRIMARY KEY,      -- schema_version, vectors_image_version, ...
   value TEXT
 );
 ```
@@ -213,6 +213,53 @@ inside the corpus.
 
 All downloaded once on first run, checksum-pinned (ADR-0004). No network
 access at query time, ever.
+
+## Model delivery
+
+`models::Models` owns first-run delivery. The pins live in
+`crates/core/src/models/lock.json`, embedded in the binary with `include_str!`:
+a checksum that can be edited at runtime is not a pin. The file is derived from
+`spike/model-lock.json` (the spike's measured record) and keeps only the models
+v0.1 runs.
+
+```
+<data dir>/models/
+├── siglip-vision.int8.onnx      image arm   (arm: image)
+├── siglip-text.int8.onnx
+├── siglip-tokenizer.json
+├── siglip-preprocessor.json
+├── minilm.int8.onnx             text arm    (arm: text)
+├── minilm-tokenizer.json
+├── ppocrv6-det-tiny.onnx        OCR         (no arm: produces text, not vectors)
+└── ppocrv6-rec-small.onnx
+```
+
+Rules the module enforces, each with a test:
+
+- **Nothing runs unverified.** A download streams to a temporary name while
+  being hashed; it is renamed into place only after it matches its pin, and is
+  deleted otherwise. A file that is present but wrong is a loud error, never a
+  silent re-use.
+- **One network access, ever.** `ensure()` hashes what is already there and
+  only fetches what is missing, so a warm run touches no network. Verification
+  happens on the indexing path, never on the query path — a keyword search does
+  not read the models directory at all.
+- **A native OS engine downloads nothing.** Consumers ask for the sets they
+  need by name, so Windows.Media.Ocr and macOS Vision pass an empty list. The
+  set names and the `--models-dir` override exist for that.
+- **A changed pin invalidates its own arm, and only that arm.** The version
+  token is a digest over a set's pins (sorted, so re-ordering the manifest
+  cannot invalidate anyone's vectors), recorded in `meta` beside the vectors it
+  describes (`vectors_image_version`, `vectors_text_version`). A mismatch makes
+  the arm outstanding work; it is never resolved by blending old vectors with
+  new ones.
+- **Every source is HTTPS.** Loopback is the one exception, because a model
+  fetched from `127.0.0.1` never crosses a network — and it is what lets the
+  download path be tested at all against a local server. A test asserts every
+  pinned source is HTTPS.
+
+`cargo test --test models -- --ignored` re-verifies one pinned checksum against
+upstream, so the pins can be proved rather than trusted forever.
 
 ## Deliberate non-decisions (until their phase)
 

@@ -14,7 +14,9 @@ editing the old one in place.
 | [0006](0006-week-1-spike-model-decisions.md) | Week-1 spike model decisions (OCR → Windows.Media.Ocr; SigLIP retained) |
 | [0007](0007-cross-platform-ocr.md) | Cross-platform OCR: platform-native fast path (Windows.Media.Ocr / macOS Vision) + shared ONNX fallback |
 | [0008](0008-final-ocr-stack.md) | Final OCR stack: PP-OCRv6-tiny fallback measured; engine integration notes |
+| [0009](0009-model-delivery.md) | Model delivery: pins compiled into the binary, HTTPS with a loopback exception, mismatching files replaced |
 
 Statuses: 0001–0003, 0005 **Accepted** (2026-10-11); 0004 **Accepted,
 partially superseded by 0006**; 0006, 0007 **Accepted** (2026-10-12); 0008
-**Accepted** (2026-10-12), refining 0007's engine choice with measurements.
+**Accepted** (2026-10-12), refining 0007's engine choice with measurements; 0009
+**Accepted** (2026-10-13), implementing 0004's delivery clause.

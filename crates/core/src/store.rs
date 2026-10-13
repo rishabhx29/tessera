@@ -108,6 +108,41 @@ impl FileStatus {
     }
 }
 
+/// One vector space: the embeddings produced by one model.
+///
+/// Vectors from different spaces are not comparable, so an arm is identified by
+/// the model version that made them and nothing else. See the `models` module
+/// for what re-embedding means in practice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arm {
+    /// Image↔text embeddings (SigLIP). One row per image.
+    Image,
+    /// Text embeddings (MiniLM). One row per text tile.
+    Text,
+}
+
+impl Arm {
+    /// The `meta` key recording the version that produced this arm's vectors.
+    pub fn meta_key(&self) -> &'static str {
+        match self {
+            Arm::Image => "vectors_image_version",
+            Arm::Text => "vectors_text_version",
+        }
+    }
+}
+
+impl std::str::FromStr for Arm {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "image" => Ok(Arm::Image),
+            "text" => Ok(Arm::Text),
+            other => anyhow::bail!("{other:?} is not a known arm (image | text)"),
+        }
+    }
+}
+
 /// A file row, as one record: the row's identity plus what the run decided
 /// about it. The three outcomes differ only in `status`, `reason` and
 /// `sha1`, so they share one upsert rather than three near-identical ones —
@@ -665,6 +700,44 @@ impl Store {
             }
         }
         Ok(out)
+    }
+
+    /// The model version whose vectors `arm` currently holds, or `None` if
+    /// that arm has never been embedded.
+    ///
+    /// Recorded beside the vectors, not beside the model: the question this
+    /// answers is "are these numbers comparable with each other?", which is
+    /// about the vectors, not about what is on disk today.
+    pub fn arm_version(&self, arm: Arm) -> Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = ?1",
+                rusqlite::params![arm.meta_key()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
+    }
+
+    /// Record that `arm`'s vectors were built by `version`.
+    pub fn set_arm_version(&self, arm: Arm, version: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES (?1, ?2)",
+            rusqlite::params![arm.meta_key(), version],
+        )?;
+        Ok(())
+    }
+
+    /// Forget that `arm` has vectors. Used when a model pin moves: the vectors
+    /// are about to be dropped by the arm that owns them, and until then the
+    /// index must report the arm as needing work rather than searching with
+    /// numbers from two different models.
+    pub fn clear_arm(&self, arm: Arm) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM meta WHERE key = ?1",
+            rusqlite::params![arm.meta_key()],
+        )?;
+        Ok(())
     }
 
     /// Row counts by status, for `tessera stats`.

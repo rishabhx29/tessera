@@ -31,6 +31,14 @@ releases begin.
   skip-reason breakdown in `tessera stats`.
 - Store schema v2 (corpus `root` column, `root`+`sha1` index) with a tested
   v1 → v2 migration.
+- Pinned model delivery (`tessera models install` / `models status`): SigLIP,
+  MiniLM and PP-OCRv6 download once, each verified against a SHA-256 compiled
+  into the binary, with mirrors tried in order and no weakening of the pin.
+- Downloads are atomic — a temporary name while hashing, renamed into place only
+  after verification — and interrupted ones are swept on the next run.
+- Per-arm vector-space versioning in `meta`: changing a model's pin marks that
+  arm's vectors as needing re-embedding, and only that arm.
+- `--models-dir` overrides where models live.
 
 ### Changed
 

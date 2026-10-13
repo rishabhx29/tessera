@@ -16,9 +16,11 @@ one query returning results from several formats at once.
 ## Current phase
 
 **Week 2–3: engine build, ticket by ticket from `.scratch/tessera-v0.1/issues/`.**
-Tickets 01 (store + text pipeline + typo-tolerant lexical search + CLI) and 02
-(change detection, skip rules, diagnostics) are resolved. The frontier is the
-model framework and the image pipeline (tickets 03–04).
+Tickets 01 (store + text pipeline + typo-tolerant lexical search + CLI), 02
+(change detection, skip rules, diagnostics) and 03 (pinned model downloads,
+checksum verification, per-arm version pinning) are resolved. The frontier is
+ticket 04: the OCR seam and the image pipeline, which is the first milestone a
+user would notice.
 
 ## Glossary
 
@@ -27,8 +29,19 @@ model framework and the image pipeline (tickets 03–04).
 - **Corpus** — the set of folders the user has chosen to index.
 - **Root** — one indexed folder. The corpus is the set of roots; each file row
   records the root it came from, which is what scopes deletion propagation.
-- **Arm** — one search channel: lexical (FTS5), image (CLIP), text (MiniLM).
-  A query runs up to three arms and fuses their rankings.
+- **Arm**'s **version** — the model that produced an arm's vectors. Recorded in
+  `meta` beside the vectors; a mismatch means the arm is outstanding work, never
+  that old vectors may be blended with new ones.
+- **Arm** — one search channel. Three exist: **lexical** (FTS5), **image** (SigLIP),
+  **text** (MiniLM). A query runs up to three arms and fuses their rankings.
+  Only the two embedding arms hold vectors; the lexical arm has none, and OCR
+  belongs to no arm at all — it produces text, which the lexical arm indexes.
+- **Pin** — the SHA-256 a model file must hash to before the engine will use it,
+  compiled into the binary (ADR-0009). A pin that lives beside the bytes it
+  checks is not a pin.
+- **Fusion / RRF** — Reciprocal Rank Fusion. Merges arm rankings by rank
+  position rather than raw score, because BM25 and cosine scores are not
+  comparable quantities.
 - **Fusion / RRF** — Reciprocal Rank Fusion. Merges arm rankings by rank
   position rather than raw score, because BM25 and cosine scores are not
   comparable quantities.
