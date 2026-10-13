@@ -78,17 +78,27 @@ pub trait OcrEngine: Send + Sync {
 }
 ```
 
-- **WindowsOcr** — Windows.Media.Ocr (`windows` crate). Measured p50 **43.8 ms**
-  per screenshot on this machine's real corpus (`docs/performance.md`).
-- **VisionOcr** — macOS Vision `VNRecognizeTextRequest` (ticket 06).
-- **OnnxOcr** — PP-OCRv6 via `ort`, cross-platform fallback (ticket 05). Its
-  models come from the pinned manifest; a native engine needs no download.
+- **WindowsOcr** - Windows.Media.Ocr (`windows` crate). Measured p50 **34.4 ms**
+  per screenshot on this machine's real corpus, extracting 188 characters.
+- **VisionOcr** - macOS Vision `VNRecognizeTextRequest` (ticket 06).
+- **OnnxOcr** - PP-OCRv6 det-tiny + rec-small via `ort` (ONNX Runtime), the
+  cross-platform fallback and the quality pass. Measured p50 **949.6 ms**
+  extracting 288 characters - 28x slower and 53% more text, and it read all 40
+  corpus images where the native engine read 39 (`docs/performance.md`).
 
 The engine is handed a **path, not pixels**, and that is deliberate: Windows
 decodes an image in a few milliseconds and understands every format the OS
 renders, so decoding it ourselves first would add work and lose formats for
-nothing. Decoding is therefore the engine's business, and the seam says only
-what must come out — the text in the file.
+nothing. Decoding is therefore the engine's business, and the seam says only what
+must come out - the text in the file. It is also why the two engines need
+different decoders: the Windows engine asks the OS, and `OnnxOcr` uses the
+`image` crate, because a library engine has no operating system to ask.
+
+Selection order (`ocr::preferred_engine`): the platform engine whenever it
+exists, then ONNX if its pinned models are installed and verified, then an engine
+that explains itself per file. An engine the user *named* and did not get is an
+error that stops the run; the platform default being absent is not, because the
+text formats keep working and each image is recorded as failed with the reason.
 
 The image pipeline depends on the trait, never on a platform API, so adding a
 platform never touches the store, search, or UI. `index/skip.rs` is the one
@@ -101,6 +111,25 @@ word-windows would split the words a person remembers seeing together.
 Documents chunk; screenshots do not. An image with no text is indexed, not
 failed — it still has a filename to be found by. A decode failure is recorded
 against that one file with its reason, and the run continues.
+
+### Two ONNX Runtime facts the code is shaped around
+
+Both look fine until they fail in production, so they are properties of the
+module rather than comments scattered through it:
+
+- **One `Environment` per process.** `ort::init()` fails on the second call, so
+  the environment is created once behind a `OnceLock` and shared. Without this,
+  building a second engine — one per CLI command, one per index worker, one per
+  test — fails outright.
+- **Sessions are not safe for concurrent `run`.** The trait is `Send + Sync`, so
+  sessions are handed out from a free list and created on demand, rather than one
+  session behind a lock. A lock would be simpler and would also serialise the
+  whole engine to one image at a time.
+
+Everything the spike debugged is a named, tested function rather than a constant
+with a comment: the alphabet (`['blank'] + lines + [' ']`, the trailing space
+being the one `lines()` hides), greedy CTC decoding, the score gate, the 32-pixel
+alignment the detector graph demands, and batching recognition by total width.
 
 ## Data model (single SQLite file, WAL mode)
 

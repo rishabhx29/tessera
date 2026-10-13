@@ -22,7 +22,7 @@ pub mod manifest;
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 
 use crate::store::{Arm, Store};
 
@@ -220,6 +220,51 @@ impl Models {
         let last =
             last.unwrap_or_else(|| anyhow::anyhow!("{} has no source to download from", file.name));
         Err(last).with_context(|| format!("installing {}", file.name))
+    }
+
+    /// The path of one file in a named set, **only if the whole set is installed
+    /// and verified**.
+    ///
+    /// This is what an engine asks for before it loads anything. Two rules, and
+    /// both come from a model run on half a set producing output that looks like
+    /// text but is noise:
+    ///
+    /// - every file in the set must match its pin, not just the one being loaded;
+    /// - the answer names the command that fixes it, because "file not found" for
+    ///   a file that was never downloaded is a dead end.
+    pub fn verified_path(&self, set: &str, file: &str) -> Result<PathBuf> {
+        let set_record = self
+            .manifest
+            .set(set)
+            .with_context(|| format!("no model set named {set:?} in the manifest"))?;
+        let wanted = set_record
+            .files
+            .iter()
+            .find(|candidate| candidate.name == file)
+            .with_context(|| format!("model set {set:?} has no file named {file:?}"))?;
+        let missing: Vec<&str> = set_record
+            .files
+            .iter()
+            .filter(|candidate| !self.is_verified(candidate))
+            .map(|candidate| candidate.name.as_str())
+            .collect();
+        if !missing.is_empty() {
+            bail!(
+                "the {set:?} models are not installed or do not match their pins ({} missing or \
+                 unverified). Install them with: tessera models install --set {set}",
+                missing.join(", ")
+            );
+        }
+        Ok(self.path_of(wanted))
+    }
+
+    /// Whether every file of a named set is installed and verified. Cheaper than
+    /// constructing the engine to find out, and the question a menu or a setup
+    /// screen actually asks.
+    pub fn is_set_ready(&self, set: &str) -> bool {
+        self.manifest
+            .set(set)
+            .is_some_and(|set| set.files.iter().all(|file| self.is_verified(file)))
     }
 
     /// The arms whose vectors are not the ones their pinned model would produce,

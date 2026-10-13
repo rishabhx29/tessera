@@ -135,7 +135,12 @@ uses.
 Corpus: the first 40 screenshot-named files in the user's `OneDrive\Pictures\
 Screenshots`, unmodified, in name order. No text is recorded — only timings and
 character counts (SECURITY.md). Script:
-`cargo run --release --example ocr_bench -- <folder> 40`.
+`cargo run --release --example ocr_bench -- <folder> native 40`.
+
+(The engine argument was added in Engine 05, when a second engine existed to
+compare against. The run below was made with the two-argument form
+`<folder> 40`, which was correct at the time; the current form above reproduces
+the same measurement.)
 
 Method: one warm-up read of the first image precedes timing (it pays for WinRT
 initialisation and the cold file cache), then **all 40 images are timed**,
@@ -175,6 +180,107 @@ Honest caveats:
   nothing" look identical in a latency table, and 1 of 40 is the honest figure.
 - These are cold-cache numbers on a corpus the OS has already seen once. A
   first-ever indexing pass over cold files will be slower.
+
+## Engine 04/05 — both OCR engines, measured in the engine itself
+
+The first OCR numbers produced by the shipping engine rather than by the Python
+spike, for both engines, over the same corpus in the same session — because a
+comparison across different machines or different days is not a comparison.
+
+Corpus: the first 40 screenshot-named files in the user's `OneDrive\Pictures\
+Screenshots`, unmodified, in name order. No text is recorded — only timings and
+character counts (SECURITY.md). Script:
+`cargo run --release --example ocr_bench -- <folder> <engine> 40`, models
+installed with `tessera models install --set ppocr`.
+
+Method: one warm-up read of the first image precedes timing (it pays for runtime
+initialisation, model load and the cold file cache), then **all 40 images are
+timed**, including the first one on its second read. Single pass, single run, no
+repeats. Percentiles are linearly interpolated between the two nearest ranks.
+Each timing covers the whole operation — file read, decode, recognise — because
+that is what a user waits for. One image at a time; the 4-worker queue is ticket
+11 and any multiplication is a projection, not a result.
+
+Hardware: AMD Ryzen 3 5300U, 8 threads, 7.3 GB RAM, Windows 11 build 26300,
+release build, `ort` 2.0.0-rc.14 / ONNX Runtime 1.31 CPU provider, 8 intra-op
+threads.
+
+| Metric | native (`windows`) | fallback (`onnx`) |
+|---|---|---|
+| images read | 40 | 40 |
+| **p50 per image** | **34.4 ms** | **949.6 ms** |
+| p95 per image | 139.9 ms | 3,253.6 ms |
+| mean per image | 52.1 ms | 1,405.6 ms |
+| **mean characters extracted** | **188** | **288** |
+| images with no text | 1 of 40 | 0 of 40 |
+
+### Repeat pass (ticket 05 verification)
+
+The table above is a single pass, and single passes carry the uncertainty
+that implies. A second pass over the same corpus, same session, same command:
+
+| Metric | native (`windows`) | fallback (`onnx`) |
+|---|---|---|
+| **p50 per image** | **45.7 ms** | **808.7 ms** |
+| p95 per image | 203.8 ms | 3,144.6 ms |
+| mean per image | 70.9 ms | 1,278.4 ms |
+| **mean characters extracted** | **188** | **288** |
+| images with no text | 1 of 40 | 0 of 40 |
+
+What this does and does not show:
+
+- **Character counts are identical across both passes and both engines** — 188
+  and 288 — and identical to the Python spike's 188 / 287. Extraction is
+  deterministic; this is the number to trust, and it is why the quality claim
+  in this document is stated in characters rather than in hit rates.
+- **Latency is not reproducible to the precision the first table implies.** The
+  native p50 moved 34.4 → 45.7 ms and the fallback's 949.6 → 808.7 ms. Both
+  moved *in opposite directions*, so this is ambient machine load, not a
+  change in either engine. The ordering and the order of magnitude hold; the
+  specific figures do not. **Read the first table as one sample, not as a
+  benchmark.** A number quoted from it to three significant figures is
+  over-precise, and the honest summary is "native tens of milliseconds,
+  fallback hundreds to low thousands".
+- Still **two samples, not a distribution**. `mean` moved less than `p50` for
+  both engines, which says the corpus has a long tail that p50 and p95 are
+  sensitive to and the mean is not.
+
+Reading:
+
+- **The native engine is ~28× faster at p50 and extracts 35% less text.** That is
+  the trade ADR-0008 sets out, now measured in the engine that ships.
+- **288 characters against the Python spike's 287** for the same engine on the
+  same corpus. The Rust implementation reads the same text the spike read, so the
+  latency difference is plumbing, not quality. (The native engine's 188 is also
+  unchanged from both the spike and ticket 04's separate run.)
+- **The fallback is not only more thorough, it is the only one of the two that
+  worked on every image** — 0 of 40 with no text against 1 of 40.
+- Quality is not free accuracy. On the committed fixture the fallback reads
+  "INV01CE" for "INVOICE" and "0F-3391" for "QF-3391", where the native engine is
+  exact. It finds more and garbles some of what it finds; typo-tolerant search
+  absorbs some of that, and the numbers above are the honest summary rather than
+  either engine being described as better.
+
+Why so slow, in one line: the recogniser emits an `[batch, steps, 18,710]` output
+tensor, so cost tracks total batched width, not the number of lines. Recognition
+is batched by total width for that reason, and the native engine avoids the whole
+question by asking the operating system.
+
+Honest caveats:
+
+- Single pass, single run, no repeats; a repeat pass would give a spread, and
+  until one exists these numbers carry the uncertainty that implies. With 40
+  samples a p95 is effectively the second slowest, so the ONNX p95 of 3.25 s is
+  one slow image rather than a trend. **A repeat pass now exists** (the section
+  above) and it moved both p50s by more than 10%, in opposite directions —
+  which confirms this caveat rather than resolving it. Still two samples, not a
+  distribution.
+- Both engines ran warm, on a corpus the OS had already seen once. A first-ever
+  indexing pass over cold files is slower for both.
+- The ONNX figure is ~0.95 s p50 where ADR-0008 projected gyotaku's class of
+  ~0.7 s on comparable cores. This is a low-power laptop part, not that
+  reference hardware, so the gap is expected and is *not* evidence the engine is
+  slower than the projection.
 
 ## Week-1 gate: PASS
 

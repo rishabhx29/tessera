@@ -25,6 +25,22 @@ fn fixture() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ocr-sample.png")
 }
 
+/// The models directory, taken from `--models-dir` or the default beside the
+/// index. Engine choice depends on whether the OCR weights are installed, so a
+/// test that says nothing about that must follow whatever the environment says
+/// rather than assume an empty one.
+fn models() -> tessera_core::models::Models {
+    let dir = std::env::var("TESSERA_MODELS_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            tessera_core::cli::models_dir(
+                &std::env::temp_dir().join(format!("tessera-images-{}", std::process::id())),
+                None,
+            )
+        });
+    tessera_core::models::Models::open(&dir).expect("the models dir is openable")
+}
+
 fn copy_fixture(dir: &Path, name: &str) -> std::path::PathBuf {
     let path = dir.join(name);
     fs::copy(fixture(), &path).expect("the fixture is committed");
@@ -128,10 +144,10 @@ fn write(dir: &Path, name: &str, contents: &str) {
 
 #[test]
 fn the_real_windows_engine_reads_the_text_of_a_screenshot() {
-    let Ok(selection) = tessera_core::ocr::select(&OcrChoice::Native) else {
+    let Ok(selection) = tessera_core::ocr::select(&OcrChoice::Native, &models()) else {
         panic!("selecting the native engine must not fail");
     };
-    if !tessera_core::ocr::is_available() {
+    if !tessera_core::ocr::is_available(&models()) {
         eprintln!("skipping: no Windows OCR language pack on this machine");
         return;
     }
@@ -161,7 +177,7 @@ fn the_real_windows_engine_reads_the_text_of_a_screenshot() {
 /// the machine cannot.
 #[test]
 fn text_inside_a_screenshot_is_findable_through_the_real_engine() {
-    if !tessera_core::ocr::is_available() {
+    if !tessera_core::ocr::is_available(&models()) {
         eprintln!("skipping: no Windows OCR language pack on this machine");
         return;
     }
@@ -171,7 +187,7 @@ fn text_inside_a_screenshot_is_findable_through_the_real_engine() {
     let screenshot = copy_fixture(dir, "screenshot-2026.png");
 
     let store = Store::open(data.path()).unwrap();
-    let engine = tessera_core::ocr::select(&OcrChoice::Native).unwrap();
+    let engine = tessera_core::ocr::select(&OcrChoice::Native, &models()).unwrap();
     let summary = index_folder(&store, &[image_pipeline(engine.engine)], dir).unwrap();
     assert_eq!(
         (summary.indexed, summary.failed),
@@ -190,7 +206,7 @@ fn text_inside_a_screenshot_is_findable_through_the_real_engine() {
 /// loop: recorded as failed, with a reason, and the run carries on.
 #[test]
 fn a_real_undecodable_image_is_recorded_and_the_run_continues() {
-    if !tessera_core::ocr::is_available() {
+    if !tessera_core::ocr::is_available(&models()) {
         eprintln!("skipping: no Windows OCR language pack on this machine");
         return;
     }
@@ -208,7 +224,7 @@ fn a_real_undecodable_image_is_recorded_and_the_run_continues() {
     write(dir, "notes.txt", "a text file about zebras");
 
     let store = Store::open(data.path()).unwrap();
-    let engine = tessera_core::ocr::select(&OcrChoice::Native).unwrap();
+    let engine = tessera_core::ocr::select(&OcrChoice::Native, &models()).unwrap();
     let summary = index_folder(
         &store,
         &[
@@ -428,6 +444,52 @@ fn one_tile_per_image_and_the_kind_is_recorded() {
     };
 }
 
+/// The recorded reason is the only thing the user has to go on, so it has to
+/// carry the whole cause chain.
+///
+/// `anyhow::Error::to_string()` prints only the *outermost* context. For the
+/// OCR adapters that is `decoding <path>` — it names the file and says nothing
+/// about why. `{err:#}` walks the chain. This test uses an engine that fails
+/// with a layered error, which is the same shape every real adapter produces.
+#[test]
+fn a_failure_reason_carries_the_whole_cause_chain_not_just_the_outermost_context() {
+    /// Wraps its inner error in context, the way the adapters do.
+    struct Chained;
+
+    impl OcrEngine for Chained {
+        fn name(&self) -> &'static str {
+            "chained"
+        }
+        fn recognize(&self, path: &Path) -> Result<String> {
+            Err(anyhow::Error::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "the bitmap header is not a bitmap",
+            ))
+            .context(format!("decoding {}", path.display())))
+        }
+    }
+
+    let data = tempfile::tempdir().unwrap();
+    let corpus = tempfile::tempdir().unwrap();
+    let dir = corpus.path();
+    copy_fixture(dir, "broken.png");
+
+    let store = store_at(data.path());
+    let summary = index_folder(&store, &[image_pipeline(Box::new(Chained))], dir).unwrap();
+    assert_eq!(summary.failed, 1);
+
+    let failures = store.failures().unwrap();
+    let reason = &failures[0].1;
+    assert!(
+        reason.contains("bitmap header is not a bitmap"),
+        "the recorded reason dropped the cause, keeping only context: {reason}"
+    );
+    assert!(
+        reason.contains("decoding"),
+        "the recorded reason dropped the outer context: {reason}"
+    );
+}
+
 #[test]
 fn an_unavailable_engine_is_reported_per_file_rather_than_crashing() {
     let data = tempfile::tempdir().unwrap();
@@ -453,9 +515,18 @@ fn an_unavailable_engine_is_reported_per_file_rather_than_crashing() {
     let failures = store.failures().unwrap();
     assert_eq!(failures.len(), 2);
     for (_, reason) in &failures {
-        assert!(reason.contains("not available"), "{reason}");
+        // The message names the engine that was missing, not just "an OCR
+        // engine" — when a user passed `--ocr-engine onnx` they need to know
+        // which of the two routes failed.
         assert!(
-            reason.contains("language pack") || reason.contains("ticket 05"),
+            reason.contains("no onnx OCR engine is available"),
+            "the reason does not name the engine that was unavailable: {reason}"
+        );
+        // Both routes to a working engine, because a machine without a language
+        // pack is not necessarily a machine that should install one.
+        assert!(reason.contains("language pack"), "{reason}");
+        assert!(
+            reason.contains("tessera models install"),
             "the reason must say what to do: {reason}"
         );
     }

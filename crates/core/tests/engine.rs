@@ -7,6 +7,7 @@ use std::fs;
 use std::path::Path;
 
 use tessera_core::cli::{index_text_folder, split_terms};
+use tessera_core::models::Models;
 use tessera_core::search::search;
 use tessera_core::store::Store;
 
@@ -25,6 +26,13 @@ fn write(dir: &Path, name: &str, contents: &str) {
 
 fn paths_of(hits: &[tessera_core::search::Hit]) -> Vec<String> {
     hits.iter().map(|h| h.path.clone()).collect()
+}
+
+/// An empty models directory, which is what a machine that has never run
+/// `tessera models install` looks like. These tests are about the text pipeline,
+/// and an absent OCR engine must not change their answers.
+fn no_models(data: &Path) -> Models {
+    Models::open(&data.join("models")).expect("an empty models dir is always openable")
 }
 
 #[test]
@@ -51,7 +59,7 @@ fn index_search_reindex_stats_end_to_end() {
     fs::write(dir.join("bad.txt"), [0xFF, 0xFE, 0x00, 0xD8]).unwrap();
 
     let store = Store::open(data.path()).unwrap();
-    let summary = index_text_folder(&store, dir).unwrap();
+    let summary = index_text_folder(&store, &no_models(data.path()), dir).unwrap();
     assert_eq!(summary.indexed, 4, "four readable text files");
     assert_eq!(summary.failed, 1, "the invalid-UTF-8 file fails honestly");
     assert_eq!(summary.walk_errors, 0);
@@ -109,7 +117,7 @@ fn index_search_reindex_stats_end_to_end() {
     assert!(paths_of(&hits)[0].contains("zwiebel-recipe.txt"));
 
     // Re-indexing the same folder verifies without re-extracting anything.
-    let again = index_text_folder(&store, dir).unwrap();
+    let again = index_text_folder(&store, &no_models(data.path()), dir).unwrap();
     assert_eq!(again.indexed, 0, "nothing changed, so nothing is extracted");
     assert_eq!(again.unchanged, 4);
     assert_eq!(
@@ -134,7 +142,7 @@ fn empty_corpus_and_empty_query_are_safe() {
     let data = tempfile::tempdir().unwrap();
     let corpus = tempfile::tempdir().unwrap();
     let store = Store::open(data.path()).unwrap();
-    let summary = index_text_folder(&store, corpus.path()).unwrap();
+    let summary = index_text_folder(&store, &no_models(data.path()), corpus.path()).unwrap();
     assert_eq!(summary, tessera_core::index::IndexSummary::default());
     assert!(search(&store, &[]).unwrap().is_empty());
     assert!(search(&store, &["anything"]).unwrap().is_empty());

@@ -64,6 +64,20 @@ enum Command {
         /// `tessera search "invoice airline"`.
         query: Vec<String>,
     },
+    /// Read the text out of one image and print it, with timings. Exists so the
+    /// two engines can be compared from a terminal on the same file, which is how
+    /// the choice between them gets made.
+    Ocr {
+        /// The image to read.
+        image: PathBuf,
+        /// Which engine to read it with. Defaults to the best one available.
+        #[arg(long, value_name = "ENGINE")]
+        engine: Option<String>,
+        /// Print each line with the confidence behind it, rather than just the
+        /// text. This is what shows a score gate dropping a line.
+        #[arg(long)]
+        scores: bool,
+    },
     /// Index counts by status.
     Stats,
     /// Download and verify models. This is the only command that touches the
@@ -107,15 +121,16 @@ pub fn split_terms(args: &[String]) -> Vec<String> {
 /// Every pipeline the engine has, in the order they are offered a file.
 ///
 /// Images need an OCR engine, which is chosen rather than constructed here:
-/// the default is the platform's own engine, and `--ocr-engine` overrides it.
-/// Constructing an engine that this machine cannot run would make `tessera
-/// index` fail before it started, so the choice is resolved inside the
-/// pipeline and a missing engine shows up per file, in the diagnostics.
-fn pipelines(ocr: &OcrChoice) -> Result<Vec<Box<dyn Pipeline>>> {
+/// the default is the platform's own engine, falling back to the cross-platform
+/// one, and `--ocr-engine` overrides both. Constructing an engine that this
+/// machine cannot run would make `tessera index` fail before it started, so the
+/// choice is resolved inside the pipeline and a missing engine shows up per file,
+/// in the diagnostics.
+fn pipelines(ocr: &OcrChoice, models: &Models) -> Result<Vec<Box<dyn Pipeline>>> {
     // An engine the user *named* and did not get is a bug, not a preference, so
     // that stops the run. The platform default missing is not: the text formats
     // keep working and each image is recorded as failed with the reason.
-    let engine: Box<dyn OcrEngine> = match ocr::select(ocr) {
+    let engine: Box<dyn OcrEngine> = match ocr::select(ocr, models) {
         Ok(selection) => selection.engine,
         Err(err) if matches!(ocr, OcrChoice::Native) => {
             eprintln!("no OCR engine on this machine: {err:#}");
@@ -146,14 +161,17 @@ pub fn run() -> Result<()> {
                 .as_deref()
                 .map(|name| OcrChoice::Named(name.to_string()))
                 .unwrap_or(OcrChoice::Native);
-            if !ocr::is_available() && ocr == OcrChoice::Native {
+            let models = Models::open(&models_dir(&data_dir, cli.models_dir.as_deref()))?;
+            if !ocr::is_available(&models) && ocr == OcrChoice::Native {
                 // Said before the run, not after an hour of empty screenshots.
                 eprintln!(
                     "warning: no OCR engine is available on this machine, so images will be \
-                     recorded as failed. Text formats are unaffected."
+                     recorded as failed. Text formats are unaffected.\n\
+                     Install the cross-platform engine with: tessera models install --set {}",
+                    crate::ocr::onnx::MODEL_SET
                 );
             }
-            let pipelines = pipelines(&ocr)?;
+            let pipelines = pipelines(&ocr, &models)?;
             let summary = index_folder(&store, &pipelines, &folder)?;
             println!(
                 "indexed {indexed}, {unchanged} unchanged, {moved} moved, {skipped} skipped, \
@@ -169,6 +187,43 @@ pub fn run() -> Result<()> {
                 println!("{} unreadable path(s)", summary.walk_errors);
             }
             println!("index at {}", data_dir.join("index.sqlite").display());
+            Ok(())
+        }
+        Command::Ocr {
+            image,
+            engine,
+            scores,
+        } => {
+            let choice = engine
+                .as_deref()
+                .map(|name| OcrChoice::Named(name.to_string()))
+                .unwrap_or(OcrChoice::Native);
+            let models = Models::open(&models_dir(&data_dir, cli.models_dir.as_deref()))?;
+            let selection = ocr::select(&choice, &models)?;
+            let image = dunce::canonicalize(&image).context("resolving the image")?;
+            let started = std::time::Instant::now();
+            let lines = selection.engine.lines_with_scores(&image)?;
+            let elapsed = started.elapsed();
+            for (line, score) in &lines {
+                if scores {
+                    match score {
+                        Some(score) => println!("{score:>5.2}  {line}"),
+                        None => println!("{:-^5}  {line}", "n/a"),
+                    }
+                } else {
+                    println!("{line}");
+                }
+            }
+            println!(
+                "{}: {} line(s), {} character(s), {:.1} ms",
+                selection.name,
+                lines.len(),
+                lines
+                    .iter()
+                    .map(|(text, _)| text.chars().count())
+                    .sum::<usize>(),
+                elapsed.as_secs_f64() * 1000.0
+            );
             Ok(())
         }
         Command::Search { query } => {
@@ -290,8 +345,16 @@ pub fn stats_report(store: &Store) -> Result<Vec<String>> {
 
 /// Index a folder with the engine's current pipelines. Used by the CLI and by
 /// tests, so both exercise the same path.
-pub fn index_text_folder(store: &Store, folder: &Path) -> Result<crate::index::IndexSummary> {
-    index_folder(store, &pipelines(&OcrChoice::Native)?, folder)
+///
+/// `models` is passed in rather than opened here so the caller owns where models
+/// are read from; tests point it at an empty directory, which is exactly the
+/// "no OCR engine installed" state a fresh machine is in.
+pub fn index_text_folder(
+    store: &Store,
+    models: &Models,
+    folder: &Path,
+) -> Result<crate::index::IndexSummary> {
+    index_folder(store, &pipelines(&OcrChoice::Native, models)?, folder)
 }
 
 #[cfg(test)]
@@ -370,6 +433,15 @@ mod tests {
         ));
     }
 
+    /// An empty models directory: what a machine that has never installed the
+    /// OCR models looks like, and what these tests want so that engine choice
+    /// does not depend on the developer's machine.
+    fn empty_models() -> Models {
+        let dir =
+            std::env::temp_dir().join(format!("tessera-cli-no-models-{}", std::process::id()));
+        Models::open(&dir).expect("an empty models dir is always openable")
+    }
+
     #[test]
     fn the_ocr_engine_flag_is_the_config_override() {
         use clap::Parser;
@@ -384,14 +456,14 @@ mod tests {
 
         // And an engine that does not exist stops the run, rather than being
         // silently replaced by something else.
-        let Err(err) = pipelines(&OcrChoice::Named("tesseract".into())) else {
+        let Err(err) = pipelines(&OcrChoice::Named("tesseract".into()), &empty_models()) else {
             panic!("a named engine we do not have must not resolve");
         };
         assert!(format!("{err:#}").contains("tesseract"));
 
         // The native default still resolves when the machine has no engine: that
         // is per-file diagnostics, not a refusal to index.
-        assert!(pipelines(&OcrChoice::Native).is_ok());
+        assert!(pipelines(&OcrChoice::Native, &empty_models()).is_ok());
     }
 
     #[test]
@@ -442,6 +514,61 @@ mod tests {
                 "skipped    1".to_string(),
                 "  cloud_placeholder  1".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn the_stats_report_names_every_file_that_failed_and_why() {
+        // The AC says stats prints indexed / skipped / failed. The other test in
+        // this file covered the first two and a placeholder, and this branch —
+        // the one a user actually runs `stats` for after "search can't find my
+        // scanned invoice" — was never exercised. Deleting `cli.rs:339-342`
+        // would have broken nothing before this test.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let broken = corpus.path().join("scan.png");
+        std::fs::write(&broken, b"not really an image").unwrap();
+
+        store
+            .index_file(
+                corpus.path(),
+                &corpus.path().join("ok.txt"),
+                Kind::Text,
+                &facts(10),
+                Some("abc"),
+                &[Tile {
+                    seq: 0,
+                    text: "ok.txt\nthe invoice".into(),
+                }],
+            )
+            .unwrap();
+        store
+            .fail_file(
+                corpus.path(),
+                &broken,
+                Kind::Image,
+                &facts(64),
+                "the bitmap header is not a bitmap",
+            )
+            .unwrap();
+
+        let report = stats_report(&store).unwrap();
+        assert!(report.contains(&"indexed    1".to_string()), "{report:?}");
+        assert!(report.contains(&"failed     1".to_string()), "{report:?}");
+        // The count alone answers nothing: the file name and the reason are the
+        // whole point of asking.
+        assert!(
+            report
+                .iter()
+                .any(|line| line.contains("FAILED") && line.contains("scan.png")),
+            "the report does not name the failed file: {report:?}"
+        );
+        assert!(
+            report
+                .iter()
+                .any(|line| line.contains("the bitmap header is not a bitmap")),
+            "the report does not say why it failed: {report:?}"
         );
     }
 }
