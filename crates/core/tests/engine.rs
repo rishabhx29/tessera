@@ -108,10 +108,14 @@ fn index_search_reindex_stats_end_to_end() {
     assert_eq!(paths_of(&hits).len(), 1);
     assert!(paths_of(&hits)[0].contains("zwiebel-recipe.txt"));
 
-    // Re-indexing the same folder changes nothing.
+    // Re-indexing the same folder verifies without re-extracting anything.
     let again = index_text_folder(&store, dir).unwrap();
-    assert_eq!(again.indexed, 4);
-    assert_eq!(again.failed, 1);
+    assert_eq!(again.indexed, 0, "nothing changed, so nothing is extracted");
+    assert_eq!(again.unchanged, 4);
+    assert_eq!(
+        again.failed, 1,
+        "a failed file is retried, not remembered as done"
+    );
     let hits = search(&store, &["airline"]).unwrap();
     assert_eq!(paths_of(&hits).len(), 1, "no duplicates after re-index");
 

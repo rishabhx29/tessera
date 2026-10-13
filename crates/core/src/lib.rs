@@ -2,7 +2,9 @@
 //!
 //! Status: the week 2–3 engine is being built ticket by ticket from
 //! `docs/product-definition.md`; this crate currently contains the
-//! tracer-bullet slice (store + text pipeline + lexical search + CLI).
+//! text slice end to end: store, text pipeline, lexical search, incremental
+//! indexing (change detection, skip rules, move and deletion propagation), and
+//! the CLI.
 //!
 //! Everything the engine needs has a home in this crate: the folder watcher,
 //! the per-format indexing pipelines, the SQLite store (full-text + vectors),
@@ -10,6 +12,7 @@
 //! this crate never depends on the shell.
 
 pub mod cli;
+pub mod hash;
 pub mod index;
 pub mod search;
 pub mod store;

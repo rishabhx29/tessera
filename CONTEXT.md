@@ -16,15 +16,17 @@ one query returning results from several formats at once.
 ## Current phase
 
 **Week 2–3: engine build, ticket by ticket from `.scratch/tessera-v0.1/issues/`.**
-Ticket 01 (store + text pipeline + typo-tolerant lexical search + CLI) is
-resolved. The frontier is the image/document pipelines (tickets 02–04), which
-may only start once the store and the Pipeline seam are proven — they are.
+Tickets 01 (store + text pipeline + typo-tolerant lexical search + CLI) and 02
+(change detection, skip rules, diagnostics) are resolved. The frontier is the
+model framework and the image pipeline (tickets 03–04).
 
 ## Glossary
 
 - **Tile** — one indexed item: an image, or a document page/chunk. From
   *tessera*, a mosaic tile.
 - **Corpus** — the set of folders the user has chosen to index.
+- **Root** — one indexed folder. The corpus is the set of roots; each file row
+  records the root it came from, which is what scopes deletion propagation.
 - **Arm** — one search channel: lexical (FTS5), image (CLIP), text (MiniLM).
   A query runs up to three arms and fuses their rankings.
 - **Fusion / RRF** — Reciprocal Rank Fusion. Merges arm rankings by rank

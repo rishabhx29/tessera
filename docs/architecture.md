@@ -65,10 +65,12 @@ platform never touches the store, search, or UI.
 files(
   id INTEGER PRIMARY KEY,
   path TEXT UNIQUE,          -- absolute, canonicalized
+  root TEXT,                 -- the indexed folder this row belongs to
   kind TEXT,                 -- image | pdf | docx | text | (video in v0.2)
   size INTEGER,
-  mtime INTEGER,
-  sha1 TEXT,                 -- change detection
+  mtime INTEGER,             -- nanoseconds since the epoch (two writes in one
+                              -- second are different files, not one)
+  sha1 TEXT,                 -- content hash: change detection + move detection
   status TEXT,               -- indexed | skipped | failed | awaiting_ocr
   skip_reason TEXT,          -- 'too_large' | 'cloud_placeholder' | 'no_text_layer' | ...
   indexed_at INTEGER,
@@ -107,6 +109,19 @@ Rules that exist because someone already got burned:
   together or drift apart.
 - **SKIP reasons are recorded, not swallowed.** "Search can't find my scanned
   invoice" must be answerable from the diagnostics page.
+- **Cheap evidence before content.** `size` + `mtime` decide "unchanged" with
+  a stat; the sha1 is computed only when they disagree — including when the
+  timestamp moved *backwards* (a restored archive) or the size held still
+  (`port=8080` → `port=9090`). Re-indexing a 20,000-file corpus must not read
+  20,000 files.
+- **A row's `root` scopes deletion.** After a walk, rows under that root whose
+  file is gone from disk are dropped, so a deletion propagates — and indexing
+  one folder can never forget another. Existence is checked directly: a folder
+  the user cannot read looks exactly like an empty one.
+- **A skipped file is never opened.** Cloud placeholders and oversize files are
+  decided from metadata alone, before anything reads a byte.
+- **A hash is a claim about content we read.** A skipped or failed row carries
+  none, which also stops a stale hash from dragging a broken row to a new path.
 
 ## Indexing flow
 
@@ -114,19 +129,22 @@ Rules that exist because someone already got burned:
 watcher event / initial scan (newest-first)
         │
         ▼
-  change detection (mtime + size + sha1)   ── unchanged → skip
+  change detection (mtime + size, then sha1)   ── unchanged → verify only
         │
         ▼
-  cloud placeholder?  ── yes → status='skipped', reason='cloud_placeholder'
-        │ no
+  cloud placeholder?     ── yes → status='skipped', reason='cloud_placeholder'
+        │ no                                   (and its bytes are never fetched)
         ▼
-  size > 50 MB?      ── yes → status='skipped', reason='too_large'
+  size > 50 MB?          ── yes → status='skipped', reason='too_large'
         │ no
         ▼
   pipeline.process(file)  → tiles { text, embeddings }
         │
         ▼
   store upsert (files, tiles, tiles_fts, img_vec, txt_vec) — one transaction
+        │
+        ▼
+  rows under this root whose file is gone → deleted (deletion propagates)
 ```
 
 Queue policy: newest-first, up to 4 workers, models loaded per batch and
