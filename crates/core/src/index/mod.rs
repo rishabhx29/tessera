@@ -28,17 +28,43 @@ pub struct Tile {
     pub text: String,
 }
 
+/// What kind of file a pipeline produces. A closed set, so a format added
+/// later is a compile error everywhere it must be handled — the store column,
+/// the search result, the UI's type badge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Text,
+    Image,
+    Pdf,
+    Docx,
+}
+
+impl Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Text => "text",
+            Kind::Image => "image",
+            Kind::Pdf => "pdf",
+            Kind::Docx => "docx",
+        }
+    }
+}
+
 /// A format pipeline: accepts some files, turns each into tiles.
+///
+/// One method decides both *whether* a pipeline owns a file and *what kind* it
+/// is, because those two answers cannot usefully disagree: a pipeline that
+/// accepts a file and then stamps it with the wrong kind would mislabel its
+/// row, and a file whose kind is guessed from the extension after the fact is a
+/// guess.
 pub trait Pipeline {
-    /// Whether this pipeline handles the given path (by extension).
-    fn accepts(&self, path: &Path) -> bool;
+    /// The kind this pipeline produces for `path`, or `None` if it does not
+    /// own this file.
+    fn accepts(&self, path: &Path) -> Option<Kind>;
 
     /// Extract the file's content into tiles. Errors mean "this file failed",
     /// never "the whole index run failed".
     fn process(&self, path: &Path) -> anyhow::Result<Vec<Tile>>;
-
-    /// The `kind` recorded on the file row ("text", "image", "pdf", ...).
-    fn kind(&self) -> &'static str;
 }
 
 /// What one `index_folder` run did.
@@ -112,18 +138,6 @@ pub fn decide(
     })
 }
 
-/// A path the filesystem says is not there.
-///
-/// Only `NotFound` counts. A path that cannot be read is not evidence of
-/// deletion, and treating it as one would empty an index over a permissions
-/// hiccup or an unplugged drive.
-pub fn is_gone(path: &Path) -> bool {
-    matches!(
-        std::fs::symlink_metadata(path),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound
-    )
-}
-
 /// Make a file's name part of its searchable text: prepended to the first
 /// tile, or a lone tile when the file extracted no text. A name is one of the
 /// three things people search for (product-definition 3.1).
@@ -144,29 +158,15 @@ fn with_filename(path: &Path, mut tiles: Vec<Tile>) -> Vec<Tile> {
 /// Swap the filename at the head of a tile for the one the file has now — the
 /// inverse of [`with_filename`]. A move must not cost a re-extract, but the
 /// file still has to be findable under the name it carries today.
+///
+/// Paired with [`with_filename`] and called by the store when it re-identifies
+/// a file at a new path: the filename convention is written on one side and
+/// read on the other, never reconstructed by a caller.
 pub fn retitled(text: &str, new_name: &str) -> String {
     match text.split_once('\n') {
         Some((_, body)) => format!("{new_name}\n{body}"),
         None => new_name.to_string(),
     }
-}
-
-/// Drop rows for files under `root` that are no longer on disk, so a deletion
-/// propagates instead of leaving behind a result nobody can open.
-///
-/// Scoped to the folder that was just walked, so indexing one folder never
-/// forgets another. Existence is checked directly rather than inferred from
-/// what the walk returned, because a directory the user cannot read looks
-/// exactly like an empty one.
-pub fn remove_missing(store: &Store, root: &Path) -> Result<usize> {
-    let mut removed = 0;
-    for (id, path) in store.rows_under(root)? {
-        if is_gone(Path::new(&path)) {
-            store.remove_file(id)?;
-            removed += 1;
-        }
-    }
-    Ok(removed)
 }
 
 /// Index every file under `folder` that any pipeline accepts.
@@ -181,10 +181,10 @@ pub fn index_folder(
     index_folder_with(store, pipelines, folder, &SystemProbe)
 }
 
-/// [`index_folder`] against an injected [`FileProbe`]. The seam exists for one
-/// reason: a cloud placeholder cannot be created on demand, and the promise
-/// that such a file is never opened has to be testable, not asserted.
-pub fn index_folder_with(
+/// [`index_folder`] against an injected [`FileProbe`]. Internal: the probe is
+/// a test seam with one production adapter, so it does not belong on the public
+/// interface — callers get the filesystem probe and nothing to choose.
+pub(crate) fn index_folder_with(
     store: &Store,
     pipelines: &[Box<dyn Pipeline>],
     folder: &Path,
@@ -209,7 +209,10 @@ pub fn index_folder_with(
         if !entry.file_type().is_file() {
             continue;
         }
-        let Some(pipeline) = pipelines.iter().find(|p| p.accepts(path)) else {
+        let Some((pipeline, kind)) = pipelines
+            .iter()
+            .find_map(|p| p.accepts(path).map(|kind| (p, kind)))
+        else {
             continue;
         };
         // Metadata only. Nothing below this line may open a file that
@@ -222,7 +225,7 @@ pub fn index_folder_with(
             }
         };
         if let Some(reason) = self::skip::skip_reason(&facts) {
-            store.skip_file(folder, path, pipeline.kind(), &facts, reason)?;
+            store.skip_file(folder, path, kind, &facts, reason)?;
             summary.skipped += 1;
             continue;
         }
@@ -236,23 +239,12 @@ pub fn index_folder_with(
         // New or changed bytes. The hash above may already have read the file;
         // `LazyHash` makes sure that is the only time it does.
         if stored.is_none() {
-            // An unknown path whose bytes match a row under the same folder
-            // is that file, moved. Reclaiming the row keeps one file indexed
-            // once, under the name it has now — and only when the old path is
-            // really gone, so two live copies stay two files.
-            let moved = store
-                .moved_candidates(folder, hash.get()?, path)?
-                .into_iter()
-                .find(|(_, old)| is_gone(Path::new(old)));
-            if let Some((id, _)) = moved {
-                let name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or_default()
-                    .to_string();
-                let first_tile = store.tile_texts(id)?.into_iter().next();
-                let new_title = first_tile.map(|text| retitled(&text, &name));
-                store.move_file(id, path, &facts, hash.get()?, new_title.as_deref())?;
+            // An unknown path whose bytes match a row under the same folder is
+            // that file, moved. Reclaiming the row keeps one file indexed
+            // once, under the name it has now; the store decides whether the
+            // old path is really gone, so two live copies stay two files.
+            if let Some((id, _)) = store.moved_candidate(folder, hash.get()?, path)? {
+                store.move_file(id, path, &facts, hash.get()?)?;
                 summary.moved += 1;
                 continue;
             }
@@ -262,7 +254,7 @@ pub fn index_folder_with(
                 store.index_file(
                     folder,
                     path,
-                    pipeline.kind(),
+                    kind,
                     &facts,
                     Some(hash.get()?),
                     &with_filename(path, tiles),
@@ -270,17 +262,18 @@ pub fn index_folder_with(
                 summary.indexed += 1;
             }
             Err(err) => {
-                store.fail_file(folder, path, pipeline.kind(), &facts, &err.to_string())?;
+                store.fail_file(folder, path, kind, &facts, &err.to_string())?;
                 summary.failed += 1;
             }
         }
     }
-    summary.removed = remove_missing(store, folder)?;
+    summary.removed = store.remove_missing(folder)?;
     Ok(summary)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::text::TextPipeline;
     use super::*;
 
     fn facts(size: u64, mtime: i64) -> FileFacts {
@@ -450,12 +443,174 @@ mod tests {
         assert_eq!(change, Change::Extract);
     }
 
+    // -- The skip rules, through the index loop ------------------------
+    //
+    // These live here, not in tests/incremental.rs, because they need the
+    // probe seam — which is internal, and deliberately so.
+
+    /// Reports files whose names contain `marker` as cloud placeholders: the
+    /// Files On-Demand state a real OneDrive folder produces and no test can
+    /// otherwise create on demand.
+    struct CloudyProbe {
+        marker: &'static str,
+    }
+
+    impl FileProbe for CloudyProbe {
+        fn facts(&self, path: &Path) -> Result<FileFacts> {
+            let mut facts = SystemProbe.facts(path)?;
+            if path.to_string_lossy().contains(self.marker) {
+                facts.placeholder = true;
+            }
+            Ok(facts)
+        }
+    }
+
+    fn write(dir: &Path, name: &str, contents: &str) {
+        std::fs::write(dir.join(name), contents).unwrap();
+    }
+
     #[test]
-    fn a_path_that_is_gone_and_one_that_is_unreadable_are_different_things() {
-        let dir = tempfile::tempdir().unwrap();
-        let present = dir.path().join("here.txt");
-        std::fs::write(&present, "x").unwrap();
-        assert!(!is_gone(&present));
-        assert!(is_gone(&dir.path().join("gone.txt")));
+    fn a_placeholder_is_skipped_and_the_pipeline_never_sees_it() {
+        let data = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let dir = corpus.path();
+        write(dir, "local.txt", "the invoice from the airline");
+        write(dir, "cloud-only.txt", "the invoice from the cloud");
+        let store = Store::open(data.path()).unwrap();
+
+        // A pipeline that panics if it is ever asked to read the placeholder.
+        // The skip has to happen before the pipeline, or this fails instead of
+        // passing vacuously.
+        struct ExplodesOnPlaceholder;
+        impl Pipeline for ExplodesOnPlaceholder {
+            fn accepts(&self, path: &Path) -> Option<Kind> {
+                TextPipeline.accepts(path)
+            }
+            fn process(&self, path: &Path) -> Result<Vec<Tile>> {
+                assert!(
+                    !path.to_string_lossy().contains("cloud-only"),
+                    "the pipeline was asked to open the cloud placeholder {}",
+                    path.display()
+                );
+                TextPipeline.process(path)
+            }
+        }
+
+        let summary = index_folder_with(
+            &store,
+            &[Box::new(ExplodesOnPlaceholder)],
+            dir,
+            &CloudyProbe {
+                marker: "cloud-only",
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            (summary.indexed, summary.skipped, summary.failed),
+            (1, 1, 0)
+        );
+        // Recorded with its reason, and its bytes never became searchable text.
+        let row = store
+            .file_state(&dir.join("cloud-only.txt"))
+            .unwrap()
+            .expect("the skipped file is recorded");
+        assert!(!row.extracted);
+        assert_eq!(
+            store.skip_reasons().unwrap(),
+            vec![("cloud_placeholder".to_string(), 1)]
+        );
+        assert!(
+            store
+                .file_ids_matching(&crate::search::term_match_expr("cloud"))
+                .unwrap()
+                .is_empty(),
+            "a file that was never read must not have searchable text"
+        );
+    }
+
+    #[test]
+    fn the_diagnostics_break_down_why_files_were_not_read() {
+        let data = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let dir = corpus.path();
+        write(dir, "ok.txt", "the invoice from the airline");
+        write(dir, "cloud.txt", "placeholder");
+        let huge = std::fs::File::create(dir.join("huge.txt")).unwrap();
+        huge.set_len(skip::MAX_FILE_BYTES + 1).unwrap();
+        drop(huge);
+        // Extraction that fails: recorded as failed, and kept out of the
+        // reason breakdown, because its reason is an error message.
+        std::fs::write(dir.join("bad.txt"), [0xFF, 0xFE, 0x00, 0xD8]).unwrap();
+        let store = Store::open(data.path()).unwrap();
+
+        index_folder_with(
+            &store,
+            &[Box::new(TextPipeline)],
+            dir,
+            &CloudyProbe {
+                marker: "cloud.txt",
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            store.stats().unwrap(),
+            vec![
+                ("failed".to_string(), 1),
+                ("indexed".to_string(), 1),
+                ("skipped".to_string(), 2),
+            ]
+        );
+        assert_eq!(
+            store.skip_reasons().unwrap(),
+            vec![
+                ("cloud_placeholder".to_string(), 1),
+                ("too_large".to_string(), 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_file_one_drive_evicted_stays_findable_and_is_still_recorded() {
+        let data = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let dir = corpus.path();
+        write(dir, "invoice.txt", "the invoice from the airline arrived");
+        let store = Store::open(data.path()).unwrap();
+        index_folder(&store, &[Box::new(TextPipeline)], dir).unwrap();
+
+        // OneDrive evicts the file under disk pressure: the bytes leave, the
+        // row does not. Searching the text we already hold downloads nothing,
+        // and dropping it would remove a result for a reason the user neither
+        // caused nor can undo.
+        let summary = index_folder_with(
+            &store,
+            &[Box::new(TextPipeline)],
+            dir,
+            &CloudyProbe {
+                marker: "invoice.txt",
+            },
+        )
+        .unwrap();
+        assert_eq!((summary.skipped, summary.indexed), (1, 0));
+        assert_eq!(
+            store.skip_reasons().unwrap(),
+            vec![("cloud_placeholder".to_string(), 1)]
+        );
+        assert_eq!(
+            store
+                .files_by_ids(
+                    &store
+                        .file_ids_matching(&crate::search::term_match_expr("airline"))
+                        .unwrap()
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                )
+                .unwrap()
+                .len(),
+            1,
+            "the text of an evicted file is no longer searchable"
+        );
     }
 }

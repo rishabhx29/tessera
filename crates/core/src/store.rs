@@ -21,7 +21,7 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, Transaction};
 
 use crate::index::skip::{FileFacts, SkipReason};
-use crate::index::Tile;
+use crate::index::{Kind, Tile};
 
 /// The schema version this engine understands. Bumping it means writing a
 /// migration; opening a future-version store must fail loudly.
@@ -115,7 +115,7 @@ impl FileStatus {
 struct FileRow<'a> {
     path: &'a Path,
     root: &'a Path,
-    kind: &'a str,
+    kind: Kind,
     facts: FileFacts,
     sha1: Option<&'a str>,
     status: FileStatus,
@@ -134,7 +134,7 @@ fn upsert_file(conn: &Connection, row: FileRow<'_>) -> Result<()> {
         rusqlite::params![
             row.path.to_string_lossy(),
             row.root.to_string_lossy(),
-            row.kind,
+            row.kind.as_str(),
             row.facts.size as i64,
             row.facts.mtime,
             row.sha1,
@@ -147,10 +147,43 @@ fn upsert_file(conn: &Connection, row: FileRow<'_>) -> Result<()> {
 }
 
 /// A file row as the sweeper and the move detector need it: an id and a path.
-pub type FileRowRef = (i64, String);
+type FileRowRef = (i64, String);
+
+/// One matched file, with everything a search result needs to describe it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchedFile {
+    pub file_id: i64,
+    pub path: String,
+    pub kind: String,
+    /// The file's tile texts in order — the text search matched against.
+    pub tiles: Vec<String>,
+}
 
 fn row_to_ref(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRowRef> {
     Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+}
+
+impl Store {
+    /// Tests and diagnostics read the stored text back through the same
+    /// interface a search uses, so they cannot drift from it.
+    #[cfg(test)]
+    fn tile_texts(&self, file_id: i64) -> Result<Vec<String>> {
+        Ok(self
+            .files_by_ids(&[file_id])?
+            .into_iter()
+            .flat_map(|file| file.tiles)
+            .collect())
+    }
+
+    #[cfg(test)]
+    fn file_row(&self, file_id: i64) -> Result<(String, String)> {
+        let file = self
+            .files_by_ids(&[file_id])?
+            .into_iter()
+            .next()
+            .context("no such file")?;
+        Ok((file.path, file.kind))
+    }
 }
 
 fn collect_rows(
@@ -161,6 +194,20 @@ fn collect_rows(
         out.push(row?);
     }
     Ok(out)
+}
+
+/// A path the filesystem says is not there.
+///
+/// Only `NotFound` counts. A path that cannot be read is not evidence of
+/// deletion, and treating it as one would empty an index over a permissions
+/// hiccup or an unplugged drive. Private: callers ask what they actually
+/// mean — "has this file moved?", "is this folder still here?" — rather than
+/// deciding for themselves what absence looks like.
+fn is_gone(path: &Path) -> bool {
+    matches!(
+        std::fs::symlink_metadata(path),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound
+    )
 }
 
 /// `root` with the separator that must follow it inside a path, so a prefix
@@ -295,7 +342,7 @@ impl Store {
     ///
     /// Rows written before roots existed (`root = ''`) are matched by path, so
     /// a corpus indexed by an older build still gets its deletions.
-    pub fn rows_under(&self, root: &Path) -> Result<Vec<FileRowRef>> {
+    fn rows_under(&self, root: &Path) -> Result<Vec<FileRowRef>> {
         let prefix = under_prefix(root);
         let mut stmt = self.conn.prepare_cached(
             "SELECT id, path FROM files
@@ -308,17 +355,9 @@ impl Store {
         collect_rows(rows)
     }
 
-    /// Rows under `root` whose content hash is `sha1`, excluding `keep`. Used
-    /// to recognise a moved file: same bytes, different path.
-    ///
-    /// The hash is only ever set on a row this engine extracted, so a row that
-    /// was skipped or failed cannot be dragged to a new path by a stale hash.
-    pub fn moved_candidates(
-        &self,
-        root: &Path,
-        sha1: &str,
-        keep: &Path,
-    ) -> Result<Vec<FileRowRef>> {
+    /// Rows under `root` whose content hash is `sha1`, excluding `keep`. The
+    /// raw material behind [`Store::moved_candidate`].
+    fn rows_matching_sha1(&self, root: &Path, sha1: &str, keep: &Path) -> Result<Vec<FileRowRef>> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT id, path FROM files WHERE root = ?1 AND sha1 = ?2 AND path != ?3",
         )?;
@@ -329,13 +368,52 @@ impl Store {
         collect_rows(rows)
     }
 
+    /// The row this file's content belongs to, if it used to live elsewhere.
+    ///
+    /// A move is one fact — "these bytes were that row" — so it is asked in
+    /// one call: the content hash, the folder it came from, and the check that
+    /// the old path is really gone. Two live copies of the same bytes are two
+    /// files, and a hash match is not evidence that anything moved.
+    ///
+    /// The hash is only ever set on a row this engine extracted, so a row that
+    /// was skipped or failed cannot be dragged to a new path by a stale hash.
+    pub fn moved_candidate(
+        &self,
+        root: &Path,
+        sha1: &str,
+        keep: &Path,
+    ) -> Result<Option<FileRowRef>> {
+        Ok(self
+            .rows_matching_sha1(root, sha1, keep)?
+            .into_iter()
+            .find(|(_, old)| is_gone(Path::new(old))))
+    }
+
+    /// Drop rows for files under `root` that are no longer on disk, so a
+    /// deletion propagates instead of leaving behind a result nobody can open.
+    ///
+    /// Scoped to the folder that was just walked, so indexing one folder never
+    /// forgets another. Existence is checked directly rather than inferred
+    /// from what the walk returned, because a directory the user cannot read
+    /// looks exactly like an empty one.
+    pub fn remove_missing(&self, root: &Path) -> Result<usize> {
+        let mut removed = 0;
+        for (id, path) in self.rows_under(root)? {
+            if is_gone(Path::new(&path)) {
+                self.remove_row(id)?;
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
     /// Upsert one file and replace its tiles, in one transaction. Idempotent:
     /// re-running on an already-indexed file leaves exactly one set of rows.
     pub fn index_file(
         &self,
         root: &Path,
         path: &Path,
-        kind: &str,
+        kind: Kind,
         facts: &FileFacts,
         sha1: Option<&str>,
         tiles: &[Tile],
@@ -383,7 +461,7 @@ impl Store {
         &self,
         root: &Path,
         path: &Path,
-        kind: &str,
+        kind: Kind,
         facts: &FileFacts,
         reason: SkipReason,
     ) -> Result<()> {
@@ -412,7 +490,7 @@ impl Store {
         &self,
         root: &Path,
         path: &Path,
-        kind: &str,
+        kind: Kind,
         facts: &FileFacts,
         reason: &str,
     ) -> Result<()> {
@@ -449,46 +527,50 @@ impl Store {
 
     /// Move a file row to a new path: the same bytes, a new name.
     ///
-    /// `new_title` replaces the text of the file's first tile, which carries
-    /// the filename (see `index::with_filename`) — a moved file must be
-    /// findable under the name it has *now*, without re-extracting anything.
-    /// One transaction, so the row and its search text never disagree.
+    /// The filename lives at the head of the file's first tile (see
+    /// `index::with_filename`), so a move has to re-title it — a moved file
+    /// must be findable under the name it has *now*, without re-extracting
+    /// anything. That convention is enforced here, inside the transaction that
+    /// updates the row, rather than asked of the caller: one transaction, so
+    /// the path and the search text can never disagree.
     pub fn move_file(
         &self,
         file_id: i64,
         new_path: &Path,
         facts: &FileFacts,
         sha1: &str,
-        new_title: Option<&str>,
     ) -> Result<()> {
+        let new_name = new_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
         let tx = self.conn.unchecked_transaction()?;
-        if let Some(title) = new_title {
-            let old_title: Option<String> = tx
-                .query_row(
-                    "SELECT text FROM tiles WHERE file_id = ?1 AND seq = 0",
-                    rusqlite::params![file_id],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            if let Some(old_title) = old_title {
-                let tile_id: i64 = tx.query_row(
-                    "SELECT id FROM tiles WHERE file_id = ?1 AND seq = 0",
-                    rusqlite::params![file_id],
-                    |row| row.get(0),
-                )?;
-                tx.execute(
-                    "INSERT INTO tiles_fts(tiles_fts, rowid, text) VALUES ('delete', ?1, ?2)",
-                    rusqlite::params![tile_id, old_title],
-                )?;
-                tx.execute(
-                    "UPDATE tiles SET text = ?2 WHERE id = ?1",
-                    rusqlite::params![tile_id, title],
-                )?;
-                tx.execute(
-                    "INSERT INTO tiles_fts(rowid, text) VALUES (?1, ?2)",
-                    rusqlite::params![tile_id, title],
-                )?;
-            }
+        let first_tile: Option<String> = tx
+            .query_row(
+                "SELECT text FROM tiles WHERE file_id = ?1 AND seq = 0",
+                rusqlite::params![file_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(old_title) = first_tile {
+            let title = crate::index::retitled(&old_title, new_name);
+            let tile_id: i64 = tx.query_row(
+                "SELECT id FROM tiles WHERE file_id = ?1 AND seq = 0",
+                rusqlite::params![file_id],
+                |row| row.get(0),
+            )?;
+            tx.execute(
+                "INSERT INTO tiles_fts(tiles_fts, rowid, text) VALUES ('delete', ?1, ?2)",
+                rusqlite::params![tile_id, old_title],
+            )?;
+            tx.execute(
+                "UPDATE tiles SET text = ?2 WHERE id = ?1",
+                rusqlite::params![tile_id, title],
+            )?;
+            tx.execute(
+                "INSERT INTO tiles_fts(rowid, text) VALUES (?1, ?2)",
+                rusqlite::params![tile_id, title],
+            )?;
         }
         tx.execute(
             "UPDATE files SET
@@ -509,7 +591,7 @@ impl Store {
 
     /// Forget a file: its tiles leave the full-text index and the store. Used
     /// when the file is gone from disk, so nothing silently lingers.
-    pub fn remove_file(&self, file_id: i64) -> Result<()> {
+    fn remove_row(&self, file_id: i64) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         purge_tiles(&tx, file_id)?;
         tx.execute(
@@ -536,26 +618,51 @@ impl Store {
         Ok(ids)
     }
 
-    /// Path and kind for a file id.
-    pub fn file_row(&self, file_id: i64) -> Result<(String, String)> {
-        self.conn
-            .query_row(
-                "SELECT path, kind FROM files WHERE id = ?1",
-                rusqlite::params![file_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )
-            .map_err(anyhow::Error::from)
-    }
-
-    /// All tile texts for a file, in order (used to pick a match snippet).
-    pub fn tile_texts(&self, file_id: i64) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare_cached("SELECT text FROM tiles WHERE file_id = ?1 ORDER BY seq")?;
-        let rows = stmt.query_map(rusqlite::params![file_id], |row| row.get::<_, String>(0))?;
-        let mut out = Vec::new();
-        for text in rows {
-            out.push(text?);
+    /// These files, whole: identity, kind, and searchable text, in one round
+    /// trip.
+    ///
+    /// Asking per id — one query for the row, another for its tiles — costs
+    /// two round trips per hit, and fusion multiplies that by the number of
+    /// arms. Callers hold the id intersection they already computed; this
+    /// resolves it once. Snippet building stays in `crate::search`: choosing a
+    /// window around a match is a decision about presentation, not storage.
+    ///
+    /// Ids are the ones `file_ids_matching` returned, so they are already in
+    /// ascending order from the intersection; rows come back grouped per file.
+    pub fn files_by_ids(&self, file_ids: &[i64]) -> Result<Vec<MatchedFile>> {
+        if file_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // One bind parameter per id, filled from the slice.
+        let holes = (1..=file_ids.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT f.id, f.path, f.kind, t.text
+             FROM files f JOIN tiles t ON t.file_id = f.id
+             WHERE f.id IN ({holes})
+             ORDER BY f.id, t.seq"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(file_ids), |row| {
+            Ok(MatchedFile {
+                file_id: row.get::<_, i64>(0)?,
+                path: row.get(1)?,
+                kind: row.get::<_, String>(2)?,
+                tiles: vec![row.get::<_, String>(3)?],
+            })
+        })?;
+        let mut out: Vec<MatchedFile> = Vec::new();
+        for row in rows {
+            let mut file = row?;
+            // Consecutive rows of one file collapse into one result.
+            match out.last_mut() {
+                Some(last) if last.file_id == file.file_id => {
+                    last.tiles.append(&mut file.tiles);
+                }
+                _ => out.push(file),
+            }
         }
         Ok(out)
     }
@@ -630,7 +737,7 @@ mod tests {
             .index_file(
                 Path::new("/corpus"),
                 Path::new(path),
-                "text",
+                Kind::Text,
                 &facts(10),
                 Some("abc123"),
                 &tiles(texts),
@@ -774,7 +881,7 @@ mod tests {
         let err = store.index_file(
             Path::new("/corpus"),
             Path::new("/corpus/a.txt"),
-            "text",
+            Kind::Text,
             &facts(11),
             Some("def456"),
             &clashing,
@@ -827,7 +934,7 @@ mod tests {
     fn removing_a_file_leaves_no_trace_in_search() {
         let (_dir, store) = tmp_store();
         indexed_file(&store, "/corpus/a.txt", &["invoice airline"]);
-        store.remove_file(1).unwrap();
+        store.remove_row(1).unwrap();
         assert!(store
             .file_ids_matching(&crate::search::term_match_expr("invoice"))
             .unwrap()
@@ -847,14 +954,10 @@ mod tests {
     fn a_move_updates_the_path_and_the_searchable_name_in_one_step() {
         let (_dir, store) = tmp_store();
         indexed_file(&store, "/corpus/a.txt", &["a.txt\ninvoice airline"]);
+        // The caller names the new path; re-titling the searchable text is the
+        // store's job, so the two cannot be told to disagree.
         store
-            .move_file(
-                1,
-                Path::new("/corpus/b.txt"),
-                &facts(24),
-                "abc123",
-                Some("b.txt\ninvoice airline"),
-            )
+            .move_file(1, Path::new("/corpus/b.txt"), &facts(24), "abc123")
             .unwrap();
         assert!(store
             .file_state(Path::new("/corpus/a.txt"))
@@ -890,35 +993,56 @@ mod tests {
     }
 
     #[test]
-    fn moved_candidates_are_scoped_to_the_root_and_skip_the_new_path() {
+    fn a_move_candidate_is_scoped_to_the_root_and_the_gone_path() {
         let (_dir, store) = tmp_store();
         indexed_file(&store, "/corpus/a.txt", &["same bytes"]);
         store
             .index_file(
                 Path::new("/other"),
                 Path::new("/other/z.txt"),
-                "text",
+                Kind::Text,
                 &facts(10),
                 Some("abc123"),
                 &tiles(&["same bytes"]),
             )
             .unwrap();
-        let in_root = store
-            .moved_candidates(Path::new("/corpus"), "abc123", Path::new("/corpus/b.txt"))
-            .unwrap();
-        assert_eq!(in_root, vec![(1, "/corpus/a.txt".to_string())]);
-        // the file being placed is never a candidate for moving onto itself
-        assert!(store
-            .moved_candidates(Path::new("/corpus"), "abc123", Path::new("/corpus/a.txt"))
-            .unwrap()
-            .is_empty());
-        // and another folder's row is off limits: from /other only its own row
-        // is a candidate
+        // None of these paths exist on disk, so the first is a move...
         assert_eq!(
             store
-                .moved_candidates(Path::new("/other"), "abc123", Path::new("/other/new.txt"))
+                .moved_candidate(Path::new("/corpus"), "abc123", Path::new("/corpus/b.txt"))
                 .unwrap(),
-            vec![(2, "/other/z.txt".to_string())]
+            Some((1, "/corpus/a.txt".to_string()))
+        );
+        // ...a file is never a candidate for moving onto itself...
+        assert!(store
+            .moved_candidate(Path::new("/corpus"), "abc123", Path::new("/corpus/a.txt"))
+            .unwrap()
+            .is_none());
+        // ...another folder's row is off limits...
+        assert!(store
+            .moved_candidate(Path::new("/third"), "abc123", Path::new("/third/new.txt"))
+            .unwrap()
+            .is_none());
+        // ...and a row whose path is still on disk is two live files, not a move.
+        let live = tempfile::tempdir().unwrap();
+        let live_path = live.path().join("a.txt");
+        std::fs::write(&live_path, "same bytes").unwrap();
+        store
+            .index_file(
+                live.path(),
+                &live_path,
+                Kind::Text,
+                &facts(10),
+                Some("abc123"),
+                &tiles(&["same bytes"]),
+            )
+            .unwrap();
+        assert!(
+            store
+                .moved_candidate(live.path(), "abc123", &live.path().join("copy.txt"))
+                .unwrap()
+                .is_none(),
+            "a file whose old path still exists was treated as a move"
         );
     }
 
@@ -930,7 +1054,7 @@ mod tests {
             .skip_file(
                 Path::new("/corpus"),
                 Path::new("/corpus/a.png"),
-                "image",
+                Kind::Image,
                 &facts(0),
                 SkipReason::CloudPlaceholder,
             )
@@ -959,7 +1083,7 @@ mod tests {
             .fail_file(
                 Path::new("/corpus"),
                 Path::new("/corpus/a.txt"),
-                "text",
+                Kind::Text,
                 &facts(10),
                 "reading a.txt: invalid utf-8",
             )
@@ -975,9 +1099,9 @@ mod tests {
         );
         assert!(
             store
-                .moved_candidates(Path::new("/corpus"), "abc123", Path::new("/corpus/b.txt"))
+                .moved_candidate(Path::new("/corpus"), "abc123", Path::new("/corpus/b.txt"))
                 .unwrap()
-                .is_empty(),
+                .is_none(),
             "a failed row was moved by a stale hash"
         );
     }
@@ -989,7 +1113,7 @@ mod tests {
             .fail_file(
                 Path::new("/corpus"),
                 Path::new("/corpus/bad.txt"),
-                "text",
+                Kind::Text,
                 &facts(4),
                 "reading a.txt: invalid utf-8",
             )
@@ -998,7 +1122,7 @@ mod tests {
             .skip_file(
                 Path::new("/corpus"),
                 Path::new("/corpus/huge.txt"),
-                "text",
+                Kind::Text,
                 &facts(u64::MAX / 2),
                 SkipReason::TooLarge,
             )
@@ -1007,6 +1131,17 @@ mod tests {
         let stats = store.stats().unwrap();
         assert!(stats.contains(&("failed".to_string(), 1)));
         assert!(stats.contains(&("skipped".to_string(), 1)));
+    }
+
+    /// The deletion sweep's judgement call, tested where it now lives: absent
+    /// is deletion, unreadable is not.
+    #[test]
+    fn a_gone_path_and_an_unreadable_one_are_different_things() {
+        let dir = tempfile::tempdir().unwrap();
+        let present = dir.path().join("here.txt");
+        std::fs::write(&present, "x").unwrap();
+        assert!(!is_gone(&present));
+        assert!(is_gone(&dir.path().join("gone.txt")));
     }
 
     #[test]

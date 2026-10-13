@@ -30,15 +30,42 @@ small API: `add_folder`, `search(query, filters)`, `index_status()`.
 
 ```rust
 trait Pipeline {
-    fn accepts(&self, path: &Path) -> bool;
+    /// The kind this pipeline produces for `path`, or None if it does not own
+    /// it. One method, not two: "do you handle this?" and "what kind is it?"
+    /// cannot usefully disagree.
+    fn accepts(&self, path: &Path) -> Option<Kind>;
     fn process(&self, file: &FileRef) -> Result<Vec<Tile>, PipelineError>;
 }
 ```
+
+This seam is the repo's one deliberate speculative generality, licensed by the
+locked spec's four v0.1 formats. It stays open for formats the spec names, not
+for anything else.
 
 A **tile** is the unit of indexing: an image, or a document page/chunk. Every
 pipeline emits tiles; the store and search code are format-agnostic. Video
 (v0.2) is a new pipeline that emits image tiles (keyframes) and text tiles
 (transcript chunks) — no store or search changes.
+
+The engine's public surface is small on purpose. `index_folder(store, pipelines,
+folder) -> IndexSummary` is the whole indexing interface; `Store` exposes file
+lifecycle operations (`index_file`, `skip_file`, `fail_file`, `move_file`,
+`moved_candidate`, `remove_missing`) and search reads (`file_ids_matching`,
+`files_by_ids`). Two seams are deliberately *internal* rather than public,
+because they have one adapter each and exist for testability: the file probe
+(so a Files On-Demand placeholder can be tested) and the hash thunk (so the
+change decision is a pure function).
+
+Two rules keep multi-step facts from leaking out of the store as protocols a
+caller has to reconstruct:
+
+- **A move is one question.** `moved_candidate(root, sha, path)` decides
+  whether these bytes are a row that used to live elsewhere, including whether
+  the old path is really gone. The caller never inspects paths to find out.
+- **Re-titling is the store's job.** `move_file` takes the new path and
+  updates the filename at the head of the first tile itself, inside the same
+  transaction as the path — so the row and its searchable text cannot disagree,
+  and no caller has to know the filename convention.
 
 ### The OCR seam (cross-platform, ADR-0007)
 

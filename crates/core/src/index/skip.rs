@@ -82,17 +82,22 @@ pub fn attributes_mark_placeholder(attributes: u32) -> bool {
     attributes & (ATTR_OFFLINE | ATTR_RECALL_ON_OPEN | ATTR_RECALL_ON_DATA_ACCESS) != 0
 }
 
-/// Where a file's facts come from. A trait because a Files On-Demand
-/// placeholder cannot be conjured up by a test on demand: the alternative would
-/// be shipping the skip rule untested and calling that trust.
-pub trait FileProbe {
+/// Where a file's facts come from.
+///
+/// One production adapter ([`SystemProbe`]) — so this is an *internal* seam,
+/// not an interface: it exists because a Files On-Demand placeholder cannot be
+/// conjured up on demand, and the promise that such a file is never opened has
+/// to be tested rather than asserted. The macOS check that ticket 06 adds is a
+/// `#[cfg]` inside `SystemProbe`, not a second adapter, so this trait never
+/// grows a production reason to exist.
+pub(crate) trait FileProbe {
     /// Facts for `path`, or an error when the path cannot be examined at all.
     fn facts(&self, path: &Path) -> Result<FileFacts>;
 }
 
 /// The real filesystem.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct SystemProbe;
+pub(crate) struct SystemProbe;
 
 impl FileProbe for SystemProbe {
     fn facts(&self, path: &Path) -> Result<FileFacts> {

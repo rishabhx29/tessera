@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use super::{Pipeline, Tile};
+use super::{Kind, Pipeline, Tile};
 
 const EXTENSIONS: &[&str] = &["txt", "md", "csv", "log"];
 
@@ -35,11 +35,12 @@ pub fn chunk_text(text: &str) -> Vec<String> {
 pub struct TextPipeline;
 
 impl Pipeline for TextPipeline {
-    fn accepts(&self, path: &Path) -> bool {
-        path.extension()
-            .and_then(|e| e.to_str())
-            .map(|e| EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
-            .unwrap_or(false)
+    fn accepts(&self, path: &Path) -> Option<Kind> {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())?
+            .to_ascii_lowercase();
+        EXTENSIONS.contains(&ext.as_str()).then_some(Kind::Text)
     }
 
     fn process(&self, path: &Path) -> anyhow::Result<Vec<Tile>> {
@@ -55,29 +56,25 @@ impl Pipeline for TextPipeline {
             })
             .collect())
     }
-
-    fn kind(&self) -> &'static str {
-        "text"
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn accepts(name: &str) -> bool {
+    fn accepts(name: &str) -> Option<Kind> {
         TextPipeline.accepts(Path::new(name))
     }
 
     #[test]
-    fn accepts_the_text_extensions_only() {
-        assert!(accepts("a.txt"));
-        assert!(accepts("b.MD")); // extension match is case-insensitive
-        assert!(accepts("c.csv"));
-        assert!(accepts("d.log"));
-        assert!(!accepts("e.png"));
-        assert!(!accepts("f.pdf"));
-        assert!(!accepts("noext"));
+    fn claims_the_text_extensions_and_names_the_kind() {
+        assert_eq!(accepts("a.txt"), Some(Kind::Text));
+        assert_eq!(accepts("b.MD"), Some(Kind::Text)); // case-insensitive
+        assert_eq!(accepts("c.csv"), Some(Kind::Text));
+        assert_eq!(accepts("d.log"), Some(Kind::Text));
+        assert_eq!(accepts("e.png"), None);
+        assert_eq!(accepts("f.pdf"), None);
+        assert_eq!(accepts("noext"), None);
     }
 
     #[test]

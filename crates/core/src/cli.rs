@@ -151,7 +151,7 @@ pub fn index_text_folder(store: &Store, folder: &Path) -> Result<crate::index::I
 mod tests {
     use super::*;
     use crate::index::skip::{FileFacts, SkipReason};
-    use crate::index::Tile;
+    use crate::index::{Kind, Tile};
 
     fn facts(size: u64) -> FileFacts {
         FileFacts {
@@ -188,7 +188,7 @@ mod tests {
             .index_file(
                 corpus.path(),
                 &corpus.path().join("ok.txt"),
-                "text",
+                Kind::Text,
                 &facts(10),
                 Some("abc"),
                 &[Tile {
@@ -201,7 +201,7 @@ mod tests {
             .skip_file(
                 corpus.path(),
                 &corpus.path().join("cloud.png"),
-                "image",
+                Kind::Image,
                 &FileFacts {
                     placeholder: true,
                     ..facts(0)

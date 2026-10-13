@@ -154,19 +154,20 @@ pub fn search(store: &Store, terms: &[&str]) -> anyhow::Result<Vec<Hit>> {
     }
     ids.sort_unstable();
 
-    let mut hits = Vec::with_capacity(ids.len());
-    for id in ids {
-        let (path, kind) = store.file_row(id)?;
-        let texts = store.tile_texts(id)?;
-        let joined = texts.join(" ");
-        let snippet = snippet_around(&joined, terms, 240);
-        hits.push(Hit {
-            path,
-            kind,
-            snippet,
-        });
-    }
-    Ok(hits)
+    let files = store.files_by_ids(&ids)?;
+    Ok(files
+        .into_iter()
+        .map(|file| {
+            // The snippet is built here, not in the store: choosing the window
+            // around a match is a decision about presentation.
+            let joined = file.tiles.join(" ");
+            Hit {
+                path: file.path,
+                kind: file.kind,
+                snippet: snippet_around(&joined, terms, 240),
+            }
+        })
+        .collect())
 }
 
 #[cfg(test)]

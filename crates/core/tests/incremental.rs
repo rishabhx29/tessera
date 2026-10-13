@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use tessera_core::index::skip::{FileFacts, FileProbe, SystemProbe, MAX_FILE_BYTES};
-use tessera_core::index::{index_folder, index_folder_with, text::TextPipeline, Pipeline};
+use tessera_core::index::skip::MAX_FILE_BYTES;
+use tessera_core::index::{index_folder, text::TextPipeline, Kind, Pipeline};
 use tessera_core::search::search;
 use tessera_core::store::Store;
 
@@ -38,7 +38,7 @@ impl Recorder {
 struct Recorded(Arc<Recorder>);
 
 impl Pipeline for Recorded {
-    fn accepts(&self, path: &Path) -> bool {
+    fn accepts(&self, path: &Path) -> Option<Kind> {
         TextPipeline.accepts(path)
     }
 
@@ -58,27 +58,6 @@ impl Pipeline for Recorded {
             panic!("simulated crash while indexing {}", path.display());
         }
         TextPipeline.process(path)
-    }
-
-    fn kind(&self) -> &'static str {
-        "text"
-    }
-}
-
-/// A probe that reports files whose names contain `marker` as cloud
-/// placeholders — the Files On-Demand state a real OneDrive folder produces
-/// and no test can otherwise create on demand.
-struct CloudyProbe {
-    marker: &'static str,
-}
-
-impl FileProbe for CloudyProbe {
-    fn facts(&self, path: &Path) -> Result<FileFacts> {
-        let mut facts = SystemProbe.facts(path)?;
-        if path.to_string_lossy().contains(self.marker) {
-            facts.placeholder = true;
-        }
-        Ok(facts)
     }
 }
 
@@ -288,56 +267,6 @@ fn two_live_copies_of_the_same_bytes_stay_two_files() {
 }
 
 #[test]
-fn a_cloud_placeholder_is_skipped_and_never_opened() {
-    let data = tempfile::tempdir().unwrap();
-    let corpus = tempfile::tempdir().unwrap();
-    let dir = corpus.path();
-    write(dir, "local.txt", "the invoice from the airline");
-    write(dir, "cloud-only.txt", "the invoice from the cloud");
-
-    let store = store_at(data.path());
-    let recorder = Arc::new(Recorder::default());
-    let summary = index_folder_with(
-        &store,
-        &[Box::new(Recorded(recorder.clone()))],
-        dir,
-        &CloudyProbe {
-            marker: "cloud-only",
-        },
-    )
-    .unwrap();
-
-    assert_eq!(
-        (summary.indexed, summary.skipped, summary.failed),
-        (1, 1, 0)
-    );
-    let opened: Vec<String> = recorder
-        .opened()
-        .iter()
-        .map(|p| p.display().to_string())
-        .collect();
-    assert_eq!(opened, vec![dir.join("local.txt").display().to_string()]);
-    assert!(
-        !opened.iter().any(|p| p.contains("cloud-only")),
-        "a cloud placeholder was opened: that downloads it"
-    );
-    // Recorded, not swallowed, and its bytes never became searchable text.
-    let row = store
-        .file_state(&dir.join("cloud-only.txt"))
-        .unwrap()
-        .expect("the skipped file is recorded");
-    assert!(!row.extracted);
-    assert_eq!(
-        store.skip_reasons().unwrap(),
-        vec![("cloud_placeholder".to_string(), 1)]
-    );
-    assert!(
-        hits(&store, "cloud").is_empty(),
-        "a file that was never read must not have searchable text"
-    );
-}
-
-#[test]
 fn a_file_over_the_cap_is_skipped_with_its_reason() {
     let data = tempfile::tempdir().unwrap();
     let corpus = tempfile::tempdir().unwrap();
@@ -364,47 +293,6 @@ fn a_file_over_the_cap_is_skipped_with_its_reason() {
     assert_eq!(
         store.stats().unwrap(),
         vec![("indexed".to_string(), 1), ("skipped".to_string(), 1)]
-    );
-}
-
-#[test]
-fn the_diagnostics_break_down_why_files_were_not_read() {
-    let data = tempfile::tempdir().unwrap();
-    let corpus = tempfile::tempdir().unwrap();
-    let dir = corpus.path();
-    write(dir, "ok.txt", "the invoice from the airline");
-    write(dir, "cloud.txt", "placeholder");
-    let huge = fs::File::create(dir.join("huge.txt")).unwrap();
-    huge.set_len(MAX_FILE_BYTES + 1).unwrap();
-    drop(huge);
-    // Extraction that fails: recorded as failed, and kept out of the breakdown.
-    fs::write(dir.join("bad.txt"), [0xFF, 0xFE, 0x00, 0xD8]).unwrap();
-
-    let store = store_at(data.path());
-    index_folder_with(
-        &store,
-        &[Box::new(TextPipeline)],
-        dir,
-        &CloudyProbe {
-            marker: "cloud.txt",
-        },
-    )
-    .unwrap();
-
-    assert_eq!(
-        store.stats().unwrap(),
-        vec![
-            ("failed".to_string(), 1),
-            ("indexed".to_string(), 1),
-            ("skipped".to_string(), 2),
-        ]
-    );
-    assert_eq!(
-        store.skip_reasons().unwrap(),
-        vec![
-            ("cloud_placeholder".to_string(), 1),
-            ("too_large".to_string(), 1)
-        ]
     );
 }
 
@@ -545,39 +433,6 @@ fn an_edited_file_of_the_same_length_is_re_extracted() {
     assert!(
         hits(&store, "8080").is_empty(),
         "the replaced text is still findable"
-    );
-}
-
-#[test]
-fn a_file_that_became_a_cloud_placeholder_is_recorded_without_losing_its_text() {
-    let data = tempfile::tempdir().unwrap();
-    let corpus = tempfile::tempdir().unwrap();
-    let dir = corpus.path();
-    write(dir, "invoice.txt", "the invoice from the airline arrived");
-
-    let store = store_at(data.path());
-    index_folder(&store, &[Box::new(TextPipeline)], dir).unwrap();
-    assert_eq!(
-        only_hit(&store, "airline"),
-        dir.join("invoice.txt").to_string_lossy()
-    );
-
-    // OneDrive evicts the file under disk pressure: the bytes leave, the row
-    // does not. Nothing is downloaded, and the text we already hold keeps
-    // working — losing it would drop a search result for a reason the user
-    // neither caused nor can undo.
-    let dehydrated = CloudyProbe {
-        marker: "invoice.txt",
-    };
-    let summary = index_folder_with(&store, &[Box::new(TextPipeline)], dir, &dehydrated).unwrap();
-    assert_eq!((summary.skipped, summary.indexed), (1, 0));
-    assert_eq!(
-        store.skip_reasons().unwrap(),
-        vec![("cloud_placeholder".to_string(), 1)]
-    );
-    assert_eq!(
-        only_hit(&store, "airline"),
-        dir.join("invoice.txt").to_string_lossy()
     );
 }
 
