@@ -15,10 +15,10 @@ one query returning results from several formats at once.
 
 ## Current phase
 
-**Scaffold complete → week-1 spike.** The next information that matters is
-whether OCR / vision-model latency on the developer's real machine meets the
-targets in `docs/performance.md`. No engine code is written before those
-numbers exist.
+**Week 2–3: engine build, ticket by ticket from `.scratch/tessera-v0.1/issues/`.**
+Ticket 01 (store + text pipeline + typo-tolerant lexical search + CLI) is
+resolved. The frontier is the image/document pipelines (tickets 02–04), which
+may only start once the store and the Pipeline seam are proven — they are.
 
 ## Glossary
 

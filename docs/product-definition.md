@@ -50,9 +50,11 @@ visible as live indexing progress.
 
 ### 3.1 Search — one box, hybrid by default
 
-- **Lexical arm**: SQLite FTS5 with the trigram tokenizer for typo tolerance
-  (`inv0ice` → `invoice`), BM25 ranking. Matches OCR text, document text,
-  filenames.
+- **Lexical arm**: SQLite FTS5 with the trigram tokenizer for substring and
+  partial-word matching (`invoic` → `invoice`), plus query-side lookalike
+  expansion so a real typo matches too (`inv0ice` → `invoice`); a write-time
+  folded index for OCR-misread tolerance is a v0.1.x follow-up. BM25 ranking.
+  Matches OCR text, document text, filenames.
 - **Image arm**: CLIP text↔image embedding space for description queries
   ("the one with the red chart").
 - **Text arm**: MiniLM embeddings over document chunks for meaning-based

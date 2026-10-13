@@ -30,7 +30,8 @@ enum Command {
     Index { folder: PathBuf },
     /// Search the index. Multiple terms all must appear in the same file.
     Search {
-        /// Search terms, e.g. `tessera search invoice airline`
+        /// Search terms. Quote them as you would for a search engine:
+        /// `tessera search "invoice airline"`.
         query: Vec<String>,
     },
     /// Index counts by status.
@@ -41,6 +42,21 @@ enum Command {
 pub fn default_data_dir() -> Result<PathBuf> {
     let base = dirs::data_local_dir().context("the OS has no local data directory")?;
     Ok(base.join("Tessera"))
+}
+
+/// Split raw CLI arguments into search terms. Each argument is tokenized, so
+/// one quoted `"invoice airline"` becomes the two terms the user meant rather
+/// than one phrase that matches nothing.
+pub fn split_terms(args: &[String]) -> Vec<String> {
+    args.iter()
+        .flat_map(|a| a.split_whitespace())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Every pipeline the engine has, in the order they are offered a file.
+fn pipelines() -> Vec<Box<dyn Pipeline>> {
+    vec![Box::new(TextPipeline)]
 }
 
 /// Entry point for the binary; returns the process exit code.
@@ -55,16 +71,22 @@ pub fn run() -> Result<()> {
         Command::Index { folder } => {
             // dunce keeps Windows paths user-friendly (no \\?\ verbatim prefix)
             let folder = dunce::canonicalize(&folder).context("resolving the folder")?;
-            let pipelines: Vec<Box<dyn Pipeline>> = vec![Box::new(TextPipeline)];
-            let (indexed, failed) = index_folder(&store, &pipelines, &folder)?;
+            let summary = index_folder(&store, &pipelines(), &folder)?;
             println!(
-                "indexed {indexed} file(s), {failed} failed, index at {}",
+                "indexed {} file(s), {} failed, {} unreadable folder(s), index at {}",
+                summary.indexed,
+                summary.failed,
+                summary.walk_errors,
                 data_dir.join("index.sqlite").display()
             );
             Ok(())
         }
         Command::Search { query } => {
-            let hits = search(&store, &query)?;
+            let terms = split_terms(&query);
+            let hits = search(
+                &store,
+                &terms.iter().map(String::as_str).collect::<Vec<_>>(),
+            )?;
             if hits.is_empty() {
                 println!("no results");
                 return Ok(());
@@ -88,9 +110,28 @@ pub fn run() -> Result<()> {
     }
 }
 
-/// Open a store over `data_dir` and index `folder` with the text pipeline.
-/// Used by tests so the CLI's behavior is exercised without spawning a binary.
-pub fn index_text_folder(store: &Store, folder: &Path) -> Result<(usize, usize)> {
-    let pipelines: Vec<Box<dyn Pipeline>> = vec![Box::new(TextPipeline)];
-    index_folder(store, &pipelines, folder)
+/// Index a folder with the engine's current pipelines. Used by the CLI and by
+/// tests, so both exercise the same path.
+pub fn index_text_folder(store: &Store, folder: &Path) -> Result<crate::index::IndexSummary> {
+    index_folder(store, &pipelines(), folder)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_quoted_multiword_argument_becomes_two_terms() {
+        let args = vec!["invoice airline".to_string()];
+        assert_eq!(split_terms(&args), vec!["invoice", "airline"]);
+    }
+
+    #[test]
+    fn arguments_and_whitespace_both_split() {
+        let args = vec!["invoice".to_string(), "  from\tthe\tairline ".to_string()];
+        assert_eq!(
+            split_terms(&args),
+            vec!["invoice", "from", "the", "airline"]
+        );
+    }
 }

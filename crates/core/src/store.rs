@@ -5,8 +5,11 @@
 //!   user data and nothing here ever writes outside that directory.
 //! - `meta` pins versions (schema now; models later). A schema the engine
 //!   doesn't know is a loud error, never a silent mismatch.
-//! - FTS5 with the trigram tokenizer gives substring matching, so `inv0ice`
-//!   finds `invoice`.
+//! - FTS5 runs with the trigram tokenizer over the tiles table as *external
+//!   content* — the text is indexed once, not stored twice.
+//! - Trigram gives substring matching (`invoic` finds `invoice`). Typo
+//!   tolerance (`inv0ice` finds `invoice`) is search-side lookalike
+//!   expansion, in `crate::search`.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -22,6 +25,27 @@ const SCHEMA_VERSION: i64 = 1;
 
 pub struct Store {
     conn: Connection,
+}
+
+/// Helpers shared by the index and fail paths.
+fn file_size(path: &Path) -> i64 {
+    path.metadata().map(|m| m.len() as i64).unwrap_or(0)
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn mtime_secs(path: &Path) -> i64 {
+    path.metadata()
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 impl Store {
@@ -75,15 +99,22 @@ impl Store {
                    text    TEXT NOT NULL
                  );
                  CREATE UNIQUE INDEX tiles_file_seq ON tiles(file_id, seq);
-                 CREATE VIRTUAL TABLE tiles_fts USING fts5(text, tokenize='trigram');
+                 CREATE VIRTUAL TABLE tiles_fts USING fts5(
+                   text, content='tiles', content_rowid='id', tokenize='trigram'
+                 );
                  CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-                 INSERT INTO meta(key, value) VALUES ('schema_version', '1');
                  COMMIT;",
             )
             .context("creating schema v1")?;
         self.conn
             .pragma_update(None, "user_version", SCHEMA_VERSION)
             .context("setting schema version")?;
+        // The meta row mirrors user_version from the same constant, so the
+        // two can never drift apart.
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?1)",
+            rusqlite::params![SCHEMA_VERSION.to_string()],
+        )?;
         Ok(())
     }
 
@@ -91,18 +122,9 @@ impl Store {
     /// already-indexed file leaves exactly one set of rows behind.
     pub fn index_file(&self, path: &Path, kind: &str, tiles: &[Tile]) -> Result<()> {
         let path_str = path.to_string_lossy();
-        let size = path.metadata().map(|m| m.len() as i64).unwrap_or(0);
-        let mtime = path
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+        let size = file_size(path);
+        let mtime = mtime_secs(path);
+        let now = now_secs();
 
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
@@ -118,14 +140,27 @@ impl Store {
             rusqlite::params![path_str],
             |row| row.get(0),
         )?;
-        tx.execute(
-            "DELETE FROM tiles_fts WHERE rowid IN (SELECT id FROM tiles WHERE file_id = ?1)",
-            rusqlite::params![file_id],
-        )?;
+
+        // External-content FTS5 needs the old text supplied to delete an
+        // entry, so fetch before removing the rows it references.
+        let old: Vec<(i64, String)> = {
+            let mut stmt = tx.prepare("SELECT id, text FROM tiles WHERE file_id = ?1")?;
+            let rows = stmt.query_map(rusqlite::params![file_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        for (tile_id, text) in &old {
+            tx.execute(
+                "INSERT INTO tiles_fts(tiles_fts, rowid, text) VALUES ('delete', ?1, ?2)",
+                rusqlite::params![tile_id, text],
+            )?;
+        }
         tx.execute(
             "DELETE FROM tiles WHERE file_id = ?1",
             rusqlite::params![file_id],
         )?;
+
         for tile in tiles {
             tx.execute(
                 "INSERT INTO tiles(file_id, seq, text) VALUES (?1, ?2, ?3)",
@@ -144,30 +179,26 @@ impl Store {
     /// Record a file that a pipeline could not process, with the reason.
     pub fn fail_file(&self, path: &Path, kind: &str, reason: &str) -> Result<()> {
         let path_str = path.to_string_lossy();
-        let size = path.metadata().map(|m| m.len() as i64).unwrap_or(0);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
         self.conn.execute(
             "INSERT INTO files(path, kind, size, mtime, sha1, status, skip_reason, indexed_at, thumb)
              VALUES (?1, ?2, ?3, 0, NULL, 'failed', ?4, ?5, NULL)
              ON CONFLICT(path) DO UPDATE SET
                status = 'failed', skip_reason = excluded.skip_reason,
                indexed_at = excluded.indexed_at",
-            rusqlite::params![path_str, kind, size, reason, now],
+            rusqlite::params![path_str, kind, file_size(path), reason, now_secs()],
         )?;
         Ok(())
     }
 
-    /// The file ids whose tiles match one (already escaped) FTS5 term.
-    pub fn file_ids_matching(&self, escaped_term: &str) -> Result<HashSet<i64>> {
+    /// The file ids whose tiles match one FTS5 MATCH expression
+    /// (see `crate::search::term_match_expr`).
+    pub fn file_ids_matching(&self, match_expr: &str) -> Result<HashSet<i64>> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT DISTINCT t.file_id
              FROM tiles_fts f JOIN tiles t ON t.id = f.rowid
              WHERE tiles_fts MATCH ?1",
         )?;
-        let rows = stmt.query_map(rusqlite::params![escaped_term], |row| row.get::<_, i64>(0))?;
+        let rows = stmt.query_map(rusqlite::params![match_expr], |row| row.get::<_, i64>(0))?;
         let mut ids = HashSet::new();
         for id in rows {
             ids.insert(id?);
@@ -226,9 +257,9 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_is_pinned() {
+    fn schema_version_is_pinned_once_in_both_places() {
         let (_dir, store) = tmp_store();
-        let v: String = store
+        let meta: String = store
             .conn
             .query_row(
                 "SELECT value FROM meta WHERE key = 'schema_version'",
@@ -236,11 +267,11 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(v, "1");
         let uv: i64 = store
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
+        assert_eq!(meta.parse::<i64>().unwrap(), uv);
         assert_eq!(uv, SCHEMA_VERSION);
     }
 
@@ -267,6 +298,68 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM tiles_fts", [], |r| r.get(0))
             .unwrap();
         assert_eq!((files, tiles, fts), (1, 1, 1));
+    }
+
+    #[test]
+    fn reindex_with_new_text_replaces_the_old() {
+        let (_dir, store) = tmp_store();
+        let path = Path::new("corpus/a.txt");
+        store
+            .index_file(
+                path,
+                "text",
+                &[Tile {
+                    seq: 0,
+                    text: "old words".into(),
+                }],
+            )
+            .unwrap();
+        store
+            .index_file(
+                path,
+                "text",
+                &[Tile {
+                    seq: 0,
+                    text: "brand new words".into(),
+                }],
+            )
+            .unwrap();
+        let ids = store
+            .file_ids_matching(&crate::search::term_match_expr("brand"))
+            .unwrap();
+        let gone = store
+            .file_ids_matching(&crate::search::term_match_expr("old"))
+            .unwrap();
+        assert_eq!(ids.len(), 1);
+        assert!(gone.is_empty());
+    }
+
+    #[test]
+    fn fts_is_external_content_no_duplicated_text() {
+        let (_dir, store) = tmp_store();
+        store
+            .index_file(
+                Path::new("corpus/a.txt"),
+                "text",
+                &[Tile {
+                    seq: 0,
+                    text: "hello world".into(),
+                }],
+            )
+            .unwrap();
+        // The fts table stores no text of its own; tiles stores it once.
+        let stored: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM tiles_fts_data WHERE c0 IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        assert_eq!(
+            stored, 0,
+            "external-content fts must not duplicate the text"
+        );
     }
 
     #[test]

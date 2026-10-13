@@ -45,3 +45,15 @@ run by default; the user never picks a mode.
   architecture.md).
 - Fusion quality is measurable: the spike and dogfooding sessions include
   arm-ablation numbers before launch.
+
+## Amendment (ticket 01, engine build)
+
+The Consequences line about trigram "typo tolerance for free" is wrong on
+mechanism, and building the lexical arm proved it: trigram matching is
+*substring* matching, so `inv0ice` (a typo) is not a substring of `invoice`
+and matched nothing. Implemented instead: query-side lookalike expansion
+(`0`↔`o`, `1`↔`l`↔`i`, `5`↔`s`, `8`↔`b`), one substitution per position,
+OR-ed into the MATCH expression. The write-time folded second index
+(gyotaku's mechanism, which also survives OCR misreads inside the corpus)
+remains a v0.1.x follow-up. The decision itself — three arms, RRF — is
+unchanged; only this rationale line is corrected.

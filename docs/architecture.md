@@ -149,8 +149,13 @@ query
 ```
 
 One search box. The user does not choose modes; the arms all run and the
-fusion hides which ones hit. Typo tolerance comes from the trigram tokenizer;
-`inv0ice` finds `invoice`.
+fusion hides which ones hit. Typo tolerance has two layers: the trigram
+tokenizer makes partial words match (`invoic` finds `invoice`), and each query
+term is expanded into its lookalike variants (`0`↔`o`, `1`↔`l`↔`i`, `5`↔`s`,
+`8`↔`b`) and OR-ed, so `inv0ice` finds `invoice`. Trigram alone cannot do this
+— a typo is not a substring. A second *folded* index (write-time lookalike
+folding, gyotaku's mechanism) is the planned way to also survive OCR misreads
+inside the corpus.
 
 ## Models (week-1 spike decides versions)
 
