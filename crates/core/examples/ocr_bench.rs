@@ -69,18 +69,39 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
     sorted[low] + (sorted[high] - sorted[low]) * (rank - low as f64)
 }
 
+/// Where the models live: the same place the CLI looks, so the benchmark
+/// measures the engine the indexer would actually use. `TESSERA_MODELS_DIR`
+/// overrides it.
+fn models_dir() -> tessera_core::models::Models {
+    let dir = match std::env::var("TESSERA_MODELS_DIR") {
+        Ok(dir) => PathBuf::from(dir),
+        Err(_) => tessera_core::cli::models_dir(
+            &tessera_core::cli::default_data_dir().expect("a data dir"),
+            None,
+        ),
+    };
+    tessera_core::models::Models::open(&dir).expect("the models dir is openable")
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let folder = match args.next() {
         Some(folder) => PathBuf::from(folder),
         None => {
-            eprintln!("usage: ocr_bench <folder> [count]");
+            eprintln!("usage: ocr_bench <folder> [engine] [count]");
             std::process::exit(2);
         }
     };
+    // Which engine, so both can be measured on one corpus in one session: a
+    // comparison across different machines or different days is not one.
+    let engine = args.next().unwrap_or_else(|| "native".to_string());
+    let choice = match engine.as_str() {
+        "native" => OcrChoice::Native,
+        other => OcrChoice::Named(other.to_string()),
+    };
     let limit: usize = args.next().and_then(|n| n.parse().ok()).unwrap_or(40);
 
-    let selection = match tessera_core::ocr::select(&OcrChoice::Native) {
+    let selection = match tessera_core::ocr::select(&choice, &models_dir()) {
         Ok(selection) => selection,
         Err(err) => {
             eprintln!("no OCR engine: {err:#}");

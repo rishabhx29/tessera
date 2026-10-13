@@ -49,6 +49,16 @@ working engine and a week of confusion:
   needed), matching gyotaku's finding.
 - **Score gate 0.5** cleanly separates real text (0.98–1.00) from icon
   misreads (≤0.73).
+  > **Correction (ticket 05).** The parenthetical above is wrong as written: 0.73
+  > is *above* a 0.5 gate, so confidence alone does not separate those two
+  > populations. The gate stays at 0.5 - it is what the spike measured the corpus
+  > with and what the ticket specifies - and the separation actually comes from the
+  > length check beside it, since the misreads that were observed were short. A
+  > gate in (0.73, 0.98) would separate them on confidence alone; whether that
+  > costs real characters is an open question for the quality pass, not something
+  > to change silently. `ocr/onnx/charset.rs` records this in a test so the next
+  > reader does not have to rediscover it.
+
 - **Batch recognition by total width**, because the 18,710-class output
   tensor dominates memory and time; unbounded batching is the slow path.
 
