@@ -39,6 +39,13 @@ releases begin.
 - Per-arm vector-space versioning in `meta`: changing a model's pin marks that
   arm's vectors as needing re-embedding, and only that arm.
 - `--models-dir` overrides where models live.
+- The OCR seam (`OcrEngine`) and the Windows adapter: text inside screenshots is
+  now searchable. Measured p50 43.8 ms per image on the real corpus.
+- The image pipeline: png/jpg/jpeg/webp/bmp/gif/tiff decode and OCR to one tile
+  each; images with no text are indexed rather than failed; a decode failure is
+  recorded against that file with its reason and the run continues.
+- `--ocr-engine` overrides the OCR engine, which defaults to the platform's own.
+- `tessera stats` lists each failed file with the reason the engine gave.
 
 ### Changed
 

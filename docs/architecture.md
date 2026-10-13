@@ -69,22 +69,38 @@ caller has to reconstruct:
 
 ### The OCR seam (cross-platform, ADR-0007)
 
-OCR itself is a trait with three implementations, chosen per platform:
+OCR is a trait with several implementations, chosen per platform:
 
 ```rust
-trait OcrEngine {
+pub trait OcrEngine: Send + Sync {
     fn name(&self) -> &'static str;
-    fn recognize(&self, image: &Image) -> Result<String>;
+    fn recognize(&self, path: &Path) -> Result<String>;
 }
 ```
 
-- **WindowsOcr** — Windows.Media.Ocr (`windows` crate). Measured p50 50 ms.
-- **VisionOcr** — macOS Vision `VNRecognizeTextRequest` (`objc2-vision`).
-- **OnnxOcr** — RapidOCR PP-OCRv5 via `ort`, cross-platform fallback and
-  highest-quality extractor (measured p50 ~2.7–3.3 s).
+- **WindowsOcr** — Windows.Media.Ocr (`windows` crate). Measured p50 **43.8 ms**
+  per screenshot on this machine's real corpus (`docs/performance.md`).
+- **VisionOcr** — macOS Vision `VNRecognizeTextRequest` (ticket 06).
+- **OnnxOcr** — PP-OCRv6 via `ort`, cross-platform fallback (ticket 05). Its
+  models come from the pinned manifest; a native engine needs no download.
+
+The engine is handed a **path, not pixels**, and that is deliberate: Windows
+decodes an image in a few milliseconds and understands every format the OS
+renders, so decoding it ourselves first would add work and lose formats for
+nothing. Decoding is therefore the engine's business, and the seam says only
+what must come out — the text in the file.
 
 The image pipeline depends on the trait, never on a platform API, so adding a
-platform never touches the store, search, or UI.
+platform never touches the store, search, or UI. `index/skip.rs` is the one
+place under `index/` that touches platform APIs (`std::os::windows` file
+attributes), and that is about cloud placeholders rather than reading text.
+
+The pipeline (`index/image.rs`) calls the engine and emits **one tile per
+image**: a screenshot is one unit of search, and splitting its text into
+word-windows would split the words a person remembers seeing together.
+Documents chunk; screenshots do not. An image with no text is indexed, not
+failed — it still has a filename to be found by. A decode failure is recorded
+against that one file with its reason, and the run continues.
 
 ## Data model (single SQLite file, WAL mode)
 

@@ -17,10 +17,12 @@ one query returning results from several formats at once.
 
 **Week 2–3: engine build, ticket by ticket from `.scratch/tessera-v0.1/issues/`.**
 Tickets 01 (store + text pipeline + typo-tolerant lexical search + CLI), 02
-(change detection, skip rules, diagnostics) and 03 (pinned model downloads,
-checksum verification, per-arm version pinning) are resolved. The frontier is
-ticket 04: the OCR seam and the image pipeline, which is the first milestone a
-user would notice.
+(change detection, skip rules, diagnostics), 03 (pinned model downloads,
+checksum verification, per-arm version pinning) and 04 (the OCR seam, the
+Windows native adapter, the image pipeline) are resolved. Screenshots are
+searchable by the text inside them: measured p50 43.8 ms per image
+(`docs/performance.md`). The frontier is ticket 05: the ONNX fallback, which is
+what makes OCR work on Linux and gives the quality pass.
 
 ## Glossary
 

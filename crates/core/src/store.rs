@@ -64,6 +64,10 @@ pub struct Store {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileState {
     pub size: u64,
+    /// What kind of file the pipeline that indexed it said it was ("image",
+    /// "text", ...). Part of what the diagnostics page needs to answer about a
+    /// file the user cannot find.
+    pub kind: String,
     /// Nanoseconds since the Unix epoch. Nanoseconds, not seconds: two edits
     /// in the same second would otherwise be indistinguishable, and a file
     /// whose content changed without its metadata changing would stay stale
@@ -356,7 +360,7 @@ impl Store {
     pub fn file_state(&self, path: &Path) -> Result<Option<FileState>> {
         self.conn
             .query_row(
-                "SELECT size, mtime, sha1, status FROM files WHERE path = ?1",
+                "SELECT size, mtime, sha1, status, kind FROM files WHERE path = ?1",
                 rusqlite::params![path.to_string_lossy()],
                 |row| {
                     let status: String = row.get(3)?;
@@ -365,11 +369,32 @@ impl Store {
                         mtime: row.get(1)?,
                         sha1: row.get(2)?,
                         extracted: FileStatus::parse(&status) == Some(FileStatus::Indexed),
+                        kind: row.get(4)?,
                     })
                 },
             )
             .optional()
             .map_err(anyhow::Error::from)
+    }
+
+    /// Every file that failed to index, with the reason recorded at the time.
+    ///
+    /// "Search can't find my scanned invoice" is not answerable from a count.
+    /// This is the other half of that answer: which files, and what the engine
+    /// said about each one.
+    pub fn failures(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT path, COALESCE(skip_reason, '') FROM files
+             WHERE status = 'failed' ORDER BY path",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     /// Rows belonging to one indexed folder, with their paths. The deletion

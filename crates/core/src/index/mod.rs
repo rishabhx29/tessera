@@ -10,6 +10,7 @@
 //! *before* anything opens it, a rename updates one row instead of indexing
 //! the same bytes twice, and a deletion removes its results.
 
+pub mod image;
 pub mod skip;
 pub mod text;
 
@@ -290,6 +291,7 @@ mod tests {
             mtime,
             sha1: sha1.map(str::to_string),
             extracted,
+            kind: "text".to_string(),
         }
     }
 

@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
-use crate::index::{index_folder, text::TextPipeline, Pipeline};
+use crate::index::{image::ImagePipeline, index_folder, text::TextPipeline, Pipeline};
 use crate::models::Models;
+use crate::ocr::{self, OcrChoice, OcrEngine};
 use crate::search::search;
 use crate::store::Store;
 
@@ -43,6 +44,11 @@ struct Cli {
     /// Where the models live. Defaults to a `models` folder beside the index.
     #[arg(long, global = true)]
     models_dir: Option<PathBuf>,
+
+    /// Which OCR engine reads text out of images. Defaults to the platform's
+    /// own, which is the fast path on every platform we ship.
+    #[arg(long, global = true, value_name = "ENGINE")]
+    ocr_engine: Option<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -99,8 +105,28 @@ pub fn split_terms(args: &[String]) -> Vec<String> {
 }
 
 /// Every pipeline the engine has, in the order they are offered a file.
-fn pipelines() -> Vec<Box<dyn Pipeline>> {
-    vec![Box::new(TextPipeline)]
+///
+/// Images need an OCR engine, which is chosen rather than constructed here:
+/// the default is the platform's own engine, and `--ocr-engine` overrides it.
+/// Constructing an engine that this machine cannot run would make `tessera
+/// index` fail before it started, so the choice is resolved inside the
+/// pipeline and a missing engine shows up per file, in the diagnostics.
+fn pipelines(ocr: &OcrChoice) -> Result<Vec<Box<dyn Pipeline>>> {
+    // An engine the user *named* and did not get is a bug, not a preference, so
+    // that stops the run. The platform default missing is not: the text formats
+    // keep working and each image is recorded as failed with the reason.
+    let engine: Box<dyn OcrEngine> = match ocr::select(ocr) {
+        Ok(selection) => selection.engine,
+        Err(err) if matches!(ocr, OcrChoice::Native) => {
+            eprintln!("no OCR engine on this machine: {err:#}");
+            Box::new(ocr::Unavailable(ocr::default_engine_name()))
+        }
+        Err(err) => return Err(err),
+    };
+    Ok(vec![
+        Box::new(TextPipeline),
+        Box::new(ImagePipeline::new(engine)),
+    ])
 }
 
 /// Entry point for the binary; returns the process exit code.
@@ -115,7 +141,20 @@ pub fn run() -> Result<()> {
         Command::Index { folder } => {
             // dunce keeps Windows paths user-friendly (no \\?\ verbatim prefix)
             let folder = dunce::canonicalize(&folder).context("resolving the folder")?;
-            let summary = index_folder(&store, &pipelines(), &folder)?;
+            let ocr = cli
+                .ocr_engine
+                .as_deref()
+                .map(|name| OcrChoice::Named(name.to_string()))
+                .unwrap_or(OcrChoice::Native);
+            if !ocr::is_available() && ocr == OcrChoice::Native {
+                // Said before the run, not after an hour of empty screenshots.
+                eprintln!(
+                    "warning: no OCR engine is available on this machine, so images will be \
+                     recorded as failed. Text formats are unaffected."
+                );
+            }
+            let pipelines = pipelines(&ocr)?;
+            let summary = index_folder(&store, &pipelines, &folder)?;
             println!(
                 "indexed {indexed}, {unchanged} unchanged, {moved} moved, {skipped} skipped, \
                  {failed} failed, {removed} removed",
@@ -240,13 +279,19 @@ pub fn stats_report(store: &Store) -> Result<Vec<String>> {
             .iter()
             .map(|(reason, count)| format!("  {reason:<18} {count}")),
     );
+    // A count of failures answers nothing without the file names, and "search
+    // can't find my scanned invoice" is a question about a file.
+    for (path, reason) in store.failures()? {
+        lines.push(format!("  FAILED {path}"));
+        lines.push(format!("         {reason}"));
+    }
     Ok(lines)
 }
 
 /// Index a folder with the engine's current pipelines. Used by the CLI and by
 /// tests, so both exercise the same path.
 pub fn index_text_folder(store: &Store, folder: &Path) -> Result<crate::index::IndexSummary> {
-    index_folder(store, &pipelines(), folder)
+    index_folder(store, &pipelines(&OcrChoice::Native)?, folder)
 }
 
 #[cfg(test)]
@@ -323,6 +368,30 @@ mod tests {
                 action: ModelsAction::Status
             }
         ));
+    }
+
+    #[test]
+    fn the_ocr_engine_flag_is_the_config_override() {
+        use clap::Parser;
+        // Default: the platform's own engine.
+        let default = Cli::try_parse_from(["tessera", "index", "C:/corpus"]).unwrap();
+        assert_eq!(default.ocr_engine, None, "no flag means the native engine");
+
+        // Override: an engine the user named.
+        let named =
+            Cli::try_parse_from(["tessera", "--ocr-engine", "onnx", "index", "C:/corpus"]).unwrap();
+        assert_eq!(named.ocr_engine.as_deref(), Some("onnx"));
+
+        // And an engine that does not exist stops the run, rather than being
+        // silently replaced by something else.
+        let Err(err) = pipelines(&OcrChoice::Named("tesseract".into())) else {
+            panic!("a named engine we do not have must not resolve");
+        };
+        assert!(format!("{err:#}").contains("tesseract"));
+
+        // The native default still resolves when the machine has no engine: that
+        // is per-file diagnostics, not a refusal to index.
+        assert!(pipelines(&OcrChoice::Native).is_ok());
     }
 
     #[test]

@@ -126,6 +126,56 @@ Findings:
 - **Windows.Media.Ocr stays the Windows default**: 68× faster, and it missed
   meaningful text in only 3 of 40 screenshots.
 
+## Engine 04 — OCR in the real Rust engine (measured)
+
+The first OCR number produced by the engine itself rather than by the Python
+spike. Same engine the spike chose, run through the same code path the indexer
+uses.
+
+Corpus: the first 40 screenshot-named files in the user's `OneDrive\Pictures\
+Screenshots`, unmodified, in name order. No text is recorded — only timings and
+character counts (SECURITY.md). Script:
+`cargo run --release --example ocr_bench -- <folder> 40`.
+
+Method: one warm-up read of the first image precedes timing (it pays for WinRT
+initialisation and the cold file cache), then **all 40 images are timed**,
+including the first one on its second read. Single pass, single run, no repeats.
+Percentiles are linearly interpolated between the two nearest ranks. Each
+timing covers the whole operation — file read, decode, recognise — because that
+is what a user waits for.
+
+Hardware: AMD Ryzen 3 5300U, 8 threads, 7.3 GB RAM, Windows 11 build 26300,
+release build, one image at a time.
+
+| Metric | Value |
+|---|---|
+| images read | 40 |
+| **p50 per image** | **43.8 ms** |
+| p95 per image | 195.7 ms |
+| mean per image | 70.2 ms |
+| mean characters extracted | 188 |
+| images with no text | 1 of 40 |
+
+Reading: the p50 lands in the 35–50 ms class the ticket predicted, and the mean
+character count is **188 — identical to the Python spike's 188** on the same
+engine and corpus, which is the useful part: the Rust adapter is reading the
+same text the spike read, so the latency difference is plumbing, not quality.
+
+Honest caveats:
+
+- Single pass, single run, no repeats; a repeat pass would give a spread, and
+  until one exists these numbers carry the uncertainty that implies. The p95 of
+  196 ms is one slow image (likely a full-resolution screen with a lot of text)
+  rather than a trend — with 40 samples, a p95 is effectively the second
+  slowest.
+- **Single-threaded, one image at a time.** The plan's queue (4 workers) is
+  ticket 11; throughput there is this number times four workers, and that
+  multiplication is a projection, not a measurement.
+- Images with no text are counted rather than dropped: "fast" and "returned
+  nothing" look identical in a latency table, and 1 of 40 is the honest figure.
+- These are cold-cache numbers on a corpus the OS has already seen once. A
+  first-ever indexing pass over cold files will be slower.
+
 ## Week-1 gate: PASS
 
 - image save→searchable: ~260–350 ms projected (target <1500 ms) — components measured
