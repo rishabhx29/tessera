@@ -143,28 +143,34 @@ fn write(dir: &Path, name: &str, contents: &str) {
 }
 
 #[test]
-fn the_real_windows_engine_reads_the_text_of_a_screenshot() {
+fn the_platform_engine_reads_the_text_of_a_screenshot() {
+    // Renamed from `the_real_windows_engine_...` when ticket 06 landed, because
+    // "the Windows engine" stopped being the only native engine and the name
+    // was going to lie on a Mac. What it asserts is unchanged and is the thing
+    // that matters: whichever engine this platform ships, it reads the words.
     let Ok(selection) = tessera_core::ocr::select(&OcrChoice::Native, &models()) else {
         panic!("selecting the native engine must not fail");
     };
     if !tessera_core::ocr::is_available(&models()) {
-        eprintln!("skipping: no Windows OCR language pack on this machine");
+        eprintln!("skipping: no OCR engine available on this machine");
         return;
     }
+    let expected_engine = tessera_core::ocr::platform_engine_name()
+        .expect("this test is only meaningful where there is a platform engine");
     assert_eq!(
-        selection.name, "windows",
-        "Windows should default to its own engine"
+        selection.name, expected_engine,
+        "this platform should default to its own engine"
     );
 
     let text = selection
         .engine
         .recognize(&fixture())
-        .expect("the fixture is readable by the Windows engine")
+        .expect("the fixture is readable by the platform engine")
         .to_lowercase();
     for expected in ["invoice", "tessera", "3391"] {
         assert!(
             text.contains(expected),
-            "the Windows engine should have read {expected:?}; it read {text:?}"
+            "the platform engine should have read {expected:?}; it read {text:?}"
         );
     }
 }

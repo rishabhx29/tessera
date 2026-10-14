@@ -490,7 +490,15 @@ mod tests {
         };
         let message = format!("{err:#}");
         if cfg!(target_os = "macos") {
-            assert!(!message.contains("language pack"), "{message}");
+            // Asserted against the *instruction*, not the word. The message's
+            // tail legitimately says the cross-platform engine "needs no
+            // language pack", so a bare substring check would fail here for a
+            // reason that has nothing to do with the advice being wrong.
+            assert!(
+                !message.contains("install an OCR language pack"),
+                "macOS was told to install a language pack: {message}"
+            );
+            assert!(!message.contains("Settings >"), "{message}");
             assert!(message.contains("ships with the system"), "{message}");
         } else {
             assert!(message.contains("language pack"), "{message}");
