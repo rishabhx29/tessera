@@ -17,7 +17,8 @@ tessera/
 │       │   ├── docx.rs     XML extraction → chunks → MiniLM
 │       │   └── text.rs     txt/md/csv/log → chunks → MiniLM
 │       ├── models/      ONNX Runtime wrappers, checksum-pinned downloads
-│       ├── store/       SQLite schema, migrations, FTS5 + sqlite-vec
+│       ├── vectors/     embeddings, cosine, and the SigLIP embedder
+│       ├── store/       SQLite schema, migrations, FTS5 + the vector tables
 │       └── search/      the arms and RRF fusion
 ├── crates/app/         Tauri shell: hotkey, window, tray, settings
 └── docs/
@@ -165,13 +166,15 @@ tiles(
 );
 
 tiles_fts  -- FTS5 external-content over tiles, trigram tokenizer
-img_vec(   -- sqlite-vec virtual table, 512-d CLIP, one row per image file
+img_vec(   -- one row per image file: SigLIP-base is 768-d
   file_id INTEGER PRIMARY KEY,
-  embedding float[512]
+  dim     INTEGER NOT NULL,
+  vec     BLOB NOT NULL     -- little-endian f32, unit length
 );
-txt_vec(   -- sqlite-vec virtual table, 384-d MiniLM, one row per text tile
+txt_vec(   -- one row per text tile: MiniLM is 384-d
   tile_id INTEGER PRIMARY KEY,
-  embedding float[384]
+  dim     INTEGER NOT NULL,
+  vec     BLOB NOT NULL
 );
 meta(
   key TEXT PRIMARY KEY,      -- schema_version, vectors_image_version, ...

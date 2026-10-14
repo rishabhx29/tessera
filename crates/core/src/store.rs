@@ -22,10 +22,16 @@ use rusqlite::{Connection, OptionalExtension, Transaction};
 
 use crate::index::skip::{FileFacts, SkipReason};
 use crate::index::{Kind, Tile};
+use crate::vectors::Embedding;
 
 /// The schema version this engine understands. Bumping it means writing a
 /// migration; opening a future-version store must fail loudly.
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
+
+/// The width of a SigLIP-base embedding. Pinned by the model's own output shape,
+/// so it is a constant rather than something read from a file that might be a
+/// different model.
+pub const IMAGE_EMBEDDING_DIM: usize = 768;
 
 /// Schema v1, the tracer-bullet shape. Kept verbatim as the migration source
 /// so a test can build a real v1 index and prove the v1 → v2 path works.
@@ -344,6 +350,18 @@ impl Store {
                      COMMIT;",
                 )
                 .context("migrating schema to v2")?,
+            3 => self
+                .conn
+                .execute_batch(
+                    "BEGIN;
+                     CREATE TABLE IF NOT EXISTS img_vec(
+                       file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+                       dim     INTEGER NOT NULL,
+                       vec     BLOB NOT NULL
+                     );
+                     COMMIT;",
+                )
+                .context("migrating schema to v3")?,
             other => anyhow::bail!("no migration for schema version {other}"),
         }
         self.conn
@@ -765,6 +783,175 @@ impl Store {
         Ok(())
     }
 
+    /// Store an image's embedding, normalized here rather than by the caller.
+    ///
+    /// Normalizing at the boundary is what lets [`crate::vectors::cosine`] be a
+    /// plain dot product, and it means a row written by any future path is
+    /// comparable with a row written by this one. The vector is stored against
+    /// the file's id, so re-indexing a file replaces its vector rather than
+    /// accumulating them.
+    pub fn put_image_embedding(&self, file_id: i64, embedding: &Embedding) -> Result<()> {
+        let mut stored = embedding.clone();
+        stored.normalize();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO img_vec(file_id, dim, vec) VALUES (?1, ?2, ?3)",
+            rusqlite::params![file_id, stored.dim() as i64, stored.to_blob()],
+        )?;
+        Ok(())
+    }
+
+    /// The id of the file at `path`, for a caller that holds a path and needs
+    /// to attach a vector to it.
+    pub fn file_id(&self, path: &Path) -> Result<i64> {
+        self.conn
+            .query_row(
+                "SELECT id FROM files WHERE path = ?1",
+                rusqlite::params![path.to_string_lossy()],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
+    /// How many image files currently carry a vector.
+    ///
+    /// This is the number that answers "did re-indexing actually fill the arm
+    /// in?", which is otherwise invisible: a missing vector does not fail a
+    /// query, it just quietly returns fewer results.
+    pub fn image_embedding_count(&self) -> Result<i64> {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM img_vec", [], |row| row.get(0))
+            .map_err(Into::into)
+    }
+
+    /// Every stored image vector, paired with its file id.
+    ///
+    /// The scan takes the whole arm because the ranking is over all of it.
+    ///
+    /// A row that will not decode is **quarantined, not fatal**: one corrupt
+    /// row must not take description search down for every other image. The
+    /// file is named on stderr so it can be re-indexed and the scan carries on
+    /// without it — the same rule the indexer follows for a file it cannot read.
+    pub fn image_embeddings(&self, dim: usize) -> Result<Vec<(i64, Embedding)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT file_id, vec FROM img_vec ORDER BY file_id")?;
+        let mut rows = stmt.query([])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let file_id: i64 = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            match Embedding::from_blob(&blob, dim) {
+                Ok(embedding) => out.push((file_id, embedding)),
+                Err(err) => eprintln!(
+                    "skipping a corrupt vector for image file {file_id}: {err:#}. Re-index that \
+                     file to repair it; every other image is still searchable by description."
+                ),
+            }
+        }
+        Ok(out)
+    }
+
+    /// The images that best match `query`, best first.
+    ///
+    /// This is the description arm on its own — cosine against every stored vector.
+    /// It is deliberately **not** fused with the lexical arm, because measurement
+    /// says fusing them on text-bearing files makes results worse: on 56 real
+    /// screenshots, text alone retrieves 0.964, the image arm alone 0.268, and
+    /// naive Reciprocal Rank Fusion over both scores 0.375. Fusion has to be
+    /// weighted by whether a file has text at all, which is ticket 10 and is not
+    /// what a one-box keyword search does.
+    ///
+    /// Only files that are *images* are eligible, so a document chunk never wins a
+    /// description query by accident.
+    pub fn describe(
+        &self,
+        query: &Embedding,
+        dim: usize,
+        limit: usize,
+    ) -> Result<Vec<MatchedFile>> {
+        let embeddings = self.image_embeddings(dim)?;
+        let ranked = crate::vectors::rank(
+            query,
+            embeddings.iter().map(|(id, e)| (*id, e)).collect(),
+            limit,
+        );
+        let ids: Vec<i64> = ranked.iter().map(|r| r.file_id).collect();
+        // A dedicated query rather than `files_by_ids`, which inner-joins
+        // `tiles`. A photo of a dog has no tiles at all — there is nothing to
+        // read from it — so that join drops it, and description search would be
+        // unable to return precisely the textless images it exists to find. The
+        // text is fetched alongside for the preview line and is allowed to be
+        // absent.
+        let holes = (1..=ids.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT f.id, f.path, f.kind,
+                    (SELECT t.text FROM tiles t WHERE t.file_id = f.id ORDER BY t.seq LIMIT 1)
+             FROM files f WHERE f.id IN ({holes})"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(&ids), |row| {
+            Ok(MatchedFile {
+                file_id: row.get::<_, i64>(0)?,
+                path: row.get(1)?,
+                kind: row.get::<_, String>(2)?,
+                tiles: row
+                    .get::<_, Option<String>>(3)?
+                    .map(|t| vec![t])
+                    .unwrap_or_default(),
+            })
+        })?;
+        let mut by_id: std::collections::HashMap<i64, MatchedFile> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let file: MatchedFile = row?;
+            by_id.insert(file.file_id, file);
+        }
+        // Back into score order, which is the entire point of the query.
+        Ok(ranked
+            .iter()
+            .filter_map(|r| by_id.get(&r.file_id).cloned())
+            .collect())
+    }
+
+    /// Forget the image arm: drop every vector **and** clear its version pin, in
+    /// one transaction.
+    ///
+    /// The order and the atomicity both matter, and this exists rather than two
+    /// separate calls because getting them wrong is silent. If the version were
+    /// cleared first and the process died before the vectors went, the index
+    /// would report the arm as outstanding work — fine. If the vectors went
+    /// first and the version survived, the index would report the arm as
+    /// **complete** while every description query silently returned nothing,
+    /// which is precisely the failure the version pin exists to prevent.
+    pub fn forget_image_arm(&self) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM img_vec", [])?;
+        tx.execute(
+            "DELETE FROM meta WHERE key = ?1",
+            rusqlite::params![Arm::Image.meta_key()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Forget every image vector, leaving the version pin alone.
+    ///
+    /// Prefer [`Store::forget_image_arm`]: this leaves the index in the
+    /// "arm complete, vectors gone" state described there.
+    ///
+    /// The vectors in `img_vec` were produced by a model that is no longer the
+    /// one this
+    /// build uses, and a vector from one model is meaningless against a query
+    /// from another.
+    pub fn drop_image_embeddings(&self) -> Result<usize> {
+        self.conn
+            .execute("DELETE FROM img_vec", [])
+            .map_err(Into::into)
+    }
+
     /// Row counts by status, for `tessera stats`.
     pub fn stats(&self) -> Result<Vec<(String, i64)>> {
         let mut stmt = self
@@ -804,11 +991,201 @@ impl Store {
 mod tests {
     use super::*;
     use crate::index::skip::FileFacts;
+    use crate::vectors::cosine;
 
     fn tmp_store() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Store::open(dir.path()).expect("open store");
         (dir, store)
+    }
+
+    /// A four-wide stand-in for a SigLIP vector, so the storage tests do not
+    /// carry 768 floats to say "a vector was written".
+    const DIM: usize = 4;
+
+    fn embedding(values: [f32; DIM]) -> Embedding {
+        Embedding::new(values.to_vec(), DIM).expect("the right width")
+    }
+
+    fn indexed_image(store: &Store, dir: &Path, name: &str) -> i64 {
+        let path = dir.join(name);
+        std::fs::write(&path, b"not really a png").unwrap();
+        store
+            .index_file(
+                dir,
+                &path,
+                Kind::Image,
+                &facts(10),
+                Some("abc"),
+                &[Tile {
+                    seq: 0,
+                    text: "a screenshot".into(),
+                }],
+            )
+            .expect("index it");
+        store.file_id(&path).expect("and find its id")
+    }
+
+    #[test]
+    fn a_stored_vector_comes_back_as_the_same_direction() {
+        let (_dir, store) = tmp_store();
+        let corpus = tempfile::tempdir().unwrap();
+        let file_id = indexed_image(&store, corpus.path(), "a.png");
+
+        // Deliberately not unit length: the store normalizes on write, so what
+        // comes back must still point the same way.
+        store
+            .put_image_embedding(file_id, &embedding([3.0, 4.0, 0.0, 0.0]))
+            .expect("write it");
+
+        assert_eq!(store.image_embedding_count().unwrap(), 1);
+        let stored = store.image_embeddings(DIM).expect("read it back");
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].0, file_id);
+        let norm = stored[0]
+            .1
+            .values()
+            .iter()
+            .map(|v| v * v)
+            .sum::<f32>()
+            .sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-6,
+            "the store must normalize on write, got a norm of {norm}"
+        );
+        assert!(
+            (cosine(&stored[0].1, &embedding([3.0, 4.0, 0.0, 0.0]).normalized()) - 1.0).abs()
+                < 1e-6
+        );
+    }
+
+    #[test]
+    fn re_indexing_a_file_replaces_its_vector_rather_than_adding_one() {
+        let (_dir, store) = tmp_store();
+        let corpus = tempfile::tempdir().unwrap();
+        let file_id = indexed_image(&store, corpus.path(), "a.png");
+
+        store
+            .put_image_embedding(file_id, &embedding([1.0, 0.0, 0.0, 0.0]))
+            .unwrap();
+        store
+            .put_image_embedding(file_id, &embedding([0.0, 1.0, 0.0, 0.0]))
+            .unwrap();
+
+        assert_eq!(
+            store.image_embedding_count().unwrap(),
+            1,
+            "re-embedding must replace, not accumulate"
+        );
+        let stored = store.image_embeddings(DIM).unwrap();
+        assert!(
+            cosine(&stored[0].1, &embedding([0.0, 1.0, 0.0, 0.0]).normalized()) > 0.99,
+            "the second vector should have won"
+        );
+    }
+
+    #[test]
+    fn deleting_a_file_takes_its_vector_with_it() {
+        let (_dir, store) = tmp_store();
+        let corpus = tempfile::tempdir().unwrap();
+        let file_id = indexed_image(&store, corpus.path(), "a.png");
+        store
+            .put_image_embedding(file_id, &embedding([1.0, 0.0, 0.0, 0.0]))
+            .unwrap();
+
+        std::fs::remove_file(corpus.path().join("a.png")).unwrap();
+        store.remove_missing(corpus.path()).expect("sweep");
+
+        assert_eq!(
+            store.image_embedding_count().unwrap(),
+            0,
+            "a vector outliving its file would be returned for a path that is gone"
+        );
+    }
+
+    #[test]
+    fn one_corrupt_vector_does_not_take_the_whole_arm_down() {
+        // A single bad row must not make description search fail for every
+        // other image. The corrupt row is dropped and named on stderr; the good
+        // one still comes back. Failing the whole scan would mean one
+        // re-index interrupted mid-write could cost the user the entire arm.
+        let (_dir, store) = tmp_store();
+        let corpus = tempfile::tempdir().unwrap();
+        let good = indexed_image(&store, corpus.path(), "good.png");
+        let corrupt = indexed_image(&store, corpus.path(), "corrupt.png");
+        store
+            .put_image_embedding(good, &embedding([1.0, 0.0, 0.0, 0.0]))
+            .unwrap();
+        // 8 bytes: not a whole number of 4-byte floats.
+        store
+            .conn
+            .execute(
+                "INSERT INTO img_vec(file_id, dim, vec) VALUES (?1, ?2, ?3)",
+                rusqlite::params![corrupt, DIM as i64, vec![0u8; 8]],
+            )
+            .unwrap();
+
+        let read = store
+            .image_embeddings(DIM)
+            .expect("the scan must survive one bad row");
+        assert_eq!(
+            read.len(),
+            1,
+            "the corrupt row should be dropped and the good one kept"
+        );
+        assert_eq!(read[0].0, good, "the wrong image survived");
+        // The row is still in the table, which is what the count reports: the
+        // point is that it costs one file, not the arm.
+        assert_eq!(store.image_embedding_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn a_vector_of_the_wrong_width_is_still_caught_by_the_decoder() {
+        // The decoder itself refuses a truncated blob. The scan quarantines it;
+        // this pins that the refusal is the decoder's and not the scan's.
+        let err = Embedding::from_blob(&[0u8; 8], DIM).expect_err("8 bytes is not 4 floats");
+        assert!(format!("{err:#}").contains("not 4 float32"), "{err:#}");
+    }
+
+    #[test]
+    fn a_changed_pin_makes_the_image_arm_outstanding_work_and_forgets_its_vectors() {
+        // Ticket 07's acceptance criterion, and the reason `meta` pins model
+        // versions at all: a vector from one model is meaningless against a
+        // query from another, so a moved pin must invalidate the arm rather
+        // than blend the two.
+        let (_dir, store) = tmp_store();
+        let corpus = tempfile::tempdir().unwrap();
+        let file_id = indexed_image(&store, corpus.path(), "a.png");
+
+        store
+            .set_arm_version(Arm::Image, "pin-old")
+            .expect("record the pin this arm was built with");
+        store
+            .put_image_embedding(file_id, &embedding([1.0, 0.0, 0.0, 0.0]))
+            .unwrap();
+        assert_eq!(
+            store.arm_version(Arm::Image).unwrap().as_deref(),
+            Some("pin-old")
+        );
+
+        // The pin moves: forget the arm — vectors and version, together.
+        store.forget_image_arm().expect("forget the arm");
+
+        assert_eq!(
+            store.arm_version(Arm::Image).unwrap(),
+            None,
+            "a forgotten arm has no version, so it reads as outstanding work"
+        );
+        assert_eq!(
+            store.image_embedding_count().unwrap(),
+            0,
+            "vectors from a model this build no longer uses must not survive"
+        );
+        assert_eq!(
+            store.arm_version(Arm::Text).unwrap(),
+            None,
+            "clearing one arm must not touch another"
+        );
     }
 
     fn facts(size: u64) -> FileFacts {

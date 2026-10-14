@@ -66,6 +66,24 @@ pub trait Pipeline {
     /// Extract the file's content into tiles. Errors mean "this file failed",
     /// never "the whole index run failed".
     fn process(&self, path: &Path) -> anyhow::Result<Vec<Tile>>;
+
+    /// The file's embedding for the semantic arm, if this pipeline produces
+    /// one.
+    ///
+    /// Separate from [`Pipeline::process`] because the two are different work
+    /// with different failure modes and different costs: text extraction is
+    /// microseconds and always succeeds for a readable file, while embedding a
+    /// SigLIP image is ~200 ms and needs 213 MB of models that may not be
+    /// installed. Keeping them apart means a folder of documents does not pay
+    /// to load a vision tower, and a missing model set degrades the arm rather
+    /// than failing the file.
+    ///
+    /// `Ok(None)` means "this pipeline has nothing to say about this file",
+    /// which is the right answer for text formats and for any pipeline whose
+    /// model set is not installed.
+    fn embed(&self, _path: &Path) -> anyhow::Result<Option<crate::vectors::Embedding>> {
+        Ok(None)
+    }
 }
 
 /// What one `index_folder` run did.
@@ -89,6 +107,12 @@ pub struct IndexSummary {
     /// but never silently dropped either — a folder that can't be read is
     /// exactly the "search can't find my file" case.
     pub walk_errors: usize,
+    /// Files that were indexed but could not be embedded for description
+    /// search. Separate from `failed` because the text landed: these files are
+    /// fully findable by keywords, and only the description arm is missing. The
+    /// count exists so "why can't I search my photos by description?" is
+    /// answerable from `tessera stats` rather than by guessing.
+    pub unembedded: usize,
 }
 
 /// Whether a file has to be re-extracted.
@@ -250,17 +274,17 @@ pub(crate) fn index_folder_with(
                 continue;
             }
         }
-        match pipeline.process(path) {
+        // The text arm and the semantic arm are separate capabilities that happen to
+        // share a file, so they are recorded separately. Embedding is attempted
+        // even when OCR failed: a machine with no OCR language pack can still
+        // find its photographs by description, and losing the whole image
+        // because the *text* half failed would be throwing away a working half.
+        let row_written = match pipeline.process(path) {
             Ok(tiles) => {
-                store.index_file(
-                    folder,
-                    path,
-                    kind,
-                    &facts,
-                    Some(hash.get()?),
-                    &with_filename(path, tiles),
-                )?;
+                let sha = Some(hash.get()?);
+                store.index_file(folder, path, kind, &facts, sha, &with_filename(path, tiles))?;
                 summary.indexed += 1;
+                true
             }
             Err(err) => {
                 // `{err:#}` walks the whole context chain. `to_string()` prints
@@ -271,6 +295,29 @@ pub(crate) fn index_folder_with(
                 // cause has to be in it.
                 store.fail_file(folder, path, kind, &facts, &format!("{err:#}"))?;
                 summary.failed += 1;
+                true
+            }
+        };
+
+        // After the row exists, so a vector can be attached to it either way.
+        if row_written {
+            match pipeline.embed(path) {
+                Ok(Some(embedding)) => match store.file_id(path) {
+                    Ok(file_id) => store.put_image_embedding(file_id, &embedding)?,
+                    Err(err) => eprintln!(
+                        "recorded {} but could not find its row to attach an embedding: {err:#}",
+                        path.display()
+                    ),
+                },
+                // No embedder, or nothing to say about this file.
+                Ok(None) => {}
+                Err(err) => {
+                    eprintln!(
+                        "could not embed {} for description search: {err:#}",
+                        path.display()
+                    );
+                    summary.unembedded += 1;
+                }
             }
         }
     }

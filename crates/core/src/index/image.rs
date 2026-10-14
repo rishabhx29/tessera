@@ -13,6 +13,9 @@ use anyhow::Result;
 
 use super::{Kind, Pipeline, Tile};
 use crate::ocr::OcrEngine;
+use crate::store::IMAGE_EMBEDDING_DIM;
+use crate::vectors::siglip::SiglipEmbedder;
+use crate::vectors::Embedding;
 
 /// Formats the image pipeline claims: the architecture's format list. Whether
 /// a given file decodes is the engine's problem to report, not the pipeline's to
@@ -34,11 +37,27 @@ pub fn claims_extension(extension: &str) -> bool {
 /// remembers seeing together. Documents chunk; screenshots do not.
 pub struct ImagePipeline {
     engine: Box<dyn OcrEngine>,
+    /// The image arm's embedder, or `None` when the 213 MB `siglip` set is not
+    /// installed. Absent means the arm degrades to nothing, not that indexing
+    /// fails: a user who has never run `tessera models install --set siglip`
+    /// still gets every screenshot indexed and findable by its text.
+    embedder: Option<std::sync::Arc<SiglipEmbedder>>,
 }
 
 impl ImagePipeline {
     pub fn new(engine: Box<dyn OcrEngine>) -> Self {
-        Self { engine }
+        Self {
+            engine,
+            embedder: None,
+        }
+    }
+
+    /// Attach the image arm. Separate from [`ImagePipeline::new`] because the
+    /// OCR engine is required and the embedder is optional, and conflating them
+    /// would mean loading a vision tower to index a folder of text.
+    pub fn with_embedder(mut self, embedder: Option<std::sync::Arc<SiglipEmbedder>>) -> Self {
+        self.embedder = embedder;
+        self
     }
 
     /// The engine's name, recorded on the file row so a diagnostics page can
@@ -65,6 +84,17 @@ impl Pipeline for ImagePipeline {
         } else {
             vec![Tile { seq: 0, text }]
         })
+    }
+
+    /// SigLIP's embedding of the image, for the description arm.
+    ///
+    /// `Ok(None)` when the model set is not installed, which is a normal state
+    /// and not an error: the OCR half of this pipeline still works.
+    fn embed(&self, path: &Path) -> Result<Option<Embedding>> {
+        match &self.embedder {
+            Some(embedder) => Ok(Some(embedder.embed_image(path, IMAGE_EMBEDDING_DIM)?)),
+            None => Ok(None),
+        }
     }
 }
 

@@ -9,7 +9,8 @@ use crate::index::{image::ImagePipeline, index_folder, text::TextPipeline, Pipel
 use crate::models::Models;
 use crate::ocr::{self, OcrChoice, OcrEngine};
 use crate::search::search;
-use crate::store::Store;
+use crate::store::{Store, IMAGE_EMBEDDING_DIM};
+use crate::vectors::siglip::SiglipEmbedder;
 
 /// Where the models live: the override if given, otherwise a `models` folder
 /// beside the index. One designated directory to back up, and one to delete.
@@ -63,6 +64,19 @@ enum Command {
         /// Search terms. Quote them as you would for a search engine:
         /// `tessera search "invoice airline"`.
         query: Vec<String>,
+        /// Describe what you are looking for instead of naming words in it:
+        /// `tessera search --describe "a chart about flight delays"`.
+        ///
+        /// This searches by what an image *looks like*, which is the only way to
+        /// find a photo of a thing whose words you do not know. It is a
+        /// different arm from keyword search, not a better one — on screenshots
+        /// the text arm wins by a wide margin (0.964 vs 0.268 top-1 on 56 real
+        /// files), so reach for this when keywords have nothing to go on.
+        #[arg(long, value_name = "DESCRIPTION")]
+        describe: Option<String>,
+        /// How many results to show. Defaults to 10.
+        #[arg(long, short, default_value_t = 10)]
+        limit: usize,
     },
     /// Read the text out of one image and print it, with timings. Exists so the
     /// two engines can be compared from a terminal on the same file, which is how
@@ -140,8 +154,40 @@ fn pipelines(ocr: &OcrChoice, models: &Models) -> Result<Vec<Box<dyn Pipeline>>>
     };
     Ok(vec![
         Box::new(TextPipeline),
-        Box::new(ImagePipeline::new(engine)),
+        Box::new(ImagePipeline::new(engine).with_embedder(image_embedder(models))),
     ])
+}
+
+/// The image arm, or `None` when its models are not installed.
+///
+/// Optional on purpose. Loading a vision tower costs 213 MB and ~1 s of start-up,
+/// and a user who has never asked for description search should not pay it, so
+/// the arm is attached only when the pinned set is present and verified. Its
+/// absence is announced once, because silently indexing without vectors looks
+/// exactly like description search working and returning nothing.
+pub fn image_embedder(models: &Models) -> Option<std::sync::Arc<SiglipEmbedder>> {
+    if !SiglipEmbedder::is_installed(models) {
+        return None;
+    }
+    match SiglipEmbedder::new(models, default_threads()) {
+        Ok(embedder) => Some(std::sync::Arc::new(embedder)),
+        Err(err) => {
+            eprintln!(
+                "the siglip models are installed but the embedder would not load, so images will \
+                 be indexed without description search: {err:#}"
+            );
+            None
+        }
+    }
+}
+
+/// A CPU-bound session should not let ONNX Runtime spawn a thread per core and
+/// fight the rest of the engine for them.
+fn default_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(1, 8)
 }
 
 /// Entry point for the binary; returns the process exit code.
@@ -226,7 +272,49 @@ pub fn run() -> Result<()> {
             );
             Ok(())
         }
-        Command::Search { query } => {
+        Command::Search {
+            query,
+            describe,
+            limit,
+        } => {
+            // `--describe` is the other arm, not a rephrasing of this one: it
+            // embeds the words and compares them with what each image looks
+            // like. The two are not merged, because on files that contain text
+            // the keyword arm is much the stronger of the two.
+            if let Some(description) = describe {
+                let models = Models::open(&models_dir(&data_dir, cli.models_dir.as_deref()))?;
+                let Some(embedder) = image_embedder(&models) else {
+                    anyhow::bail!(
+                        "description search needs the siglip models, which are not installed. \
+                         Fix it with: tessera models install --set siglip"
+                    );
+                };
+                let embedder = std::sync::Arc::new(embedder);
+                let started = std::time::Instant::now();
+                let vector = embedder.embed_text(&description, IMAGE_EMBEDDING_DIM)?;
+                let hits = store.describe(&vector, IMAGE_EMBEDDING_DIM, limit)?;
+                eprintln!(
+                    "described in {:.0} ms",
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
+                if hits.is_empty() {
+                    println!("no results");
+                    println!(
+                        "  (the image arm searched {} embedded image(s); if that is 0, run \
+                         `tessera index <folder>` again now that the models are installed)",
+                        store.image_embedding_count()?
+                    );
+                    return Ok(());
+                }
+                for hit in hits {
+                    println!("{}", hit.path);
+                    if let Some(text) = hit.tiles.first() {
+                        println!("  {}", text.chars().take(120).collect::<String>());
+                    }
+                }
+                return Ok(());
+            }
+
             let terms = split_terms(&query);
             let hits = search(
                 &store,

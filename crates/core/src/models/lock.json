@@ -32,6 +32,18 @@
           "bytes": 111475220
         },
         {
+          "name": "siglip-vision.fp32.onnx",
+          "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/onnx/vision_model.onnx",
+          "sha256": "f89d41bac7f4d4b87e010a467d93f98689d708916ed22f5a07f96fdfa26f475f",
+          "bytes": 371819850
+        },
+        {
+          "name": "siglip-text.fp32.onnx",
+          "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/onnx/text_model.onnx",
+          "sha256": "3aa7fdbd20eaa8740cce17bf82913de641fcb632a768fed59f661cdcd0c32553",
+          "bytes": 441332132
+        },
+        {
           "name": "siglip-tokenizer.json",
           "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/tokenizer.json",
           "sha256": "4a17c975210be5ab4c36b47d8dae4eefb866dbfb1e676e394aad85dc30a3ae08",

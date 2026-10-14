@@ -18,6 +18,7 @@ pub mod models;
 pub mod ocr;
 pub mod search;
 pub mod store;
+pub mod vectors;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
