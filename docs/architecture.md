@@ -80,7 +80,10 @@ pub trait OcrEngine: Send + Sync {
 
 - **WindowsOcr** - Windows.Media.Ocr (`windows` crate). Measured p50 **34.4 ms**
   per screenshot on this machine's real corpus, extracting 188 characters.
-- **VisionOcr** - macOS Vision `VNRecognizeTextRequest` (ticket 06).
+- **VisionOcr** - macOS Vision `VNRecognizeTextRequest` (`objc2-vision`),
+  cfg-gated to macOS. **Not yet measured** - it is exercised on a macOS CI
+  runner against a committed fixture, so it is known to work, and nothing is
+  known about how fast it is (`docs/performance.md`).
 - **OnnxOcr** - PP-OCRv6 det-tiny + rec-small via `ort` (ONNX Runtime), the
   cross-platform fallback and the quality pass. Measured p50 **949.6 ms**
   extracting 288 characters - 28x slower and 53% more text, and it read all 40
@@ -101,9 +104,14 @@ error that stops the run; the platform default being absent is not, because the
 text formats keep working and each image is recorded as failed with the reason.
 
 The image pipeline depends on the trait, never on a platform API, so adding a
-platform never touches the store, search, or UI. `index/skip.rs` is the one
-place under `index/` that touches platform APIs (`std::os::windows` file
-attributes), and that is about cloud placeholders rather than reading text.
+platform never touches the store, search, or UI. Under `index/`, only
+`index/skip.rs` touches platform APIs (`std::os::windows` file attributes), and
+that is about cloud placeholders rather than reading text. Under `ocr/`, the
+files that name a platform API are exactly the adapters — `ocr/windows.rs` and
+`ocr/vision.rs` — and nothing else. That boundary is enforced by
+`the_image_pipeline_never_imports_a_platform_api` in `tests/images.rs`, which
+walks `src/` rather than trusting a hand-written file list, and which fails if
+an exemption is left behind for a file that no longer exists.
 
 The pipeline (`index/image.rs`) calls the engine and emits **one tile per
 image**: a screenshot is one unit of search, and splitting its text into

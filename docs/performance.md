@@ -282,6 +282,42 @@ Honest caveats:
   reference hardware, so the gap is expected and is *not* evidence the engine is
   slower than the projection.
 
+## macOS Vision: not yet measured
+
+**There are no macOS numbers in this file, and there will not be any until
+someone runs the benchmark on a Mac.**
+
+The Vision adapter (`crates/core/src/ocr/vision.rs`) is built and exercised on a
+macOS CI runner — it reads the committed fixture and asserts non-empty text, so
+it is known to *work*. Nothing is known about how fast it is.
+
+Reproduce with the same script and the same corpus as the engines above:
+
+```
+cargo run --release --example ocr_bench -- <folder> macos 40
+```
+
+The honest summary of the adapter's current state:
+
+- **Correctness: verified on CI.** Non-empty text is read from a fixture with
+  known words, and every line carries a confidence in Vision's documented
+  `[0, 1]` range.
+- **Latency: unknown.** No p50, no p95, no character count. The Windows engine
+  measures 34–46 ms p50 and the fallback 0.8–0.95 s on a low-power laptop part;
+  Vision is expected to be in the native class, but *expected* is not measured,
+  and publishing an expectation here is exactly the thing this document exists
+  to avoid.
+- **One setting is a hypothesis, not a result.** The adapter requests
+  `Fast` recognition with language correction on. `Fast` was chosen on the
+  reasoning that background indexing should not spend minutes of battery for a
+  marginal accuracy gain on crisply-rendered text. **That reasoning has never
+  been tested against `Accurate` on real screenshots.** Whoever measures this
+  next should measure both levels and record the difference, because the choice
+  is currently unfounded in the same way a placeholder is.
+
+Until then, the README must not claim macOS speed. "Fast on every platform" is a
+claim about two platforms.
+
 ## Week-1 gate: PASS
 
 - image save→searchable: ~260–350 ms projected (target <1500 ms) — components measured

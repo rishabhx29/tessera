@@ -10,10 +10,15 @@ releases begin.
 
 ### Added
 
-- CI now also runs on Linux, which is the only place the non-Windows paths are
-  compiled at all (`ocr::platform_engine` returns None there, so the ONNX
-  fallback is the default engine), and re-verifies the pinned model checksums
-  against upstream — a step that was `#[ignore]`d and therefore never ran.
+- CI now also runs on Linux and macOS. Linux is where the non-Windows paths are
+  compiled at all; macOS is the only place `ocr/vision.rs` exists, since it is
+  `#[cfg(target_os = "macos")]` and no other runner can see that code. The
+  checksum job re-verifies the pinned model checksums against upstream — a step
+  that was `#[ignore]`d and therefore never ran.
+- The macOS OCR adapter: Apple's Vision framework behind the same `OcrEngine`
+  seam, so screenshots are searchable on a Mac at native speed with no
+  language pack and no download. Smoke-tested on a macOS runner against a
+  committed fixture; **not yet measured**, so no speed is claimed.
 - Repository scaffold: MIT license, Contributor Covenant, security policy,
   issue templates, PR template, CI (fmt / clippy / test).
 - Product Definition v1.0, architecture notes, and five ADRs (stack, license,

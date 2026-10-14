@@ -23,6 +23,8 @@
 //! than a speculative one now.
 
 pub mod onnx;
+#[cfg(target_os = "macos")]
+pub mod vision;
 #[cfg(windows)]
 pub mod windows;
 
@@ -115,14 +117,19 @@ pub fn select(choice: &OcrChoice, models: &Models) -> Result<EngineSelection> {
 
 /// The name of this platform's own OCR engine, or `None` if it has none.
 ///
-/// Only Windows has one so far (ticket 06 adds macOS). `None` is not a failure:
-/// it is what makes the ONNX engine the default on Linux.
+/// Windows and macOS each have one; Linux has no system OCR at all, which is
+/// why the cross-platform ONNX engine exists. `None` is not a failure: it is
+/// what makes the ONNX engine the default on Linux.
 pub fn platform_engine_name() -> Option<&'static str> {
     #[cfg(windows)]
     {
         Some("windows")
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        Some("macos")
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         None
     }
@@ -163,7 +170,9 @@ pub fn preferred_engine(platform_available: bool, onnx_available: bool) -> Optio
 pub fn default_engine(models: &Models) -> Box<dyn OcrEngine> {
     #[cfg(windows)]
     let platform = windows::WindowsOcr::new().is_ok();
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    let platform = vision::VisionOcr::new().is_ok();
+    #[cfg(not(any(windows, target_os = "macos")))]
     let platform = false;
     // Loading the ONNX engine is the expensive way to ask whether it is
     // available, so the cheap question is asked first and the answer reused.
@@ -197,10 +206,19 @@ fn platform_engine() -> Option<Box<dyn OcrEngine>> {
         .map(|engine| Box::new(engine) as Box<dyn OcrEngine>)
 }
 
-/// There is no platform engine off Windows yet (ticket 06 adds macOS Vision), so
-/// the fallback is always the ONNX engine and this exists only so the selection
-/// above reads the same on every platform.
-#[cfg(not(windows))]
+/// macOS's own engine, behind the same seam as every other adapter.
+#[cfg(target_os = "macos")]
+fn platform_engine() -> Option<Box<dyn OcrEngine>> {
+    vision::VisionOcr::new()
+        .ok()
+        .map(|engine| Box::new(engine) as Box<dyn OcrEngine>)
+}
+
+/// There is no platform engine on Linux, so the fallback is always the ONNX
+/// engine and this exists only so the selection above reads the same on every
+/// platform. Linux is a supported target, not a broken build: ADR-0007 puts it
+/// on the cross-platform engine by design.
+#[cfg(not(any(windows, target_os = "macos")))]
 fn platform_engine() -> Option<Box<dyn OcrEngine>> {
     None
 }
@@ -211,6 +229,10 @@ fn platform_engine() -> Option<Box<dyn OcrEngine>> {
 pub fn is_available(models: &Models) -> bool {
     #[cfg(windows)]
     if windows::WindowsOcr::new().is_ok() {
+        return true;
+    }
+    #[cfg(target_os = "macos")]
+    if vision::VisionOcr::new().is_ok() {
         return true;
     }
     onnx::OnnxOcr::is_installed(models)
@@ -239,8 +261,14 @@ impl OcrEngine for Unavailable {
         // Settings sends them looking for a control panel that does not exist,
         // which is worse than saying nothing. Both routes are named, because the
         // cross-platform one works everywhere and needs no OS setup at all.
+        //
+        // macOS has no branch on purpose: Vision ships with the OS, so there is
+        // no pack to install and any advice about one would be fiction.
         let platform_help = match platform_engine_name() {
             Some("windows") => format!("Either {WINDOWS_LANGUAGE_PACK_HELP}."),
+            Some("macos") => {
+                "macOS Vision ships with the system, so there is nothing to install.".to_string()
+            }
             _ => "Either install an OCR language pack for your platform.".to_string(),
         };
         anyhow::bail!(
@@ -259,9 +287,33 @@ fn named_engine(name: &str, models: &Models) -> Result<Box<dyn OcrEngine>> {
         "windows" => Ok(Box::new(windows::WindowsOcr::new()?)),
         #[cfg(not(windows))]
         "windows" => anyhow::bail!("the Windows OCR engine does not exist on this platform"),
+        #[cfg(target_os = "macos")]
+        "macos" => Ok(Box::new(vision::VisionOcr::new()?)),
+        #[cfg(not(target_os = "macos"))]
+        "macos" => anyhow::bail!("the macOS Vision engine does not exist on this platform"),
         "onnx" => Ok(Box::new(onnx::OnnxOcr::new(models)?)),
-        other => anyhow::bail!("no OCR engine named {other:?} (windows, onnx)"),
+        other => {
+            // The list names the engines *this build* has, so the error cannot
+            // send someone to a `--ocr-engine` value that would fail for a
+            // reason they would not guess.
+            anyhow::bail!(
+                "no OCR engine named {other:?} ({})",
+                available_engine_names()
+            )
+        }
     }
+}
+
+/// The engines this build can name, for diagnostics.
+fn available_engine_names() -> String {
+    let mut names = vec!["onnx"];
+    if cfg!(windows) {
+        names.push("windows");
+    }
+    if cfg!(target_os = "macos") {
+        names.push("macos");
+    }
+    names.join(", ")
 }
 
 /// OCR engines return text in reading order, line by line. Keeping the lines
@@ -378,5 +430,72 @@ mod tests {
         };
         let message = format!("{err:#}");
         assert!(message.contains("models install --set ppocr"), "{message}");
+    }
+
+    #[test]
+    fn this_builds_platform_engine_name_matches_the_platform_it_is_on() {
+        // The whole of ticket 06's cross-platform claim in one assertion: the
+        // name has to be right *here*, because it is the string that gets
+        // recorded against a tile and the string a user passes to
+        // `--ocr-engine`. On a machine with no OCR configured it still resolves,
+        // because selection must name an engine rather than fail.
+        let name = platform_engine_name();
+        if cfg!(windows) {
+            assert_eq!(name, Some("windows"));
+        } else if cfg!(target_os = "macos") {
+            assert_eq!(name, Some("macos"));
+        } else {
+            assert_eq!(
+                name, None,
+                "Linux has no system OCR by design (ADR-0007); the ONNX engine is its default"
+            );
+        }
+        // The default name is always something, even with no engines at all.
+        assert!(!default_engine_name().is_empty());
+    }
+
+    #[test]
+    fn the_engine_list_in_the_error_names_only_engines_this_build_has() {
+        // A `--ocr-engine` value suggested by an error that this build rejects
+        // is worse than no suggestion, so the list is generated from the same
+        // cfgs that resolve the names.
+        let Err(err) = named_engine("tesseract", &empty_models()) else {
+            panic!("an engine we do not have must not resolve");
+        };
+        let message = format!("{err:#}");
+        assert!(message.contains("onnx"), "{message}");
+        if cfg!(windows) {
+            assert!(message.contains("windows"), "{message}");
+        }
+        if cfg!(target_os = "macos") {
+            assert!(message.contains("macos"), "{message}");
+        }
+        if !cfg!(windows) {
+            assert!(
+                !message.contains("windows"),
+                "a non-Windows build should not offer the Windows engine: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_unavailable_message_never_sends_a_mac_user_to_windows_settings() {
+        // The advice is platform-specific and getting it wrong sends someone
+        // looking for a control panel that does not exist on their machine —
+        // which is worse than saying nothing. macOS ships Vision with the OS,
+        // so it gets no language-pack advice at all.
+        let err = match Unavailable("macos").recognize(Path::new("anything.png")) {
+            Err(err) => err,
+            Ok(_) => panic!("an unavailable engine must not return text"),
+        };
+        let message = format!("{err:#}");
+        if cfg!(target_os = "macos") {
+            assert!(!message.contains("language pack"), "{message}");
+            assert!(message.contains("ships with the system"), "{message}");
+        } else {
+            assert!(message.contains("language pack"), "{message}");
+        }
+        // Either way it names the cross-platform route, which works everywhere.
+        assert!(message.contains("tessera models install"), "{message}");
     }
 }

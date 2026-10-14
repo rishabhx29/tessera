@@ -57,3 +57,28 @@ Selection rules:
   machines.
 - Week 2–3 scope grows by roughly one small adapter per non-Windows platform
   (the user accepted 2–3 extra weeks for cross-platform parity).
+
+## Amendment (ticket 06 — the macOS adapter landed)
+
+`VisionOcr` is built and cfg-gated to macOS, behind the same seam. Two things
+this record that the original decision did not settle:
+
+- **`VNRequestTextRecognitionLevel::Fast` is set, and that choice is
+  unfounded.** It was picked on the reasoning that background indexing should
+  not spend minutes of battery on marginal accuracy gains for crisply-rendered
+  text. Nobody has measured `Fast` against `Accurate` on a real screenshot
+  corpus. Whoever measures macOS latency next should measure both levels and
+  record the difference, because until then this is a guess in the code and a
+  guess is not a result.
+- **There is still no macOS latency number, and the "fast on every platform"
+  promise is currently a promise about two platforms.** The adapter is proven
+  to *work* — a macOS CI runner reads a committed fixture and asserts non-empty
+  text — and nothing is known about how fast it is. `docs/performance.md` says
+  "not yet measured" rather than carrying a number.
+
+The ADR's CI-matrix consequence is now partly discharged: `windows-latest`,
+`ubuntu-latest` and `macos-14` all run fmt / clippy / test. That matters more
+than the three jobs cost, because `ocr/vision.rs` is `#[cfg(target_os =
+"macos")]` — the Windows and Linux runners cannot see that code at all, so
+without the macOS runner the adapter would be plausible-looking source that no
+machine has ever compiled.

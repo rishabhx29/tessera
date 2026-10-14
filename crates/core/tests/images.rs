@@ -281,10 +281,15 @@ fn the_image_pipeline_never_imports_a_platform_api() {
     // The documented exemptions: `ocr/<platform>` *is* the adapter, and
     // `index/skip.rs` asks the filesystem what a file is — `std::os::windows`
     // is how you ask on Windows, and that has nothing to do with reading text.
-    const EXEMPT: [&str; 2] = ["index/skip.rs", "ocr/windows.rs"];
+    //
+    // One entry per adapter, and the list is the test: adding a platform means
+    // adding its exemption here, so a new adapter cannot silently widen the
+    // seam without someone noticing that this constant changed.
+    const EXEMPT: [&str; 3] = ["index/skip.rs", "ocr/windows.rs", "ocr/vision.rs"];
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut checked = 0;
+    let mut seen_exemptions: Vec<String> = Vec::new();
     let mut pending = vec![root.clone()];
     while let Some(dir) = pending.pop() {
         for entry in std::fs::read_dir(&dir).unwrap().flatten() {
@@ -304,6 +309,11 @@ fn the_image_pipeline_never_imports_a_platform_api() {
             let source = fs::read_to_string(&path).unwrap();
             checked += 1;
             if EXEMPT.contains(&relative.as_str()) {
+                // An exemption for a file that no longer exists is a hole that
+                // reads as coverage: the next adapter dropped in there would
+                // inherit it. So the exemption has to be spent on a file that is
+                // actually here.
+                seen_exemptions.push(relative.to_string());
                 continue;
             }
             for api in forbidden {
@@ -319,6 +329,16 @@ fn the_image_pipeline_never_imports_a_platform_api() {
         checked >= 6,
         "the scan should have covered the engine's sources, saw {checked}"
     );
+    // Every exemption was spent on a file that exists. A stale entry is a hole
+    // that reads as coverage, and the failure is silent — which is the whole
+    // reason this test walks a directory instead of listing files by hand.
+    for exempt in EXEMPT {
+        assert!(
+            seen_exemptions.iter().any(|seen| seen == exempt),
+            "{exempt} is exempted from the seam check but no such file was found. \
+             Remove the exemption, or add the adapter it was meant for."
+        );
+    }
 }
 #[test]
 fn a_decode_failure_is_recorded_and_the_run_continues() {

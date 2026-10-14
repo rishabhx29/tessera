@@ -32,12 +32,19 @@ file's reason that dropped the cause chain, and an atomicity guarantee asserted
 in prose with no test behind it — and both fixes are pinned by tests that were
 verified to fail against the old behaviour.
 
-**The frontier is ticket 06** (the macOS Vision adapter), but the bigger gap is
+**The frontier is ticket 07** (the SigLIP image arm), but the bigger gap is
 that **no search arm beyond lexical exists yet**: there is no `img_vec`, no
 `txt_vec`, no SigLIP, no MiniLM and no RRF fusion, so search is keyword-only and
 the document pipelines that produce two of the three formats in the headline
 demo have not been built (ticket 08). Tickets 07–10 are the real remaining work
 in weeks 2–3.
+
+Ticket 06 (the macOS Vision adapter) landed behind the same seam, cfg-gated to
+macOS and proven to work on a `macos-14` runner. **It has no latency number and
+none may be published** — `docs/performance.md` records "not yet measured", and
+the `Fast` recognition level it requests is a hypothesis that has never been
+measured against `Accurate`. Linux is a supported target on the ONNX fallback by
+design (ADR-0007), not a platform that fails to build.
 
 ## Glossary
 

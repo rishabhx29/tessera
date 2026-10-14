@@ -31,3 +31,23 @@ tempfile = "3.27.0"
 
 [target.x86_64-pc-windows-msvc.dependencies]
 windows = { version = "0.62", features = ["Foundation", "Foundation_Collections", "Graphics", "Graphics_Imaging", "Globalization", "Media_Ocr", "Storage", "Storage_Streams"] }
+
+# The macOS native engine (ADR-0007). Target-scoped, so a Windows or Linux build
+# never pulls it: objc2 only builds on Apple targets, and a dependency that
+# cannot build on the host is a broken build.
+#
+# Feature-gated to exactly the three types this adapter names —
+# `VNRecognizeTextRequest`, `VNRequestHandler`, `VNRequest` — rather than the
+# crate's default feature set, which drags in AVFoundation, CoreML, CoreImage,
+# CoreMedia and CoreVideo. Each unneeded framework is another link-time
+# dependency the engine does not use; the seam's whole point is that the
+# adapter is small.
+#
+# `VNTypes` is what puts `confidence()` on `VNRecognizedText`. Without it the
+# trait's `lines_with_scores` would silently fall back to reporting `None` for
+# every line — which is the "this engine does not score its output" case, and on
+# Vision that would be false, so it is asked for by name.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.2"
+objc2-foundation = { version = "0.3.2", features = ["NSArray", "NSDictionary", "NSError", "NSString", "NSURL"] }
+objc2-vision = { version = "0.3.2", default-features = false, features = ["VNDefines", "VNObservation", "VNRecognizeTextRequest", "VNRequest", "VNRequestHandler", "VNTypes"] }

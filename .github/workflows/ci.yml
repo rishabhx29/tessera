@@ -45,6 +45,37 @@ jobs:
       - name: Tests
         run: cargo test --all
 
+  # The macOS runner is where the Vision adapter is actually proved.
+  #
+  # `ocr/vision.rs` is `#[cfg(target_os = "macos")]`, so it is not compiled by
+  # the Windows or Linux jobs at all — neither can see it. This job is the only
+  # place that code exists, which makes it the only thing standing between a
+  # plausible-looking adapter and one that has never been run. macos-14 is
+  # arm64, which is what current Macs are.
+  #
+  # There is no `continue-on-error` and no `|| true`. An adapter that cannot
+  # compile is a failing build, not a warning: "works on macOS" is a claim in
+  # the README, and this is what keeps it true.
+  macos:
+    name: fmt / clippy / test (macos)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests
+        # Includes the Vision smoke test, which reads the committed fixture and
+        # asserts non-empty text. macos-latest runners have Vision available,
+        # so unlike the Windows language-pack tests this one cannot pass
+        # vacuously.
+        run: cargo test --all
+
   # The one gate that needs the network: re-verifying that a SHA-256 in
   # models/lock.json still matches what the source actually serves. It is
   # #[ignore]d in the normal suite, so without this step a pin is only ever as
