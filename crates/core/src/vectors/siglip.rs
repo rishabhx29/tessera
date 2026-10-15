@@ -123,22 +123,24 @@ pub struct SiglipEmbedder {
 
 /// Which SigLIP weights to load.
 ///
-/// This is not a tuning knob — it is the difference between a feature that works
-/// and one that does not. The int8 export quantises the towers, and
-/// quantisation here does not merely lose precision, it **compresses the
-/// embedding space**: measured on this machine, two unrelated screenshots sit at
-/// a median cosine of 0.51, and 63% of queries have their top two candidates
-/// within 0.01 of each other. Every image looks like every other image, and
-/// ranking cannot separate them.
+/// A size/quality trade, not a correctness switch. An earlier version of this
+/// comment claimed that int8 "compresses the embedding space" and that fp32 had
+/// "usable dynamic range", on the evidence that two unrelated screenshots sit at
+/// a median cosine of 0.51. That reasoning was wrong twice over: five-tenths
+/// between unrelated images is **anisotropy**, which every healthy transformer
+/// embedding has and which a corpus of screenshots exaggerates, and a cosine
+/// floor is not a measure of retrieval quality in any case. Ranking is.
+/// `docs/performance.md` carries the correction.
 ///
-/// The spike saw the same thing and recorded it as a caveat rather than a
-/// blocker. It is a blocker. `docs/performance.md` carries both measurements.
+/// Ranking is what was actually traded off, and the two precisions are close
+/// enough on it that the 213 MB file is what ships. The fp32 files stay pinned so
+/// that the comparison remains runnable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Precision {
-    /// int8: 213 MB total, ~2x faster, and a similarity floor that makes
-    /// retrieval unreliable.
+    /// int8: 213 MB total. What `new()` loads and what the manifest installs.
     Int8,
-    /// float32: 776 MB total, and an embedding space with usable dynamic range.
+    /// float32: 776 MB total. Kept for the precision comparison, not installed
+    /// by default and not read by the engine.
     Fp32,
 }
 

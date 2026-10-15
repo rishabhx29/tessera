@@ -531,69 +531,126 @@ images from each other beautifully and has no idea what any of them contains.
 `pooler_output` stays, and all three numbers are recorded because the obvious
 alternatives both failing is itself the finding.
 
-## The towers were never comparable, and that was the whole story
+## The towers were always comparable, and "missing projection heads" was a category error
 
-An earlier entry in this file, and the commit that wrote it, concluded that the
-SigLIP towers "emit near-constant output regardless of what they are given". That
-conclusion was wrong, and the mistake was worth more than the numbers it
-replaced: it was reached from absolute cosine similarities, which cannot judge
-an embedding space.
+Two commits concluded first that the SigLIP towers "emit near-constant output
+regardless of what they are given", and then that the towers were being compared
+without their projection heads. **The second conclusion was wrong too, and it is
+the more expensive one**: it added a 205 MB download and a vision-tower pass on
+every text query, and it bought nothing measurable.
 
-Raw transformer embeddings are **anisotropic** - they share a large common
-direction, so two unrelated sentences sit at 0.82 and solid black sits at 0.91
-from solid white in a perfectly healthy model. Neither of those numbers says
-anything about quality.
+The mistake was comparing one kind of similarity against another kind's
+threshold. Two numbers were measured, and both are **same-modality**:
 
-What SigLIP actually requires is that **each tower's output passes through its
-own projection head** before the two are compared. Xenova's export ships no
-`text_projection.onnx` or `vision_projection.onnx` at all - only the bare
-`towers` and a combined `model.onnx` that contains the projections. The engine
-was loading `text_model.onnx` and `vision_model.onnx` and taking cosine across
-their `pooler_output`s: two representations that were never trained to be
-compared with each other.
-
-Cross-modal alignment is the measurement that shows this, because it is not
-affected by anisotropy:
-
-| Pair | Bare towers | Combined, projected |
+| Measured | What it is | Value |
 |---|---|---|
-| `'a dog'` vs a black image | 0.89 | **-0.014** |
-| `'the ocean at sunset'` vs a white image | 0.90 | **0.017** |
+| `'a dog'` vs `'the ocean at sunset'` | text vs text | 0.808 |
+| solid black vs solid white | image vs image | 0.897 |
 
-Unrelated cross-modal pairs belong near zero. The projected model puts them
-there. The bare towers pinned every pair at 0.9, which was the defect.
+Both are **anisotropy**. Raw transformer embeddings share a large common
+direction, so unrelated items *in the same modality* sit high, in a perfectly
+healthy model. This file had already said so one screen earlier while the code
+asserted the opposite: an `#[ignore]`d test required those figures to be below
+0.6, so it failed on every run and nothing in CI ever looked at it.
 
-Candidates ruled out before this one, each by measurement rather than argument:
-graph optimisation (0.808 at Level3, Level1 and `Disable`, bit-identical),
-output index assumption (names confirmed as `["last_hidden_state",
-"pooler_output"]`), tensor extraction (all 768 components differ, norm 1.0), and
-quantisation (fp32 identical).
+Cross-modal alignment is the measurement that carries meaning, because
+anisotropy does not move it. Run through `SiglipEmbedder`, the type the engine
+actually uses, on the pinned model set (`tests/cross_modal_alignment.rs`):
 
-### What it buys
-
-Same 11 labelled photographs, same queries, chance 0.091:
-
-| | top-1 | top-3 |
+| Pair | Cosine | Expected |
 |---|---|---|
-| bare towers, `pooler_output` | 0.455 | - |
-| combined export, `image_embeds` / `text_embeds` | **0.545** | **0.727** |
+| text `'a dog'` vs text `'the ocean at sunset'` | +0.808 | high (anisotropy) |
+| image black vs image white | +0.897 | high (anisotropy) |
+| cross `'a dog'` vs black | **-0.033** | near zero |
+| cross `'the ocean at sunset'` vs white | **-0.007** | near zero |
 
-Reproduce with `tests/projected_retrieval.rs`.
+An unrelated image and sentence sit at zero. The towers were already in one
+space, and the export never lacked projection heads: for identical input, the
+combined graph's `text_embeds` and the bare tower's `pooler_output` sit at cosine
+0.996 (vision) and 0.947 (text) and rank the same corpus the same way.
+
+### What the combined export actually costs
+
+Both exports, same 11 photographs, identical pixels and identical token ids,
+chance 0.091. Measured in a one-off ONNX Runtime harness (1.23.2, the same
+installed files), **not** in a repository test:
+
+| Text encoder | top-1 | top-3 |
+|---|---|---|
+| bare towers, `pooler_output` | 0.545 | 0.727 |
+| combined export, `image_embeds` / `text_embeds` | 0.545 | 0.727 |
+
+Identical. The 0.455 against 0.545 that justified the change was one item out of
+eleven, and it did not reproduce.
+
+Against that, the combined graph takes both towers on **every** call, and cannot
+be given a cheap dummy side: it declares no optional inputs, so ORT answers
+`Required inputs (['pixel_values']) are missing from input feed`, and the vision
+branch reshapes to a fixed 196-patch layout, so anything smaller than 224x224
+fails at `/vision_model/embeddings/Reshape`. Measured medians:
+
+| Path | Median | When it runs |
+|---|---|---|
+| text tower alone | **62 ms** | every keystroke |
+| vision tower alone | 242 ms | once per file, at index time |
+| combined graph, either input | ~300 ms | — |
+
+The combined export would put a 242 ms vision pass on every query. It is
+rejected, and `siglip-full.uint8.onnx` is deliberately **not** pinned.
+
+Candidates ruled out along the way, each by measurement rather than argument:
+graph optimisation (0.808 at Level3, Level1 and `Disable`, bit-identical), output
+index assumption (names confirmed as `["last_hidden_state", "pooler_output"]`),
+tensor extraction (all 768 components differ, norm 1.0), and quantisation (fp32
+identical).
+
+Text padding is the one place a real difference exists, and the engine's choice
+is the right one. On the same 11 photos and the same harness, varying only the
+text side:
+
+| Text padding | top-1 | top-3 |
+|---|---|---|
+| pad to 64 with id 0 (shipped) | **0.545** | 0.727 |
+| pad to 64 with the eos id | 0.455 | 0.727 |
+| no padding, exact length | 0.091 | 0.545 |
+
+SigLIP's text tower was trained at fixed length, so an unpadded sentence is out
+of distribution and collapses to 0.091 - indistinguishable from chance on eleven
+items. Padding with id 0 is not a compromise; it is the configuration that works.
+
+**Provenance:** the cross-modal table and the retrieval table below come from
+repository tests and can be reproduced. The bare-versus-combined comparison and
+the padding arms come from a one-off harness that is not in this repository.
+That is a gap, and it closes when the evaluation corpus below lands, which needs
+a real harness anyway.
 
 ## Where this leaves the feature
 
-Description search on real photographs is at **0.545 top-1 and 0.727 top-3**
-with the combined export, against a chance rate of 0.091 on 11 images. That is
-6x chance and it is a real capability. It is not the 0.85 that was asked for.
+Description search on real photographs is at **0.455 top-1 and 0.727 top-3**
+measured through the engine (`tests/image_retrieval.rs`), and 0.545 top-1 in the
+harness above, which centre-crops where the engine stretches. Chance on 11
+images is 0.091. That is 5x chance and it is a real capability. It is not the
+0.85 that was asked for.
 
-The remaining gap is not obviously a modelling problem. Five of the eleven
-photos are dogs whose labels differ only by running versus sitting versus
-tongue-out, so the corpus asks for fine distinctions between near-identical
-scenes; two of those land in the top 3 and miss at rank 1. Fixing the projection
-head was necessary but it is not sufficient, and nothing measured here says what
-would close the rest of the gap.
+The corpus makes the task hard on purpose. Four of the eleven photos are dogs and
+three of those are dogs on grass, so most of the ranking work is attribute
+binding: "running through grass" against "sitting on grass" against "with its
+tongue out". Three of the four miss at rank 1; two land in the top 3. A cat face
+is retrieved as a dog. This is the documented weakness of single-vector
+image-text models, and it is the part a better encoder alone is least likely to
+fix.
 
 The honest position: **description search works and is wired in and can be
-demonstrated today.** It is a retrieval aid at roughly half accuracy on
-photographs, weaker on screenshots where the text arm already wins 0.964, and it
+demonstrated today.** On photographs it is a retrieval aid at roughly half
+accuracy at rank 1 and nearly three quarters within three; on screenshots the
+text arm already wins 0.964 and the image arm is not the one doing the work. It
 is not yet a claim to put on a README.
+
+### What is not measured
+
+Eleven photographs cannot decide a product target, and every rate above carries
+an `n` of 11 with a one-item resolution. The next measurement that matters is not
+another model: it is a corpus large enough for the number to mean something. A
+COCO validation sample with its real human captions is the standard corpus for
+this task and is being assembled; until it exists, 0.455 is a floor and a
+regression check, not a baseline to optimise against.

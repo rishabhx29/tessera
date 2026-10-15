@@ -5,9 +5,16 @@
 //! "Search by description" means finding an image by what is *in* it, with no
 //! text appearing anywhere in the picture. The SigLIP arm tries to answer that by
 //! placing words and pixels in one shared 768-d space, and measurement puts it at
-//! 0.455 top-1 on photographs — and `pooler_output`, the tensor it reads, scores
-//! 0.897 between a solid black and a solid white image, so it barely responds to
-//! the input at all.
+//! 0.455 top-1 on photographs.
+//!
+//! An earlier version of this note added that the arm "barely responds to the
+//! input at all", citing 0.897 between a solid black and a solid white image.
+//! That number is real and it is not evidence of a fault: it is **anisotropy**,
+//! two images sharing a direction because they are the same modality, which is
+//! what every healthy transformer embedding does. The cross-modal measurement it
+//! was being read as sits near zero (-0.033 for a deliberately unrelated pair),
+//! so the towers do respond to their input and to each other. See the correction
+//! in `docs/performance.md`.
 //!
 //! Captioning answers the same question differently: the model looks at the image
 //! and writes a sentence about it, and that sentence is indexed as **text**. The
