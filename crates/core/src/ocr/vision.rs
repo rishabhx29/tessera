@@ -26,12 +26,25 @@
 use std::path::Path;
 
 use anyhow::{Context as _, Result};
-use objc2::rc::{AnyThread, Retained};
+// `AnyThread` supplies `alloc()` and lives at the crate root, not under `rc`.
+// It is a blanket impl for every type whose `ThreadKind` is `dyn AnyThread`,
+// which is why the import looks unused until something calls `::alloc()`.
+use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
+use objc2::AnyThread;
 use objc2_foundation::{NSArray, NSDictionary, NSURL};
 use objc2_vision::{
-    VNImageOption, VNImageRequestHandler, VNRecognizeTextObservation, VNRecognizeTextRequest,
-    VNRequest, VNRequestTextRecognitionLevel,
+    // Note the `d`: the observation type is `VNRecognizedTextObservation`. The
+    // near-identical `VNRecognizeTextObservation` does not exist, and the
+    // compiler's "a similar name exists in the module" is the only reason this
+    // was caught. `results()` is typed as `NSArray<VNRecognizedTextObservation>`
+    // on the request itself, so there is no cast anywhere below.
+    VNImageOption,
+    VNImageRequestHandler,
+    VNRecognizeTextRequest,
+    VNRecognizedTextObservation,
+    VNRequest,
+    VNRequestTextRecognitionLevel,
 };
 
 use super::{lines_into_text, OcrEngine};
