@@ -299,7 +299,14 @@ fn build_session(
 /// Every step here is a place the output can look like an embedding while being
 /// the wrong embedding, so each one is spelled out rather than folded into a
 /// helper.
-fn preprocess_image(path: &Path) -> Result<Vec<f32>> {
+/// Load an image and lay it out the way SigLIP's vision tower expects: RGB,
+/// resized to `IMAGE_SIDE`, rescaled to [0,1] and normalised to [-1,1] with
+/// mean = std = 0.5.
+///
+/// Public because the benchmarks need to feed the combined export directly, and
+/// a benchmark that reimplements preprocessing differently from the engine
+/// measures the wrong thing.
+pub fn preprocess_image(path: &Path) -> Result<Vec<f32>> {
     let image = image::open(path)
         .with_context(|| format!("reading {} as an image", path.display()))?
         .into_rgb8();

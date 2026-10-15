@@ -531,15 +531,69 @@ images from each other beautifully and has no idea what any of them contains.
 `pooler_output` stays, and all three numbers are recorded because the obvious
 alternatives both failing is itself the finding.
 
+## The towers were never comparable, and that was the whole story
+
+An earlier entry in this file, and the commit that wrote it, concluded that the
+SigLIP towers "emit near-constant output regardless of what they are given". That
+conclusion was wrong, and the mistake was worth more than the numbers it
+replaced: it was reached from absolute cosine similarities, which cannot judge
+an embedding space.
+
+Raw transformer embeddings are **anisotropic** - they share a large common
+direction, so two unrelated sentences sit at 0.82 and solid black sits at 0.91
+from solid white in a perfectly healthy model. Neither of those numbers says
+anything about quality.
+
+What SigLIP actually requires is that **each tower's output passes through its
+own projection head** before the two are compared. Xenova's export ships no
+`text_projection.onnx` or `vision_projection.onnx` at all - only the bare
+`towers` and a combined `model.onnx` that contains the projections. The engine
+was loading `text_model.onnx` and `vision_model.onnx` and taking cosine across
+their `pooler_output`s: two representations that were never trained to be
+compared with each other.
+
+Cross-modal alignment is the measurement that shows this, because it is not
+affected by anisotropy:
+
+| Pair | Bare towers | Combined, projected |
+|---|---|---|
+| `'a dog'` vs a black image | 0.89 | **-0.014** |
+| `'the ocean at sunset'` vs a white image | 0.90 | **0.017** |
+
+Unrelated cross-modal pairs belong near zero. The projected model puts them
+there. The bare towers pinned every pair at 0.9, which was the defect.
+
+Candidates ruled out before this one, each by measurement rather than argument:
+graph optimisation (0.808 at Level3, Level1 and `Disable`, bit-identical),
+output index assumption (names confirmed as `["last_hidden_state",
+"pooler_output"]`), tensor extraction (all 768 components differ, norm 1.0), and
+quantisation (fp32 identical).
+
+### What it buys
+
+Same 11 labelled photographs, same queries, chance 0.091:
+
+| | top-1 | top-3 |
+|---|---|---|
+| bare towers, `pooler_output` | 0.455 | - |
+| combined export, `image_embeds` / `text_embeds` | **0.545** | **0.727** |
+
+Reproduce with `tests/projected_retrieval.rs`.
+
 ## Where this leaves the feature
 
-Description search on real photographs is at **0.455 top-1, 0.909 recall@5
-(fp32) / 0.727 (int8)**, against a chance rate of 0.091 on 11 images. That is
-5x chance and it is a real capability. It is not the 0.85 that was asked for, and
-nothing measured in this file suggests an off-the-shelf SigLIP-base is going to
-reach it on this kind of corpus.
+Description search on real photographs is at **0.545 top-1 and 0.727 top-3**
+with the combined export, against a chance rate of 0.091 on 11 images. That is
+6x chance and it is a real capability. It is not the 0.85 that was asked for.
+
+The remaining gap is not obviously a modelling problem. Five of the eleven
+photos are dogs whose labels differ only by running versus sitting versus
+tongue-out, so the corpus asks for fine distinctions between near-identical
+scenes; two of those land in the top 3 and miss at rank 1. Fixing the projection
+head was necessary but it is not sufficient, and nothing measured here says what
+would close the rest of the gap.
 
 The honest position: **description search works and is wired in and can be
-demonstrated today.** It is a retrieval aid at roughly half chance-weighted
-accuracy on photographs, weaker on screenshots where the text arm already wins
-0.964, and it is not yet a claim to put on a README.
+demonstrated today.** It is a retrieval aid at roughly half accuracy on
+photographs, weaker on screenshots where the text arm already wins 0.964, and it
+is not yet a claim to put on a README.
