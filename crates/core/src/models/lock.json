@@ -10,6 +10,17 @@
     "spike also measured MobileCLIP2-S0 and CLIP ViT-B/32, both rejected, and",
     "they stay in the spike file as evidence rather than becoming pins here.",
     "",
+    "Every checksum is read from the host, never computed from a file we",
+    "happened to download. A pin taken from the local artefact certifies the",
+    "local artefact, corruption included: the caption decoder below was pinned",
+    "at 158331840 bytes for a file upstream had at 158599996, and the truncated",
+    "copy passed its own checksum. `tests/models.rs` now audits every pin",
+    "against what its host declares, and the size is what catches this.",
+    "",
+    "URLs name a commit rather than a branch. `resolve/main` is whatever `main`",
+    "is today, so a pin against it goes stale the moment upstream commits to",
+    "that file, and the install fails looking like the manifest is wrong.",
+    "",
     "To change a pin: update the URL and checksum here AND in",
     "spike/model-lock.json, then let the engine re-embed that arm — a changed",
     "pin marks its vector space invalid rather than silently mixing vectors."
@@ -21,37 +32,37 @@
       "files": [
         {
           "name": "siglip-vision.int8.onnx",
-          "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/onnx/vision_model_quantized.onnx",
+          "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/4649052661e53c7000355844105f8a1792088239/onnx/vision_model_quantized.onnx",
           "sha256": "ef14a954f3d57e1806666432bd9785004c1dc27100aa260eee0cb0f10a5de058",
           "bytes": 99499129
         },
         {
           "name": "siglip-text.int8.onnx",
-          "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/onnx/text_model_quantized.onnx",
+          "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/4649052661e53c7000355844105f8a1792088239/onnx/text_model_quantized.onnx",
           "sha256": "ad0329b1f35acc66d8953ff2559ce358da8eb0a7011794cf951523d63a4dbce2",
           "bytes": 111475220
         },
         {
           "name": "siglip-vision.fp32.onnx",
-          "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/onnx/vision_model.onnx",
+          "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/4649052661e53c7000355844105f8a1792088239/onnx/vision_model.onnx",
           "sha256": "f89d41bac7f4d4b87e010a467d93f98689d708916ed22f5a07f96fdfa26f475f",
           "bytes": 371819850
         },
         {
           "name": "siglip-text.fp32.onnx",
-          "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/onnx/text_model.onnx",
+          "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/4649052661e53c7000355844105f8a1792088239/onnx/text_model.onnx",
           "sha256": "3aa7fdbd20eaa8740cce17bf82913de641fcb632a768fed59f661cdcd0c32553",
           "bytes": 441332132
         },
         {
           "name": "siglip-tokenizer.json",
-          "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/tokenizer.json",
+          "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/4649052661e53c7000355844105f8a1792088239/tokenizer.json",
           "sha256": "4a17c975210be5ab4c36b47d8dae4eefb866dbfb1e676e394aad85dc30a3ae08",
           "bytes": 2398744
         },
         {
           "name": "siglip-preprocessor.json",
-          "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/preprocessor_config.json",
+          "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/4649052661e53c7000355844105f8a1792088239/preprocessor_config.json",
           "sha256": "21ee046a8a52a65e5f9c177bf840bfb39ea66c9c54cf2760630efd58e0a3ec80",
           "bytes": 368
         }
@@ -63,13 +74,13 @@
       "files": [
         {
           "name": "minilm.int8.onnx",
-          "url": "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/onnx/model_quantized.onnx",
+          "url": "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/751bff37182d3f1213fa05d7196b954e230abad9/onnx/model_quantized.onnx",
           "sha256": "afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1",
           "bytes": 22972370
         },
         {
           "name": "minilm-tokenizer.json",
-          "url": "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/tokenizer.json",
+          "url": "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/751bff37182d3f1213fa05d7196b954e230abad9/tokenizer.json",
           "sha256": "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0",
           "bytes": 711661
         }
@@ -81,27 +92,27 @@
       "files": [
         {
           "name": "encoder.onnx",
-          "url": "https://huggingface.co/Xenova/vit-gpt2-image-captioning/resolve/main/onnx/encoder_model.onnx",
+          "url": "https://huggingface.co/Xenova/vit-gpt2-image-captioning/resolve/215b4edcb7ec1fad5905a18a03f7b2007f6fabd0/onnx/encoder_model.onnx",
           "sha256": "1e624fcd6a4a6a702dd1b60244adc6b6cbd169dcf3fbf9643be21a9bcf090b29",
           "bytes": 343440631
         },
         {
           "name": "decoder.onnx",
-          "url": "https://huggingface.co/Xenova/vit-gpt2-image-captioning/resolve/main/onnx/decoder_model_merged_quantized.onnx",
-          "sha256": "2f05cdb488d557c6ca2cccb276b1cbd0ca08d9d3ae70641618918dfa1cb860a3",
-          "bytes": 158331840
+          "url": "https://huggingface.co/Xenova/vit-gpt2-image-captioning/resolve/215b4edcb7ec1fad5905a18a03f7b2007f6fabd0/onnx/decoder_model_merged_quantized.onnx",
+          "sha256": "1f3ec53b5fc3614c0b54ee786755a7ec3007841f57543f8e241499edfadfa98f",
+          "bytes": 158599996
         },
         {
           "name": "tokenizer.json",
-          "url": "https://huggingface.co/Xenova/vit-gpt2-image-captioning/resolve/main/tokenizer.json",
+          "url": "https://huggingface.co/Xenova/vit-gpt2-image-captioning/resolve/215b4edcb7ec1fad5905a18a03f7b2007f6fabd0/tokenizer.json",
           "sha256": "6e785cd4f004c9291dadeba7d8d1c2871318d368a1cfcd416c0571dcd8f11413",
           "bytes": 2107928
         },
         {
           "name": "preprocessor.json",
-          "url": "https://huggingface.co/Xenova/vit-gpt2-image-captioning/resolve/main/preprocessor_config.json",
-          "sha256": "cf194562deaa1949befaa94e8789a9bf37b0261a99d561f3b22af7306717a7cd",
-          "bytes": 1071
+          "url": "https://huggingface.co/Xenova/vit-gpt2-image-captioning/resolve/215b4edcb7ec1fad5905a18a03f7b2007f6fabd0/preprocessor_config.json",
+          "sha256": "76304e9a1deb0d5f78349a57ad9d8057f36476c29bd292e907e2e8c451c93e9d",
+          "bytes": 378
         }
       ]
     },

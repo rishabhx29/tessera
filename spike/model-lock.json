@@ -1,67 +1,67 @@
 {
   "siglip_vision": {
     "sha256": "ef14a954f3d57e1806666432bd9785004c1dc27100aa260eee0cb0f10a5de058",
-    "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/onnx/vision_model_quantized.onnx",
+    "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/4649052661e53c7000355844105f8a1792088239/onnx/vision_model_quantized.onnx",
     "bytes": 99499129
   },
   "siglip_text": {
     "sha256": "ad0329b1f35acc66d8953ff2559ce358da8eb0a7011794cf951523d63a4dbce2",
-    "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/onnx/text_model_quantized.onnx",
+    "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/4649052661e53c7000355844105f8a1792088239/onnx/text_model_quantized.onnx",
     "bytes": 111475220
   },
   "siglip_tokenizer": {
     "sha256": "4a17c975210be5ab4c36b47d8dae4eefb866dbfb1e676e394aad85dc30a3ae08",
-    "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/tokenizer.json",
+    "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/4649052661e53c7000355844105f8a1792088239/tokenizer.json",
     "bytes": 2398744
   },
   "siglip_preprocessor": {
     "sha256": "21ee046a8a52a65e5f9c177bf840bfb39ea66c9c54cf2760630efd58e0a3ec80",
-    "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main/preprocessor_config.json",
+    "url": "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/4649052661e53c7000355844105f8a1792088239/preprocessor_config.json",
     "bytes": 368
   },
   "minilm_model": {
     "sha256": "afdb6f1a0e45b715d0bb9b11772f032c399babd23bfc31fed1c170afc848bdb1",
-    "url": "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/onnx/model_quantized.onnx",
+    "url": "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/751bff37182d3f1213fa05d7196b954e230abad9/onnx/model_quantized.onnx",
     "bytes": 22972370
   },
   "minilm_tokenizer": {
     "sha256": "da0e79933b9ed51798a3ae27893d3c5fa4a201126cef75586296df9b4d2c62a0",
-    "url": "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/tokenizer.json",
+    "url": "https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/751bff37182d3f1213fa05d7196b954e230abad9/tokenizer.json",
     "bytes": 711661
   },
   "mobileclip2_vision": {
     "sha256": "8ec2d4cd7caef777ab863f2b3ad34624a5416dcc9d4571eedeec70d491eb3c5d",
-    "url": "https://huggingface.co/felixhrdyn/mobileclip2-s0-onnx/resolve/main/vision_model_quantized.onnx",
+    "url": "https://huggingface.co/felixhrdyn/mobileclip2-s0-onnx/resolve/99ca0cde6c76c0c56fcfeace07eb3a340ba17fc0/vision_model_quantized.onnx",
     "bytes": 11866678
   },
   "mobileclip2_text": {
     "sha256": "4eac03c0dde9e1ed782b91ce9e50f2819e1f062eed0f19b9d4ca72154026cfee",
-    "url": "https://huggingface.co/felixhrdyn/mobileclip2-s0-onnx/resolve/main/text_model_quantized.onnx",
+    "url": "https://huggingface.co/felixhrdyn/mobileclip2-s0-onnx/resolve/99ca0cde6c76c0c56fcfeace07eb3a340ba17fc0/text_model_quantized.onnx",
     "bytes": 64326073
   },
   "mobileclip2_tokenizer": {
     "sha256": "b556ac8c99757ffb677208af34bc8c6721572114111a6e0aaf5fa69ff0b8d842",
-    "url": "https://huggingface.co/felixhrdyn/mobileclip2-s0-onnx/resolve/main/tokenizer.json",
+    "url": "https://huggingface.co/felixhrdyn/mobileclip2-s0-onnx/resolve/99ca0cde6c76c0c56fcfeace07eb3a340ba17fc0/tokenizer.json",
     "bytes": 2224041
   },
   "clip32_vision": {
     "sha256": "583fd1110a514667812fee7d684952aaf82a99b959760c8d7dca7e0ab9839299",
-    "url": "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/vision_model_quantized.onnx",
+    "url": "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/d15189d7028b43f1d3e65039190477f6af591c2a/onnx/vision_model_quantized.onnx",
     "bytes": 89117001
   },
   "clip32_text": {
     "sha256": "73baab855d406190da9faa498cfedf65f15cf309f4cc7385b7b032e6d08e5c3a",
-    "url": "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/onnx/text_model_quantized.onnx",
+    "url": "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/d15189d7028b43f1d3e65039190477f6af591c2a/onnx/text_model_quantized.onnx",
     "bytes": 64504507
   },
   "clip32_tokenizer": {
     "sha256": "f7f3b7af117d467b58374797691a6438d3e6b9e9cef800dfd5dced7f697a90cd",
-    "url": "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/tokenizer.json",
+    "url": "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/d15189d7028b43f1d3e65039190477f6af591c2a/tokenizer.json",
     "bytes": 2224119
   },
   "clip32_preprocessor": {
     "sha256": "6f638fb9401a6d6296feff533ee7efe657b787c49f954f82f5906b36ef2a1b1f",
-    "url": "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/preprocessor_config.json",
+    "url": "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/d15189d7028b43f1d3e65039190477f6af591c2a/preprocessor_config.json",
     "bytes": 520
   },
   "ppocrv6_det": {

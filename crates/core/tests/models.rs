@@ -655,3 +655,199 @@ fn the_pinned_manifest_names_the_models_v0_1_actually_runs() {
         "an empty models dir cannot have anything installed"
     );
 }
+
+// ------------------------------------------------------------- pin provenance
+
+/// Where a pinned file comes from, and how to ask that host what it holds.
+///
+/// A checksum is only worth its provenance. The pin is what stands between a
+/// user and a file that arrived truncated or substituted, and it can only do
+/// that job if the value was read from the host rather than computed from
+/// whatever the first download produced. A pin taken from the local artefact
+/// certifies the local artefact, corruption included — which is how a decoder
+/// 268 KB short of upstream sat in this manifest looking verified, and how a
+/// captioning model came to be pinned to a config file its own URL never
+/// served.
+enum Host<'a> {
+    /// `https://huggingface.co/{repo}/resolve/{revision}/{path}`
+    HuggingFace {
+        repo: &'a str,
+        revision: &'a str,
+        path: &'a str,
+    },
+    /// `https://github.com/{repo}/releases/download/{tag}/{asset}`
+    GitHub {
+        repo: &'a str,
+        tag: &'a str,
+        asset: &'a str,
+    },
+}
+
+/// Split a pinned URL into the host and the coordinates needed to ask about it.
+/// `None` means an unrecognised host, which is itself a finding: a pin nobody
+/// can check is a pin nobody has checked.
+fn parse_pin(url: &str) -> Option<Host<'_>> {
+    if let Some(rest) = url.strip_prefix("https://huggingface.co/") {
+        let (repo, tail) = rest.split_once("/resolve/")?;
+        let (revision, path) = tail.split_once('/')?;
+        return Some(Host::HuggingFace {
+            repo,
+            revision,
+            path,
+        });
+    }
+    if let Some(rest) = url.strip_prefix("https://github.com/") {
+        let (repo, tail) = rest.split_once("/releases/download/")?;
+        let (tag, asset) = tail.split_once('/')?;
+        return Some(Host::GitHub { repo, tag, asset });
+    }
+    None
+}
+
+/// A full git commit id. Short revisions are ambiguous, and a branch or tag
+/// name is not a revision at all.
+fn is_commit_sha(text: &str) -> bool {
+    text.len() == 40 && text.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn get_json(agent: &ureq::Agent, url: &str) -> Result<serde_json::Value, String> {
+    let mut response = agent
+        .get(url)
+        .call()
+        .map_err(|err| format!("GET {url}: {err}"))?;
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|err| format!("reading {url}: {err}"))?;
+    serde_json::from_str(&body).map_err(|err| format!("parsing {url}: {err}"))
+}
+
+impl Host<'_> {
+    /// What the host declares: the file's length, and its sha256 when the host
+    /// publishes one. Sizes cover every pinned file; hashes cover the ones held
+    /// in large-file storage, which is all of the expensive ones.
+    fn declared(&self, agent: &ureq::Agent) -> Result<(Option<u64>, Option<String>), String> {
+        match self {
+            Host::HuggingFace { repo, path, .. } => {
+                let api = format!("https://huggingface.co/api/models/{repo}?blobs=true");
+                let body = get_json(agent, &api)?;
+                let siblings = body["siblings"]
+                    .as_array()
+                    .ok_or_else(|| format!("{api} carries no file list"))?;
+                let entry = siblings
+                    .iter()
+                    .find(|sibling| sibling["rfilename"].as_str() == Some(*path))
+                    .ok_or_else(|| format!("{repo} has no file {path} at this revision"))?;
+                Ok((
+                    entry["size"].as_u64(),
+                    entry["lfs"]["sha256"].as_str().map(str::to_owned),
+                ))
+            }
+            Host::GitHub { repo, tag, asset } => {
+                let api = format!("https://api.github.com/repos/{repo}/releases/tags/{tag}");
+                let body = get_json(agent, &api)?;
+                let assets = body["assets"]
+                    .as_array()
+                    .ok_or_else(|| format!("{api} carries no asset list"))?;
+                let entry = assets
+                    .iter()
+                    .find(|candidate| candidate["name"].as_str() == Some(*asset))
+                    .ok_or_else(|| format!("{repo}@{tag} has no asset {asset}"))?;
+                // Release assets come with a size but no published hash.
+                Ok((entry["size"].as_u64(), None))
+            }
+        }
+    }
+}
+
+/// Every pin in the shipped manifest has to match what its host says, on the
+/// one property every host publishes: the length. A pin can be wrong in two
+/// ways and this catches both — never having matched the host, and having
+/// stopped matching after upstream moved.
+#[test]
+#[ignore = "hits the network: audits every pin against what its host declares"]
+fn every_pin_matches_the_size_its_host_declares() {
+    let manifest = Manifest::pinned().expect("the built-in manifest parses");
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(60)))
+        .build()
+        .new_agent();
+
+    let mut audited = 0usize;
+    let mut problems: Vec<String> = Vec::new();
+    for set in manifest.sets() {
+        for file in &set.files {
+            let Some(host) = parse_pin(&file.url) else {
+                problems.push(format!(
+                    "{}/{}: nothing knows how to check {}",
+                    set.name, file.name, file.url
+                ));
+                continue;
+            };
+            match host.declared(&agent) {
+                Err(why) => problems.push(format!("{}/{}: {why}", set.name, file.name)),
+                Ok((size, sha256)) => {
+                    audited += 1;
+                    if size != Some(file.bytes) {
+                        problems.push(format!(
+                            "{}/{}: pinned at {} bytes, host declares {size:?}",
+                            set.name, file.name, file.bytes
+                        ));
+                    }
+                    // Only when the host publishes one: a size that agrees with
+                    // a hash that was never checked is half a proof.
+                    if let Some(sha256) = sha256 {
+                        if sha256 != file.sha256 {
+                            problems.push(format!(
+                                "{}/{}: pinned sha256 {}, host declares {sha256}",
+                                set.name, file.name, file.sha256
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        audited >= 10,
+        "only {audited} pins were auditable, which cannot be the whole manifest"
+    );
+    assert!(
+        problems.is_empty(),
+        "pins that do not match their own source:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+/// A pin that follows a moving reference can go stale while nobody edits the
+/// manifest: `resolve/main` is whatever `main` is today, so the first time
+/// upstream commits to one of these files every fresh install starts failing
+/// its checksum, and the manifest looks like the broken part. Naming a commit
+/// makes a pin mean one thing forever.
+#[test]
+fn every_pinned_url_names_an_immutable_revision() {
+    let manifest = Manifest::pinned().expect("the built-in manifest parses");
+    let mut moving: Vec<String> = Vec::new();
+    for set in manifest.sets() {
+        for file in &set.files {
+            let where_it_points = format!("{}/{}", set.name, file.name);
+            match parse_pin(&file.url) {
+                Some(Host::HuggingFace { revision, .. }) if !is_commit_sha(revision) => {
+                    moving.push(format!("{where_it_points}: {revision} is not a commit"));
+                }
+                // A release tag is a fixed thing; `latest` is not a tag at all.
+                Some(Host::GitHub { tag: "latest", .. }) => {
+                    moving.push(format!("{where_it_points}: latest is not a release"));
+                }
+                Some(_) => {}
+                None => moving.push(format!("{where_it_points}: unknown host in {}", file.url)),
+            }
+        }
+    }
+    assert!(
+        moving.is_empty(),
+        "these pins follow a moving reference:\n  {}",
+        moving.join("\n  ")
+    );
+}
