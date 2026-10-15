@@ -18,6 +18,13 @@
 //! constant `0.05` comes from. This test pins the constants and the reason for
 //! each; the sweep is the evidence.
 //!
+//! The two tests do not use the same corpus, and that is worth stating rather than
+//! leaving to be discovered: `image_fusion` strides the folder down to 60 images
+//! because it runs 14 weights over every query, and this one uses every image in
+//! the folder that has text — 178 on the machine this was written, so its
+//! denominators are three times larger. Neither is wrong; they answer the same
+//! question from different directions, and this one can afford to be the larger.
+//!
 //! ```
 //! cargo test --release -p tessera-core --test image_weighting -- --ignored --nocapture
 //! ```
@@ -34,15 +41,20 @@ const RRF_K: f32 = 60.0;
 
 /// How much each arm's vote is worth on a file that does have text.
 ///
-/// `0.05` is the largest value measured to cost the lexical arm nothing: over 56
-/// real screenshots with each image's own OCR text as the query, the lexical arm
-/// scores 0.964 alone, 0.964 at 0.05, and 0.857 at 0.10 — which is the value this
-/// constant held before, on the endorsement of a smaller run of this corpus.
+/// `0.05` is the largest value measured to cost the lexical arm nothing. Over 56
+/// real screenshots, each image's own OCR text as the query, the lexical arm
+/// scores 0.964 alone, 0.964 at 0.05, and 0.857 at 0.10 — the value this constant
+/// held before, on the endorsement of a smaller run of that corpus. Over the 178
+/// images of this test the same comparison reads 0.584 alone, 0.579 at 0.05 and
+/// 0.287 at equal weight: one query in 178, half a point against a standard error
+/// of 3.7, so the shape of the result is unchanged on a corpus three times larger.
 ///
-/// The image arm's *benefit* on files with text is neither measured nor claimed:
-/// the lexical arm misses 2 of those 56 queries, so nothing in that corpus can
-/// show a second arm helping. What is measured is that this weight costs nothing,
-/// and that is all this constant is set from.
+/// The image arm's *benefit* on files with text is neither measured nor claimed.
+/// The 56-image sample gives the lexical arm only 2 misses, so nothing there could
+/// show a second arm helping; this corpus misses 74 of 178, which is real
+/// headroom, and 0.05 still does not beat the lexical arm alone on it. What is
+/// measured is that this weight costs nothing measurable, and that is all the
+/// constant is set from.
 const WEIGHT_WITH_TEXT: (f32, f32) = (1.0, 0.05);
 /// A file with no text has nothing for the lexical arm to match on, so it gets no
 /// vote at all rather than a suppressed one.
@@ -89,9 +101,11 @@ fn weighting_the_arms_by_text_content_preserves_both() {
     let ocr = tessera_core::ocr::select(&tessera_core::ocr::OcrChoice::Native, &models).unwrap();
 
     // The whole folder, with no cap. An earlier version of this took the first 40
-    // when it meant to sample 40, so its corpus was a prefix rather than a slice
-    // and its numbers could not be compared with `image_fusion`, which uses all of
-    // them. Two tests measuring the same design should measure the same files.
+    // when it meant to sample 40: the stride was `len / 40`, which is 1 for any
+    // folder under 80 images, so the "sample" was a prefix with the corpus's own
+    // size hidden inside it. Sampling is not needed here — one row per query is
+    // cheap, unlike `image_fusion`'s fourteen weights — and the larger corpus is
+    // the better denominator: 178 text-bearing queries rather than 56.
     let mut all: Vec<PathBuf> = std::fs::read_dir(&folder)
         .unwrap()
         .flatten()

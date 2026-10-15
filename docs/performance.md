@@ -368,6 +368,22 @@ value. It shows what an arm *costs*, and that is what the weight is set from.
 The cliff sits between 0.05 and 0.06, where one step of 0.01 costs 3.5 points. The
 value this project first chose, 0.10, costs 10.7.
 
+A second corpus agrees, from the other direction. `--test image_weighting` runs the
+same design over **every** text-bearing image in the folder — 178 here, three times
+the sweep's sample — and scores the lexical arm alone against both fusings:
+
+| fusion, 178 screenshots | top-1 |
+| --- | --- |
+| lexical arm alone | 0.584 |
+| weighted RRF, image arm at 0.05 | 0.579 |
+| equal-weight RRF | 0.287 |
+
+One query of 178 separates the lexical arm from the weighted fusion — 0.5 points
+against a 3.7-point standard error — while equal weight costs 29.7. This corpus
+has real headroom for a second arm (74 of its 178 queries are lexical misses) and
+0.05 still does not take it, which is the answer the sweep gives as well: the
+weight is set by what it costs, not by a benefit anyone has measured.
+
 ### The embedding space is flat, and the int8 export is not why
 
 Median cosine between two **unrelated** screenshots is **0.508**, and 63% of
