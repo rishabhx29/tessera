@@ -670,14 +670,86 @@ debouncing. Any fix that adds a second encoder pass per query multiplies that 66
 ms, which is why the combined export was rejected on cost rather than on
 quality.
 
-### What the corpus does not yet decide
+### Two mechanisms this corpus ruled out
 
-Whether the remaining 34% of rank-1 misses are the encoder or the approach. Two
-mechanisms are the obvious candidates and neither is measured here: image
-geometry at ingest (the engine stretches every photograph to a square, which
-distorts aspect), and matching against several crops per image instead of one
-whole-image vector. Both are cheap to test on this corpus and both are queued —
-any figure for either until it appears in this file does not exist.
+Two mechanisms were the obvious candidates for the remaining 34% of rank-1
+misses. One was image geometry at ingest: the engine stretches every photograph
+to a square and throws the aspect ratio away doing it. The other was matching
+against several crops of an image instead of one whole-image vector, because an
+object that fills a corner of the frame is a small fraction of a single pooled
+vector. Both are now measured, and neither is worth building.
+
+The harness that measured them is a Python script outside this repository, which
+is a gap: unlike the COCO baseline above, nothing here can be re-run from the
+repository today. It had to earn its place before its numbers were worth
+recording, and it did: its first variant is the shipped preprocessing, and it
+lands at **R@1 0.6629** against the Rust engine's 0.6582. Seven queries out of
+1501 move between the two, which is the resize filter — Pillow's BICUBIC against
+the engine's CatmullRom — and not a difference in method. Every comparison below
+is between variants inside the one harness, so that offset cancels.
+
+**Ingest geometry does not help.** The engine stretches every photograph to a
+square, discarding aspect. Three alternatives, same 1501 captions, same images:
+
+| preprocessing | R@1 | R@5 | R@10 | mean rank |
+| --- | --- | --- | --- | --- |
+| stretch to 224x224 — **shipped** | **0.6629** | 0.9121 | 0.9660 | 4.0 |
+| shortest side to 224, centre crop | 0.6409 | 0.9147 | 0.9640 | 3.9 |
+| longest side to 224, centre crop | 0.6209 | 0.9054 | 0.9567 | 4.1 |
+| letterbox to 224 on grey 127 | 0.6302 | 0.8994 | 0.9494 | 4.2 |
+
+The shipped stretch is the best of the four at rank 1, by 2.2 points over the
+closest alternative and 4.2 over the worst. Distorting aspect, it turns out, is
+not the problem.
+
+That finding retires a reading these sections invite. This file sets 0.545 top-1
+— eleven photographs, a harness — beside 0.455 top-1 — eleven photographs, the
+engine — and notes that the two differ in that one way. The juxtaposition
+suggests geometry accounts for the gap. It does not: on 300 photographs
+centre-cropping is the *worse* method, so whatever moved those eleven items, it
+was not the aspect ratio.
+
+Nothing here contradicts itself; the problem is that eleven items cannot carry a
+comparison, and this file asked them to several times. They are enough to reject
+a configuration that is broken — unpadded text collapsing to 0.091 is one of
+those, and that rejection stands. They are not enough to rank two configurations
+that work. The corpus above is the instrument for that, and it is the one to use
+from here.
+
+**Multiple vectors per image buy rank 5 and cost ten times the indexing.** Nine
+overlapping crops per photograph — 3x3 at half size, so each is a quarter of the
+frame — plus the whole image; ten vectors per image, matched two ways:
+
+| matching | R@1 | R@5 | R@10 | mean rank |
+| --- | --- | --- | --- | --- |
+| whole image only — **shipped** | **0.6629** | 0.9121 | 0.9660 | 4.0 |
+| best of the 10 vectors | 0.6356 | 0.9147 | 0.9647 | 4.0 |
+| mean of the best 3 | 0.6576 | **0.9307** | **0.9680** | 3.8 |
+
+Taking the maximum over ten vectors is *worse* at rank 1 than taking the whole
+image alone: a crop that happens to match is a false positive, and ten chances
+to match is more of them. Averaging the best three recovers to 0.6576, within
+0.0053 of the baseline, and gains 1.9 points at rank 5 — for ten encoder passes
+per photograph instead of one.
+
+The cost decides it. A crop measured 362 ms and a whole image 391 ms in the same
+run under the same load, so a crop is not cheaper than an image and ten vectors
+per photograph multiplies indexing by about ten: at the engine's measured 260 ms
+per image, a 600-photo library goes from about 2.5 minutes to about 26. There is
+no batched shortcut hiding in it either — the vision tower does accept a batch,
+but 16 images in one call took 447 ms per image against 575 ms for a single
+call, a factor of 1.3 where the arithmetic suggests 16. Batching also moved the
+pooled vector: the same image run alone and run as row 0 of a batch of five gave
+cosines of 0.9973, so it is not perfectly free even where it is fast.
+
+Those last two timings were taken while another job held the machine, so treat
+the absolute milliseconds as an upper bound; the ratios, which are what the
+argument uses, come from rows measured back to back.
+
+Neither mechanism is implemented. The two tables above are the argument for
+rejecting them, not a description of anything the engine ships: 0.6582 R@1 and
+0.9134 R@5 with the stretch at ingest and one vector per photograph remain the
+engine's numbers.
 
 ## Where this leaves the feature
 
@@ -705,13 +777,13 @@ rather than the 0.85 the feature was asked for.
 
 ### What is not measured
 
-The mechanism experiments. Image geometry at ingest and multiple crops per image
-are described above and are the two levers this corpus exists to test; until they
-appear in this file, no figure for either exists and 0.6582 is the only baseline.
+A same-corpus comparison against another encoder. Every number here is SigLIP
+Si16-base as int8; 0.6582 says what this model does, not what the task allows.
 
-The caption arm. `tests/captioning.rs` is `#[ignore]`d and the decoder export
-pinned in `lock.json` does not load, so every captioning claim is unmeasured and
-the 502 MB it downloads on a fresh install is dead weight.
+The caption arm as a retrieval route. It runs now — eleven of eleven photographs
+produce a caption — but nothing indexes those captions and no retrieval number
+has been taken from them. Four of the eleven captions shared a word with the
+photograph's label, which is a floor for the arm being alive and nothing more.
 
 Everything on macOS. The Vision OCR adapter is written and has never been
 compiled or run on an Apple machine; the `macos-14` CI job is the gate, and until
