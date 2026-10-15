@@ -34,6 +34,11 @@
 //! 0.7075), so a test that embedded the captions raw would be reporting a
 //! configuration no user can reach. The raw figure stays in `docs/performance.md`
 //! as what the tower does with text exactly as given.
+//!
+//! The second test in this file measures a query-side calibration on the same
+//! embeds: a mean vector subtracted from each query before ranking, fitted on one
+//! half of the corpus and scored on the other. It is measured rather than shipped,
+//! and its own doc comment says why it is here.
 
 use std::path::{Path, PathBuf};
 
@@ -256,5 +261,284 @@ fn a_caption_finds_its_own_image_in_a_real_corpus() {
         "R@1 {:.4} is not far enough above the {chance:.4} chance rate for {n} images; \
          either the corpus or the model wiring is wrong",
         recall[0]
+    );
+}
+
+struct Scored {
+    label: String,
+    images: Vec<Embedding>,
+    /// `(the photograph this query belongs to, the query vector)`.
+    queries: Vec<(usize, Embedding)>,
+}
+
+/// Unit-length copy of a vector, for the arithmetic below.
+fn as_unit(values: Vec<f32>) -> Embedding {
+    Embedding::new(values, DIM)
+        .expect("a DIM-wide vector")
+        .normalized()
+}
+
+/// The mean of a set of embeddings. Its length is not used: what gets subtracted
+/// is a direction, and the caller re-normalises.
+fn mean<'a>(vectors: impl Iterator<Item = &'a Embedding>) -> Embedding {
+    let mut sum = vec![0.0f32; DIM];
+    let mut count = 0usize;
+    for vector in vectors {
+        for (slot, value) in sum.iter_mut().zip(vector.values()) {
+            *slot += value;
+        }
+        count += 1;
+    }
+    assert!(count > 0, "a mean over nothing would be a zero vector");
+    for slot in &mut sum {
+        *slot /= count as f32;
+    }
+    Embedding::new(sum, DIM).expect("a DIM-wide vector")
+}
+
+/// `vector - alpha * mean`, re-normalised. `alpha = 0.0` is a unit-length copy.
+fn shifted(vector: &Embedding, mean: &Embedding, alpha: f32) -> Embedding {
+    let values: Vec<f32> = vector
+        .values()
+        .iter()
+        .zip(mean.values())
+        .map(|(value, offset)| value - alpha * offset)
+        .collect();
+    as_unit(values)
+}
+
+/// Rank of the right photograph for every query, ties broken against us.
+fn rank_of(queries: &[(usize, Embedding)], images: &[Embedding]) -> Vec<usize> {
+    queries
+        .iter()
+        .map(|(target, query)| {
+            let right = cosine(query, &images[*target]);
+            let ahead = images
+                .iter()
+                .enumerate()
+                .filter(|(index, image)| index != target && cosine(query, image) > right)
+                .count();
+            ahead + 1
+        })
+        .collect()
+}
+
+/// A query-side mean, fitted on one half of the corpus and scored on the other.
+///
+/// This measures a transform the engine does **not** ship. It is here because it
+/// is the one query-time change measured on this corpus that gains points instead
+/// of losing them, and because the number that would decide whether to ship it
+/// should be re-derivable from this repository. The geometry, crop and whitening
+/// tables in `docs/performance.md` came from a harness that lived in a temporary
+/// directory and is gone; that is a gap worth not repeating on the piece of
+/// evidence the next decision rests on.
+///
+/// The split is fixed - even image indices against odd, no seed to tune - and the
+/// mean is fitted on the training half's captions and scored on the other half's,
+/// with all the photographs as candidates. Both directions are printed: a gain in
+/// one direction is a coin flip, a gain in both is a finding.
+///
+/// Only a mean is removed, and *which* mean decides the sign. Subtracting the
+/// images' own mean from text vectors takes R@1 down by about fifteen points, for
+/// the same reason whitening-on-images lands on chance: it moves the text
+/// somewhere the images are not. Subtracting the captions' mean from the query
+/// side alone gains, and that is the only version of this that needs no re-index.
+///
+/// Nothing here is asserted except the floors at the end. The measured values
+/// belong in `docs/performance.md`; an assertion on the size of a gain would turn
+/// a measurement into a claim the moment it passed.
+#[test]
+#[ignore = "needs the siglip model set and a corpus in TESSERA_CORPUS"]
+fn a_query_side_mean_can_be_scored_on_a_held_out_half() {
+    let models = models();
+    assert!(
+        SiglipEmbedder::is_installed(&models),
+        "the siglip set is not installed; run: tessera models install --set siglip"
+    );
+    let dir = corpus_dir();
+    let entries = read_manifest(&dir);
+    let n = entries.len();
+    assert!(
+        n >= 8,
+        "a held-out split over {n} photographs would measure the split, not the transform"
+    );
+
+    let embedder = SiglipEmbedder::new(&models, 4).expect("the embedder loads");
+    let started = std::time::Instant::now();
+    let images: Vec<Embedding> = entries
+        .iter()
+        .map(|entry| {
+            embedder
+                .embed_image(&entry.path, DIM)
+                .unwrap_or_else(|err| panic!("embedding {}: {err}", entry.path.display()))
+                .normalized()
+        })
+        .collect();
+    let captions: Vec<(usize, Embedding)> = entries
+        .iter()
+        .enumerate()
+        .flat_map(|(i, entry)| entry.captions.iter().map(move |caption| (i, caption)))
+        .map(|(i, caption)| {
+            let query = embedder
+                .embed_query(caption, DIM)
+                .unwrap_or_else(|err| panic!("embedding {caption:?}: {err}"));
+            (i, query.normalized())
+        })
+        .collect();
+    println!(
+        "\n== query-side calibration: {n} photographs, {} captions, embedded in {:.0} s ==",
+        captions.len(),
+        started.elapsed().as_secs_f64()
+    );
+    let chance = 1.0 / n as f64;
+
+    let mut floors: Vec<(&str, f64, f64)> = Vec::new();
+    for (direction, train_is_even) in [
+        ("even photographs to fit, odd to score", true),
+        ("odd photographs to fit, even to score", false),
+    ] {
+        let in_train = |image: usize| image.is_multiple_of(2) == train_is_even;
+        let train_images: Vec<usize> = (0..n).filter(|i| in_train(*i)).collect();
+        let train_rows: Vec<usize> = (0..captions.len())
+            .filter(|r| in_train(captions[*r].0))
+            .collect();
+        let test_rows: Vec<usize> = (0..captions.len())
+            .filter(|r| !in_train(captions[*r].0))
+            .collect();
+
+        let mean_images = mean(train_images.iter().map(|i| &images[*i]));
+        let mean_captions = mean(train_rows.iter().map(|r| &captions[*r].1));
+        let mean_both = mean(
+            train_images
+                .iter()
+                .map(|i| &images[*i])
+                .chain(train_rows.iter().map(|r| &captions[*r].1)),
+        );
+
+        let images_shifted = |mean: &Embedding, alpha: f32| -> Vec<Embedding> {
+            images
+                .iter()
+                .map(|image| shifted(image, mean, alpha))
+                .collect()
+        };
+        let queries_shifted = |mean: &Embedding, alpha: f32| -> Vec<(usize, Embedding)> {
+            test_rows
+                .iter()
+                .map(|r| (captions[*r].0, shifted(&captions[*r].1, mean, alpha)))
+                .collect()
+        };
+        let queries_raw = || -> Vec<(usize, Embedding)> {
+            test_rows
+                .iter()
+                .map(|r| (captions[*r].0, captions[*r].1.clone()))
+                .collect()
+        };
+
+        let mut scored: Vec<Scored> = vec![
+            Scored {
+                label: "nothing - the shipped configuration".to_string(),
+                images: images.clone(),
+                queries: queries_raw(),
+            },
+            Scored {
+                label: "the images' mean, both sides".to_string(),
+                images: images_shifted(&mean_images, 1.0),
+                queries: queries_shifted(&mean_images, 1.0),
+            },
+            Scored {
+                label: "each side its own mean".to_string(),
+                images: images_shifted(&mean_images, 1.0),
+                queries: queries_shifted(&mean_captions, 1.0),
+            },
+            Scored {
+                label: "the captions' mean, both sides".to_string(),
+                images: images_shifted(&mean_captions, 1.0),
+                queries: queries_shifted(&mean_captions, 1.0),
+            },
+            Scored {
+                label: "the images' and captions' mean, both sides".to_string(),
+                images: images_shifted(&mean_both, 1.0),
+                queries: queries_shifted(&mean_both, 1.0),
+            },
+            Scored {
+                label: "the captions' mean, query side only".to_string(),
+                images: images.clone(),
+                queries: queries_shifted(&mean_captions, 1.0),
+            },
+        ];
+        for alpha in [0.25f32, 0.5, 0.75] {
+            scored.push(Scored {
+                label: format!("{alpha} of the captions' mean, query side only"),
+                images: images.clone(),
+                queries: queries_shifted(&mean_captions, alpha),
+            });
+        }
+
+        let ranks: Vec<Vec<usize>> = scored
+            .iter()
+            .map(|entry| rank_of(&entry.queries, &entry.images))
+            .collect();
+        let share = |row: usize, cutoff: usize| -> f64 {
+            ranks[row].iter().filter(|rank| **rank <= cutoff).count() as f64
+                / ranks[row].len() as f64
+        };
+
+        println!(
+            "\n-- {direction}: {} photographs and {} captions to fit, {} queries to score --",
+            train_images.len(),
+            train_rows.len(),
+            test_rows.len()
+        );
+        println!(
+            "{:<44} {:>6} {:>6} {:>7} {:>3} {:>4}",
+            "variant", "R@1", "R@5", "delta", "in", "out"
+        );
+        for (row, entry) in scored.iter().enumerate() {
+            if row == 0 {
+                println!(
+                    "{:<44} {:>6.4} {:>6.4}",
+                    entry.label,
+                    share(0, 1),
+                    share(0, 5)
+                );
+                continue;
+            }
+            let moved_in = ranks[row]
+                .iter()
+                .zip(&ranks[0])
+                .filter(|(new, old)| **new <= 1 && **old > 1)
+                .count();
+            let moved_out = ranks[row]
+                .iter()
+                .zip(&ranks[0])
+                .filter(|(new, old)| **new > 1 && **old <= 1)
+                .count();
+            println!(
+                "{:<44} {:>6.4} {:>6.4} {:>+6.1} {moved_in:>3} {moved_out:>4}",
+                entry.label,
+                share(row, 1),
+                share(row, 5),
+                (share(row, 1) - share(0, 1)) * 100.0
+            );
+        }
+        // Row 5 is the query-side-only variant, by construction above.
+        floors.push((direction, share(0, 1), share(5, 1)));
+    }
+
+    for (direction, raw, query_side) in &floors {
+        assert!(
+            *raw > 20.0 * chance,
+            "{direction}: the baseline R@1 {raw:.4} is not far enough above the {chance:.4} \
+             chance rate for {n} images; either the corpus or the model wiring is wrong"
+        );
+        assert!(
+            *query_side > 10.0 * chance,
+            "{direction}: the query-side mean leaves R@1 at {query_side:.4}, against a {chance:.4} \
+             chance rate - a collapse that far is an arithmetic bug, not a result"
+        );
+    }
+    println!(
+        "\nThe values above belong in docs/performance.md, not in an assertion here. What is\n\
+         asserted is only that both configurations retrieve at all."
     );
 }

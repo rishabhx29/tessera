@@ -951,12 +951,131 @@ between 0.0067 and 0.0227, so it is not a tuning problem; and fitting on all 300
 images — the leaky, most favourable version, which is what the engine would
 actually do — gives 0.0933, so the held-out split is not what makes it fail.
 
-Two things follow. The flatness is not a defect to be corrected at query time,
-which is the second time this file has had to say so: fp32 said it about the
-weights, and this says it about the space itself. And the baseline in that table
-is worth reading twice — 0.7787 with 150 candidates against 0.7075 with 300, same
-model, same captions, half the library. Rank 1 gets easier on a smaller shelf, so
-this feature's headline is a number about a library size rather than a constant.
+Two things follow. The flatness is not a *covariance* to be corrected at query
+time — fp32 said the same thing about the weights, and this says it about the
+space itself. It is not the last word on query-time transforms either: removing a
+mean rather than a covariance gains points everywhere it was measured, at the end
+of this section, and the row above is the *image* mean rather than that one. And
+the baseline in this table is worth reading twice — 0.7787 with 150 candidates
+against 0.7075 with 300, same model, same captions, half the library. Rank 1 gets
+easier on a smaller shelf, so this feature's headline is a number about a library
+size rather than a constant.
+
+### A second encoder, measured — and it does not take the ranking
+
+0.7015 says what SigLIP Si16-base does, not what the task allows, so a second
+encoder was run on the same corpus: `siglip2-base-patch16-224`, the
+`onnx-community` export at revision `ba1f3b08`, the same 300 photographs and the
+same 1501 captions, each model preprocessed as its own config declares. SigLIP2
+asks for bilinear resampling where SigLIP asks for bicubic; both ask for a stretch
+to 224 with mean and standard deviation 0.5, and both got what they asked for.
+
+**The export that runs is not the export it advertises.** The published
+`vision_model_int8.onnx` cannot load at all: it contains a `ConvInteger` node, and
+ONNX Runtime's CPU provider — Python and the Rust engine alike — has no kernel for
+it, so an adoption would have had to begin by finding a different quantisation.
+The same revision publishes a second and different quantised blob,
+`vision_model_quantized.onnx` (byte-identical to `vision_model_uint8.onnx` by
+digest, and *not* to `vision_model_int8.onnx`), and that is the one measured here.
+
+| model, text form | R@1 | R@5 | mean rank | matched - mismatched |
+| --- | --- | --- | --- | --- |
+| SigLIP base, captions as written | 0.6629 | 0.9121 | 4.04 | +0.1369 |
+| SigLIP2 base, captions as written | 0.5050 | 0.8081 | 6.69 | +0.0908 |
+| SigLIP base, shipped query form | **0.7075** | **0.9420** | 2.28 | +0.1496 |
+| SigLIP2 base, shipped query form | 0.5363 | 0.8348 | 4.34 | +0.1024 |
+
+Like for like, SigLIP2 loses 15.8 points at rank 1 with the captions as written
+and 17.1 in the shipped query form. Normalisation is worth +4.5 to SigLIP and +3.1
+to SigLIP2, so it is not the explanation — it widens the gap slightly rather than
+closing it. Every number in that table comes from one harness over the same corpus
+with the same scoring, and the caption-to-image ordering was re-derived from the
+manifest and compared index by index against the original before any of it was
+believed.
+
+**A weaker space, not a broken one.** The harness's own alignment check — "is a
+caption closer to its own photograph than to another caption?" — condemns SigLIP
+v1 as well, at +0.0824 against +0.7219, so it was measuring the wrong direction:
+those same-modality numbers are the anisotropy this file has recorded three times
+now. What separates a working pair from a broken one is the margin between matched
+and mismatched *cross-modal* pairs, and SigLIP2's is positive and smaller, +0.10
+against +0.15. The text tower is healthy on its own — ranking every caption
+against the other 1501, SigLIP2 puts 2.051 of a photograph's 4 remaining captions
+into its top 5 where v1 puts 2.129, the same structure within 4% — so the loss is
+cross-modal, which is also what a damaged or mismatched *vision* export would look
+like. That possibility is not excluded here: the fp32 pair (1.45 GB) was not run.
+
+What is excluded is the reason to spend that download. The export that runs is
+worse by 16 to 17 points and the one that does not run cannot ship. The runnable
+pair is 378 MB of weights against the shipped pair's 211 MB, with a text tower 2.5
+times the current one in the query path, where a query costs a measured 66 ms; and
+the repository carrying the export declares **no licence** while its base model is
+apache-2.0. A good number could justify that work — this is not one.
+
+The harness for this comparison lives outside the repository, the same gap the
+geometry, crop and whitening tables carry. It prints the sha256 of every file it
+loads, so the three artifacts are identifiable: vision `5f2b401c...`, text
+`3a0603d3...`, tokenizer `cb9140fa...`.
+
+### The one transform that gains, and the constant it would need
+
+This belongs next to the whitening result above, because it removes a **mean**, not
+a covariance, and that difference is the whole finding. It is measured by a test in
+this repository — `coco_retrieval.rs`,
+`a_query_side_mean_can_be_scored_on_a_held_out_half` — which embeds the corpus
+through `SiglipEmbedder` and fits each mean on one half of the photographs,
+scoring the other half's captions with all 300 images as candidates:
+
+| mean removed, fitted on half the corpus | R@1, fit on evens | in/out | R@1, fit on odds | in/out |
+| --- | --- | --- | --- | --- |
+| nothing — the shipped configuration | 0.6907 | — | 0.7124 | — |
+| the images' mean, both sides | 0.5280 | 40/162 | 0.5579 | 22/138 |
+| each side its own mean | 0.7000 | 52/45 | 0.7390 | 55/35 |
+| the captions' mean, both sides | 0.7320 | 63/32 | 0.7603 | 59/23 |
+| images' and captions' mean, both sides | 0.7413 | 71/33 | 0.7483 | 57/30 |
+| **the captions' mean, query side only** | **0.7333** | 66/34 | **0.7537** | 61/30 |
+
+Which mean gets removed decides the sign. The images' own mean applied to text
+vectors costs fifteen points, for the reason whitening-on-images lands on chance:
+it moves the text somewhere the images are not. The captions' mean is the direction
+that helps, in both directions of the split, and it helps whether or not the
+stored vectors are shifted with it — 0.7333 and 0.7537 with the images untouched
+against 0.7320 and 0.7603 with them shifted. That is what a shippable version would
+need: the transform on the query side only, so no re-index and no model change,
+just the constant.
+
+How much of the mean to remove is not a knife edge. Query side only, at 0.25, 0.5,
+0.75 and 1.0 of it, R@1 is 0.7213 / 0.7227 / 0.7360 / 0.7333 in one direction and
+0.7337 / 0.7430 / 0.7550 / 0.7537 in the other; 1.0 is the simplest value at the
+top of that range.
+
+**What stops it is that the constant has to come from somewhere.** The mean above
+is fitted on COCO captions, and a user types something else. Rewriting the queries
+into two other styles over the same labels — the only transfer test this corpus
+allows — a caption-fitted mean helps in all six cells and hurts in none, but by an
+unstable amount:
+
+| query style | raw R@1 | centred R@1 | delta | in/out |
+| --- | --- | --- | --- | --- |
+| captions, the fitted style | 0.7067 / 0.7084 | 0.7480 / 0.7470 | +4.1 / +3.9 | 68/37, 59/30 |
+| stopword-stripped keywords | 0.6533 / 0.6538 | 0.6760 / 0.6991 | +2.3 / +4.5 | 66/49, 70/36 |
+| first four words | 0.2613 / 0.2517 | 0.2707 / 0.3103 | +0.9 / +5.9 | 59/52, 89/45 |
+
+The two styles are the outside harness again, written out in
+`centre_transfer.py` rather than described, and the stopword list is a standard
+one: it was not tuned to this table. Read together with the row above, a
+caption-fitted constant is a corpus artefact wearing a transform's clothes. It is
+scored against the same 1501 captions that produced it, and the library it would
+ship to has no labelled descriptions at all, so nothing here measures what it
+would do there — and the effect it is *for* is 4 points at rank 1, a real gain but
+not one that obviously justifies shipping a constant fitted on a corpus the user
+has never typed against. It is therefore **not shipped**, and what would settle it
+is a second labelled set (a hundred descriptions a person writes about their own
+photographs would do) or fitting the constant on the user's own queries, which
+needs a query history this product deliberately does not keep.
+The deltas above are also measured on halves; what the constant does to the full
+0.7015 is unmeasured, and taking that measurement is exactly the run a decision to
+ship would begin with.
 
 ## Where this leaves the feature
 
@@ -980,14 +1099,21 @@ be demonstrated today.** On COCO photographs it retrieves the right image at ran
 1 for 70% of real captions and within the top 5 for 95%. On screenshots the text
 arm already wins 0.964 and the image arm is not the one doing the work. It is not
 yet a claim to put on a README, because 0.70 at rank 1 is a good retrieval aid
-rather than the 0.85 the feature was asked for.
+rather than the 0.85 the feature was asked for. The cheapest lever on it is
+measured and deliberately unshipped: a query-side mean worth about +4 points at
+rank 1, held back because the constant would be fitted on this corpus rather than
+on the language the user actually types.
 
 ### What is not measured
 
-A same-corpus comparison against another encoder. Every number here is SigLIP
-Si16-base as int8; 0.7015 says what this model does, not what the task allows.
-The SigLIP2 base towers are the obvious next comparison and it has not been run
-yet.
+The second encoder at fp32, and any label set that is not COCO. The same-corpus
+encoder comparison that used to head this list has been run: **SigLIP2 base scores
+15.8 to 17.1 points lower at rank 1** than the tower that ships, on the same 300
+photographs and the same 1501 captions, so 0.7015 is not a number that survived
+because nothing was compared against it. What is still unmeasured is that
+comparison at fp32 (1.45 GB of weights), and a description corpus that is not
+COCO — which is also the only thing that could decide the query-side constant
+above.
 
 The caption arm as a retrieval route. It runs now — eleven of eleven photographs
 produce a caption — but nothing indexes those captions and no retrieval number
