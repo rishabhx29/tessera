@@ -53,13 +53,111 @@ const TOKENS: usize = 1024;
 const BOS: i64 = 50256;
 /// The last id, which GPT-2 uses as end-of-text.
 const EOS: i64 = 50256;
+/// How many tokens a caption may run to. Real captions are a dozen or so; the
+/// cap exists so a decoder that never emits end-of-text cannot spin.
+const MAX_CAPTION_TOKENS: usize = 32;
 
 /// Describes images in words.
 pub struct Captioner {
     encoder: Mutex<Session>,
     decoder: Mutex<Session>,
     tokenizer: std::sync::Arc<tokenizers::Tokenizer>,
-    decoder_input: String,
+    feed: DecoderFeed,
+}
+
+/// The decoder's named inputs, read once when it loads.
+///
+/// The merged ViT-GPT2 export is one fixed graph rather than a generator with
+/// defaults. Every step it wants the token ids, the image features, the whole
+/// set of cache tensors — empty, on the first pass — and a boolean choosing
+/// between its two branches. It has no `attention_mask` input at all, which is
+/// what this code used to send it, so the run failed outright and the arm never
+/// produced a caption.
+struct DecoderFeed {
+    input_ids: String,
+    encoder_hidden_states: String,
+    /// Every `past_key_values.N.key` and `.value`, named explicitly: ONNX
+    /// Runtime checks a static dimension's shape even when the tensor is empty.
+    past: Vec<String>,
+    /// The shape of a cache with nothing in it: `[batch, heads, 0, head_dim]`.
+    /// Taken from the graph's own declaration rather than written down here, so
+    /// the attention width cannot drift out of step with the model.
+    empty_cache: Vec<usize>,
+    use_cache_branch: String,
+}
+
+impl DecoderFeed {
+    /// Read the decoder's signature. Anything that is not the merged export this
+    /// code was written against fails here, by name, rather than later as a
+    /// caption that came out empty for no stated reason.
+    fn discover(decoder: &Session) -> Result<Self> {
+        let mut input_ids = None;
+        let mut encoder_hidden_states = None;
+        let mut use_cache_branch = None;
+        let mut past = Vec::new();
+        let mut empty_cache = None;
+
+        for input in decoder.inputs() {
+            let name = input.name();
+            match name {
+                "input_ids" => input_ids = Some(name.to_string()),
+                "encoder_hidden_states" => encoder_hidden_states = Some(name.to_string()),
+                "use_cache_branch" => use_cache_branch = Some(name.to_string()),
+                _ if name.starts_with("past_key_values.") => {
+                    if empty_cache.is_none() {
+                        if let ort::value::ValueType::Tensor { shape, .. } = input.dtype() {
+                            // A dynamic dimension is declared as -1, which here
+                            // means the same as 0: nothing cached yet.
+                            let mut dims: Vec<usize> = shape
+                                .iter()
+                                .map(|d| usize::try_from(*d).unwrap_or(0))
+                                .collect();
+                            if dims.len() == 4 {
+                                dims[0] = 1;
+                                dims[2] = 0;
+                                empty_cache = Some(dims);
+                            }
+                        }
+                    }
+                    past.push(name.to_string());
+                }
+                _ => {}
+            }
+        }
+
+        let (
+            Some(input_ids),
+            Some(encoder_hidden_states),
+            Some(use_cache_branch),
+            Some(empty_cache),
+        ) = (
+            input_ids,
+            encoder_hidden_states,
+            use_cache_branch,
+            empty_cache,
+        )
+        else {
+            anyhow::bail!(
+                "the captioning decoder is not the merged ViT-GPT2 export this code expects: it \
+                 declares no input_ids, encoder_hidden_states, use_cache_branch or \
+                 past_key_values.* (it declares {})",
+                decoder
+                    .inputs()
+                    .iter()
+                    .map(|input| input.name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        };
+
+        Ok(Self {
+            input_ids,
+            encoder_hidden_states,
+            past,
+            empty_cache,
+            use_cache_branch,
+        })
+    }
 }
 
 impl Captioner {
@@ -79,17 +177,13 @@ impl Captioner {
         let environment = caption_environment()?;
         let encoder = build_session(environment, &encoder_path, threads)?;
         let decoder = build_session(environment, &decoder_path, threads)?;
-        let decoder_input = decoder
-            .inputs()
-            .first()
-            .map(|i| i.name().to_string())
-            .ok_or_else(|| anyhow::anyhow!("the decoder has no inputs"))?;
+        let feed = DecoderFeed::discover(&decoder)?;
 
         Ok(Self {
             encoder: Mutex::new(encoder),
             decoder: Mutex::new(decoder),
             tokenizer: std::sync::Arc::new(tokenizer),
-            decoder_input,
+            feed,
         })
     }
 
@@ -125,36 +219,52 @@ impl Captioner {
             .run(vec![(encoder_name, tensor)])
             .context("encoding the image")?;
 
-        // The merged decoder takes the image features *and* the tokens so far.
-        // The features have to outlive the decoder's outputs too.
-        let features: Vec<f32> = encoded[0]
+        // Copied out rather than borrowed: the features are handed to the
+        // decoder once per generated token, and a tensor can only be moved into
+        // a run once.
+        let (feature_shape, feature_data) = encoded[0]
             .try_extract_tensor::<f32>()
-            .context("reading the encoder features")?
-            .1
-            .to_vec();
-        let _ = features;
+            .context("reading the encoder features")?;
+        let feature_dims: Vec<usize> = feature_shape.iter().map(|d| *d as usize).collect();
+        let features: Vec<f32> = feature_data.to_vec();
+        drop(encoded);
 
         let mut decoder = self
             .decoder
             .lock()
             .map_err(|_| anyhow::anyhow!("the captioning decoder was poisoned"))?;
 
-        // One token at a time: start from BOS, ask for the next, append, stop at
-        // EOS or the context length.
+        // One token at a time. The cache is declared empty on every step and the
+        // whole sequence is re-sent, which costs a repeat of a sequence at most a
+        // few dozen tokens long and takes a stale-cache bug out of the loop
+        // entirely.
         let mut tokens: Vec<i64> = vec![BOS];
-        for _ in 0..32 {
+        for _ in 0..MAX_CAPTION_TOKENS {
+            let features =
+                Tensor::from_array((feature_dims.clone(), features.clone().into_boxed_slice()))
+                    .context("rebuilding the image features")?;
             let input_ids =
                 Tensor::from_array(([1usize, tokens.len()], tokens.clone().into_boxed_slice()))
                     .context("building the token tensor")?;
-            let mask: Vec<i64> = tokens.iter().map(|_| 1).collect();
-            let attention = Tensor::from_array(([1usize, tokens.len()], mask.into_boxed_slice()))
-                .context("building the attention mask")?;
+            let branch =
+                Tensor::from_array(([1usize], vec![false])).context("building the cache switch")?;
+
+            let mut request: Vec<(String, ort::value::DynValue)> =
+                Vec::with_capacity(self.feed.past.len() + 3);
+            request.push((self.feed.input_ids.clone(), input_ids.into_dyn()));
+            request.push((self.feed.encoder_hidden_states.clone(), features.into_dyn()));
+            request.push((self.feed.use_cache_branch.clone(), branch.into_dyn()));
+            for name in &self.feed.past {
+                let empty = Tensor::from_array((
+                    self.feed.empty_cache.clone(),
+                    Vec::<f32>::new().into_boxed_slice(),
+                ))
+                .context("building an empty cache entry")?;
+                request.push((name.clone(), empty.into_dyn()));
+            }
 
             let outputs = decoder
-                .run(vec![
-                    (self.decoder_input.clone(), input_ids),
-                    ("attention_mask".to_string(), attention),
-                ])
+                .run(request)
                 .context("running the captioning decoder")?;
 
             let (shape, logits) = outputs[0]
@@ -238,24 +348,30 @@ fn decode(tokenizer: &tokenizers::Tokenizer, tokens: &[i64]) -> Result<String> {
         .map_err(|err| anyhow::anyhow!("decoding the caption: {err}"))
 }
 
-/// The encoder's input: an RGB image at its fixed size, rescaled to `[0, 1]`.
+/// The encoder's input: an RGB image at its fixed size, prepared the way the
+/// model's own pinned preprocessor config says.
 ///
-/// Note this is the **ViT-GPT2** preprocessing, which is not the SigLIP
-/// normalisation. This model was trained on plain `[0, 1]` pixels, so reusing the
-/// `(x - 0.5) / 0.5` step from the embedding arm would produce garbage captions
-/// that look like output. The two models genuinely want different input.
+/// The pinned `preprocessor.json` is the authority here, and it is not the
+/// SigLIP one: `do_rescale` with a `rescale_factor` of 1/255, then
+/// `do_normalize` with a mean and standard deviation of 0.5, resized with
+/// `resample: 2`, which is bilinear. Applied, that is the same `(x - 0.5) / 0.5`
+/// shape the embedding arm uses — a coincidence of both models being trained
+/// around mean 0.5, not a shared convention. Each arm takes its numbers from its
+/// own pinned config.
 fn preprocess(path: &Path) -> Result<Vec<f32>> {
+    const MEAN: f32 = 0.5;
+    const STD: f32 = 0.5;
     let image = image::open(path)
         .with_context(|| format!("reading {} as an image", path.display()))?
         .into_rgb8();
     let resized =
-        image::imageops::resize(&image, SIDE, SIDE, image::imageops::FilterType::CatmullRom);
+        image::imageops::resize(&image, SIDE, SIDE, image::imageops::FilterType::Triangle);
     let plane = (SIDE as usize) * (SIDE as usize);
     let mut out = vec![0f32; 3 * plane];
     for (x, y, pixel) in resized.enumerate_pixels() {
         let at = (y as usize) * (SIDE as usize) + (x as usize);
         for channel in 0..3 {
-            out[channel * plane + at] = pixel[channel] as f32 / 255.0;
+            out[channel * plane + at] = (pixel[channel] as f32 / 255.0 - MEAN) / STD;
         }
     }
     Ok(out)
