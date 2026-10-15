@@ -2,15 +2,32 @@
 //!
 //! Every accuracy number in this repo is built on `pooler_output`, chosen by
 //! name because the graphs also emit `last_hidden_state` and it seemed the more
-//! semantically apt of the two. But the numbers themselves say something is
-//! off: unrelated photographs sit at a median cosine of 0.59–0.63, and 48%
-//! of queries miss despite the right image being one of eleven. A well-behaved
-//! contrastive space puts unrelated images near zero.
+//! semantically apt of the two. The numbers then said something might be off:
+//! unrelated photographs sit at a median cosine of 0.59-0.63, and 48% of queries
+//! missed despite the right image being one of eleven. A well-behaved contrastive
+//! space puts unrelated images near zero.
 //!
-//! So this reads all three candidates and reports each one's noise floor and
-//! top-1. If `pooler_output` is a classification head rather than the
-//! representation SigLIP was contrastively trained to align, the fix is a
-//! one-line change and every number in the repo is measuring the wrong tensor.
+//! That reading was wrong, and this test is where it gets settled. The high
+//! image-to-image similarity is anisotropy — normal for this family of models,
+//! and confirmed separately by `cross_modal_alignment` — and the misses were the
+//! model's attribute binding on an eleven-photo set built to stress exactly that.
+//!
+//! What this test demonstrates is why the *other* two candidates cannot be
+//! swapped in. It reports each one's noise floor and, the decisive number, the
+//! cosine between `pooler_output` and each alternative on the same image. If the
+//! pooler sliced one position out of `last_hidden_state`, or averaged its patches,
+//! that cosine would be 1.0. It is a few hundredths instead, signed either way, so
+//! `pooler_output` is a learned transform and `last_hidden_state` sits in a
+//! *different vector space* from the one the text tower was trained against.
+//!
+//! What that costs was measured on the 300-photo corpus by the harness recorded in
+//! `docs/performance.md`. Of the nine tower combinations it tried, eight land
+//! between 0.0013 and 0.0040 R@1 — chance is 0.0033, which is 0.0015 away by
+//! sampling error alone on 1501 queries — and the ninth is the shipped pair at
+//! 0.6629. No pooling of an unprojected space beats chance without a projection
+//! trained to read it, which is what the pooler already is. Those corpus figures
+//! come from that harness; what this test carries is the geometry behind them,
+//! re-runnable from the repository.
 //!
 //! ```
 //! cargo test --release -p tessera-core --test image_pooling -- --ignored --nocapture
@@ -199,8 +216,8 @@ fn which_output_is_the_real_embedding() {
 
     for (label, vectors) in [
         ("pooler_output", &pooled),
-        ("cls token", &cls),
-        ("mean pool", &mean),
+        ("first token", &cls),
+        ("mean patches", &mean),
     ] {
         let mut floors = Vec::new();
         for i in 0..vectors.len() {
@@ -221,4 +238,24 @@ fn which_output_is_the_real_embedding() {
             floors[floors.len() - 1]
         );
     }
+
+    // The decisive number. A pooler that sliced one position out of the hidden
+    // state, or averaged its patches, would sit at cosine 1.0 with that
+    // alternative on every image. Cosines of a few hundredths, signed either way,
+    // say the pooler is a transform learned in training and that it reads a
+    // different vector space from the one the alternatives live in — which is why
+    // they cannot be swapped in, whatever their noise floors look like.
+    let spread = |a: &[Vec<f32>], b: &[Vec<f32>]| -> (f32, f32, f32) {
+        let mut v: Vec<f32> = (0..a.len()).map(|i| cosine(&a[i], &b[i])).collect();
+        v.sort_by(|x, y| x.total_cmp(y));
+        (v[0], v.iter().sum::<f32>() / v.len() as f32, v[v.len() - 1])
+    };
+    let (cls_min, cls_mean, cls_max) = spread(&pooled, &cls);
+    let (pool_min, pool_mean, pool_max) = spread(&pooled, &mean);
+    eprintln!(
+        "\ncosine(pooler_output, alternative) over {} images:",
+        pooled.len()
+    );
+    eprintln!("  first token  min {cls_min:+.4}  mean {cls_mean:+.4}  max {cls_max:+.4}");
+    eprintln!("  mean patches min {pool_min:+.4}  mean {pool_mean:+.4}  max {pool_max:+.4}");
 }

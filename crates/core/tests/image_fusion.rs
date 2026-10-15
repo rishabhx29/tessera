@@ -16,6 +16,18 @@
 //! The interesting outcome is not whichever number is highest. It is whether the
 //! image arm *adds* anything over text on a corpus that is mostly text.
 //!
+//! Every file here has text, so this is the corpus where the image arm is
+//! weakest and the one where down-weighting it has to be justified rather than
+//! asserted. The sweep at the foot of the test reports the top-1, top-10 and
+//! kept-in-top-10 accuracy for each value of the image arm's vote, from 0
+//! (lexical alone) to 1 (equal weight), and how many queries fusion rescued that
+//! text alone missed. It found the cliff between 0.05 and 0.06 — so 0.1, which an
+//! earlier run of this corpus endorsed, costs 10.7 points — and it found that
+//! `rescued` is 0 at every weight, on a denominator of 2. The lexical arm misses
+//! 2 of these 56 queries, so this corpus cannot show what a second arm adds; it
+//! can only show what one costs. The sweep reports that, and the ticket picks the
+//! constant from it, without either claiming a benefit the corpus cannot see.
+//!
 //! ```
 //! cargo test --release -p tessera-core --test image_fusion -- --ignored --nocapture
 //! ```
@@ -71,6 +83,45 @@ fn rank_by(scores: Vec<(usize, f32)>) -> Vec<usize> {
     scored.sort_by(|a, b| b.1.total_cmp(&a.1));
     scored.into_iter().map(|(i, _)| i).collect()
 }
+
+/// Reciprocal Rank Fusion with the image arm's vote scaled.
+///
+/// Ranks are positions, so this is the arithmetic ADR-0003 specifies — never a
+/// raw score, because an overlap ratio and a cosine are not the same quantity.
+/// `w_image` scales one arm's contribution; `1.0` is the equal-weight fusion
+/// ADR-0003 describes and `0.0` is the lexical arm alone.
+fn fuse(image_rank: &[usize], text_rank: &[usize], n: usize, w_image: f32) -> Vec<usize> {
+    // Both arms rank every file, so a position always exists; an absent one
+    // would score as the worst rank rather than being dropped, which is how RRF
+    // treats a document one arm did not return.
+    let position = |ranks: &[usize], i: usize| {
+        ranks
+            .iter()
+            .position(|x| *x == i)
+            .map_or(n as f32, |position| position as f32)
+    };
+    rank_by(
+        (0..n)
+            .map(|j| {
+                let image_rank = position(image_rank, j);
+                let text_rank = position(text_rank, j);
+                (
+                    j,
+                    1.0 / (RRF_K + text_rank + 1.0) + w_image / (RRF_K + image_rank + 1.0),
+                )
+            })
+            .collect(),
+    )
+}
+
+/// The image arm's vote, swept. `1.0` reproduces equal-weight RRF and `0.0` is
+/// the lexical arm on its own, so the two constants ticket 10 argues about are
+/// both here as endpoints of the same curve. The steps are fine between 0.04 and
+/// 0.10 because the first sweep put a cliff somewhere in that interval: 0.05 held
+/// 0.964 and 0.10 had already fallen to 0.857.
+const IMAGE_WEIGHTS: [f32; 14] = [
+    0.0, 0.02, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1, 0.15, 0.2, 0.35, 0.5, 1.0,
+];
 
 #[test]
 #[ignore = "needs the siglip model set"]
@@ -134,90 +185,117 @@ fn does_fusing_the_ocr_text_recover_description_search() {
     }
     eprintln!("corpus: {} images with text", images.len());
 
-    let (mut img_only, mut txt_only, mut fused, mut fused_image_only) = (0, 0, 0, 0);
     let n = images.len();
+    let (mut img_only, mut txt_only, mut scored, mut lexical_misses) = (0, 0, 0, 0);
+    // One slot per weight in the sweep: top-1, top-10, the share of answers that
+    // stayed inside the fused top 10, and the queries fusion put first that the
+    // text arm had not.
+    let mut top1 = vec![0usize; IMAGE_WEIGHTS.len()];
+    let mut top10 = vec![0usize; IMAGE_WEIGHTS.len()];
+    let mut kept = vec![0usize; IMAGE_WEIGHTS.len()];
+    let mut rescued = vec![0usize; IMAGE_WEIGHTS.len()];
 
     for (i, text) in texts.iter().enumerate().take(n) {
         // Each image's own OCR text is the query. It is the easiest possible
         // question and the same one the image-arm benchmark uses, so the two
         // numbers are directly comparable.
-        {
-            let Ok(query) = embedder.embed_text(text, DIM) else {
-                continue;
-            };
-            let q_terms = terms(text);
+        let Ok(query) = embedder.embed_text(text, DIM) else {
+            continue;
+        };
+        let q_terms = terms(text);
 
-            let image_ranks = rank_by(
-                images
-                    .iter()
-                    .enumerate()
-                    .map(|(j, e)| (j, cosine(&query, e)))
-                    .collect(),
-            );
-            let text_ranks = rank_by(
-                doc_terms
-                    .iter()
-                    .enumerate()
-                    .map(|(j, t)| (j, lexical(&q_terms, t)))
-                    .collect(),
-            );
+        let image_ranks = rank_by(
+            images
+                .iter()
+                .enumerate()
+                .map(|(j, e)| (j, cosine(&query, e)))
+                .collect(),
+        );
+        let text_ranks = rank_by(
+            doc_terms
+                .iter()
+                .enumerate()
+                .map(|(j, t)| (j, lexical(&q_terms, t)))
+                .collect(),
+        );
 
-            let image_rank = |i: usize| {
-                image_ranks
-                    .iter()
-                    .position(|x| *x == i)
-                    .unwrap_or(usize::MAX)
-            };
-            let text_rank = |i: usize| {
-                text_ranks
-                    .iter()
-                    .position(|x| *x == i)
-                    .unwrap_or(usize::MAX)
-            };
+        // Both arms rank every file, so both of these resolve. A missing
+        // position would mean an arm had dropped a file, which would make the
+        // fusion below a different calculation than the one under test.
+        let image_rank = image_ranks
+            .iter()
+            .position(|x| *x == i)
+            .expect("the image arm ranks every file");
+        let text_rank = text_ranks
+            .iter()
+            .position(|x| *x == i)
+            .expect("the text arm ranks every file");
+        let text_top: BTreeSet<usize> = text_ranks.iter().take(10).copied().collect();
 
-            // Fused by RRF: rank positions combine, not raw scores, because a
-            // cosine in [0,1] and an overlap ratio in [0,1] are not the same
-            // quantity even though both are unitless (ADR-0003).
-            let fused_rank = rank_by(
-                (0..n)
-                    .map(|j| {
-                        let ir = image_rank(j) as f32;
-                        let tr = text_rank(j) as f32;
-                        let score = if ir == f32::MAX || tr == f32::MAX {
-                            f32::MIN
-                        } else {
-                            1.0 / (RRF_K + ir + 1.0) + 1.0 / (RRF_K + tr + 1.0)
-                        };
-                        (j, score)
-                    })
-                    .collect(),
-            );
+        img_only += usize::from(image_rank == 0);
+        txt_only += usize::from(text_rank == 0);
+        scored += 1;
 
-            // Does the image arm *change* anything when text is present?
-            // Ranking first among the text arm's top 10 isolates that.
-            let text_top: BTreeSet<usize> = text_ranks.iter().take(10).copied().collect();
-            let image_promoted =
-                text_top.contains(&i) && fused_rank.iter().take(10).any(|x| *x == i);
+        // One fusion per weight, computed once and used for every column.
+        let fusions: Vec<Vec<usize>> = IMAGE_WEIGHTS
+            .iter()
+            .map(|w_image| fuse(&image_ranks, &text_ranks, n, *w_image))
+            .collect();
 
-            img_only += usize::from(image_rank(i) == 0);
-            txt_only += usize::from(text_rank(i) == 0);
-            fused += usize::from(fused_rank[0] == i);
-            fused_image_only += usize::from(image_promoted);
+        // The queries the image arm could possibly help with: the ones the text
+        // arm did not already put first. This is the denominator that decides
+        // whether "the image arm adds something" is even an answerable question
+        // on this corpus, so it is printed rather than assumed to be large.
+        let lexical_missed = text_rank > 0;
+        if lexical_missed {
+            lexical_misses += 1;
+        }
+
+        for (slot, fused) in fusions.iter().enumerate() {
+            top1[slot] += usize::from(fused[0] == i);
+            top10[slot] += usize::from(fused.iter().take(10).any(|x| *x == i));
+            // Regression guard: an answer the text arm had already found must
+            // not be pushed out of the fused top 10 by an arm that is weaker on
+            // this corpus.
+            kept[slot] +=
+                usize::from(text_top.contains(&i) && fused.iter().take(10).any(|x| *x == i));
+            if lexical_missed {
+                rescued[slot] += usize::from(fused[0] == i);
+            }
         }
     }
 
-    let d = n.max(1) as f64;
+    let d = scored.max(1) as f64;
     eprintln!("\n==== does OCR text rescue description search? ====");
-    eprintln!("corpus                         {n}");
+    eprintln!("corpus                         {scored}");
     eprintln!("image arm alone (top-1)        {:.3}", img_only as f64 / d);
-    eprintln!("OCR text alone (top-1)        {:.3}", txt_only as f64 / d);
-    eprintln!("fused by RRF (top-1)          {:.3}", fused as f64 / d);
+    eprintln!("OCR text alone (top-1)         {:.3}", txt_only as f64 / d);
     eprintln!(
-        "image arm changed the top-10   {:.3}   <- the image arm's *marginal* value",
-        fused_image_only as f64 / d
+        "queries the image arm could help   {lexical_misses}   \
+         <- the ones the text arm did not already rank first"
     );
+
+    eprintln!("\n-- the image arm's vote, swept --");
     eprintln!(
-        "\n(8w / 5w query styles are computed but not scored here; the\n\
-             numbers above use each image's full OCR text as its own query.)"
+        "{:>8}  {:>7}  {:>7}  {:>7}  {:>10}",
+        "w_image", "top-1", "top-10", "kept", "rescued"
+    );
+    for (slot, w_image) in IMAGE_WEIGHTS.iter().enumerate() {
+        eprintln!(
+            "{w_image:>8.2}  {:>7.3}  {:>7.3}  {:>7.3}  {:>4}/{:<5}",
+            top1[slot] as f64 / d,
+            top10[slot] as f64 / d,
+            kept[slot] as f64 / d,
+            rescued[slot],
+            lexical_misses
+        );
+    }
+    eprintln!(
+        "\nw_image 0.00 is the lexical arm alone and 1.00 is the equal-weight fusion\n\
+         ADR-0003 describes. `kept` is the share of queries whose answer stayed in\n\
+         the fused top 10; `rescued` is how many of the queries above the text arm\n\
+         missed at rank 1 were put first by fusion.\n\
+         \n(8w / 5w query styles are computed but not scored here; the numbers above\n\
+         use each image's full OCR text as its own query.)"
     );
 }

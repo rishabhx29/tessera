@@ -1,11 +1,22 @@
 //! Does weighting the arms by how much text a file has preserve both?
 //!
 //! Ticket 10 was about to be built as equal-weight Reciprocal Rank Fusion, which
-//! ticket 07 measured scores **0.375** against **0.964** for the lexical arm
-//! alone on 56 real screenshots. This tests the correction before any of it is
-//! written into the engine: if down-weighting the image arm restores 0.964 while
-//! leaving textless images findable, the design is right and the ticket can be
-//! built to it.
+//! ticket 07 measured at **0.375** against **0.964** for the lexical arm alone on
+//! real screenshots. This runs the correction *before* any of it is written into
+//! the engine: the weights become a function of the file — `(1.0, 0.05)` where the
+//! file has text, `(0.0, 1.0)` where it has none.
+//!
+//! It reports four rows, because the weighted one only means something against
+//! all three of the others:
+//!
+//! - **lexical alone** — what the product has today
+//! - **image alone** — the arm being added
+//! - **weighted** — the correction
+//! - **equal weight** — ADR-0003 as written, and the reason the correction exists
+//!
+//! `image_fusion` carries the full sweep of the image arm's vote and is where the
+//! constant `0.05` comes from. This test pins the constants and the reason for
+//! each; the sweep is the evidence.
 //!
 //! ```
 //! cargo test --release -p tessera-core --test image_weighting -- --ignored --nocapture
@@ -21,15 +32,20 @@ use tessera_core::vectors::{cosine, Embedding};
 const DIM: usize = 768;
 const RRF_K: f32 = 60.0;
 
-/// The arm weights, and the reason each number is what it is.
+/// How much each arm's vote is worth on a file that does have text.
 ///
-/// The image arm is worth 0.1 rather than 0 on files that have text because it is
-/// the only way to break a tie between two screenshots that contain the same
-/// words, and 0 rather than 0.5 because it is worse than chance on most of a
-/// screenshot corpus.
-const WEIGHT_WITH_TEXT: (f32, f32) = (1.0, 0.1);
-/// A file with no text has nothing for the lexical arm to match on, so it gets
-/// no vote at all rather than a suppressed one.
+/// `0.05` is the largest value measured to cost the lexical arm nothing: over 56
+/// real screenshots with each image's own OCR text as the query, the lexical arm
+/// scores 0.964 alone, 0.964 at 0.05, and 0.857 at 0.10 — which is the value this
+/// constant held before, on the endorsement of a smaller run of this corpus.
+///
+/// The image arm's *benefit* on files with text is neither measured nor claimed:
+/// the lexical arm misses 2 of those 56 queries, so nothing in that corpus can
+/// show a second arm helping. What is measured is that this weight costs nothing,
+/// and that is all this constant is set from.
+const WEIGHT_WITH_TEXT: (f32, f32) = (1.0, 0.05);
+/// A file with no text has nothing for the lexical arm to match on, so it gets no
+/// vote at all rather than a suppressed one.
 const WEIGHT_WITHOUT_TEXT: (f32, f32) = (0.0, 1.0);
 
 fn models() -> Models {
@@ -72,6 +88,10 @@ fn weighting_the_arms_by_text_content_preserves_both() {
     );
     let ocr = tessera_core::ocr::select(&tessera_core::ocr::OcrChoice::Native, &models).unwrap();
 
+    // The whole folder, with no cap. An earlier version of this took the first 40
+    // when it meant to sample 40, so its corpus was a prefix rather than a slice
+    // and its numbers could not be compared with `image_fusion`, which uses all of
+    // them. Two tests measuring the same design should measure the same files.
     let mut all: Vec<PathBuf> = std::fs::read_dir(&folder)
         .unwrap()
         .flatten()
@@ -84,10 +104,6 @@ fn weighting_the_arms_by_text_content_preserves_both() {
         })
         .collect();
     all.sort();
-    if all.len() > 40 {
-        let stride = all.len() / 40;
-        all = (0..40).map(|i| all[i * stride].clone()).collect();
-    }
 
     let mut images: Vec<Embedding> = Vec::new();
     let mut terms: Vec<Vec<String>> = Vec::new();
@@ -112,11 +128,9 @@ fn weighting_the_arms_by_text_content_preserves_both() {
         );
     }
     let n = images.len();
-    eprintln!("corpus: {n} images");
+    eprintln!("corpus: {n} images, all of which have text");
 
-    let mut equal = 0usize;
-    let mut weighted = 0usize;
-    let mut lexical_only = 0usize;
+    let (mut lexical_alone, mut image_alone, mut equal, mut weighted) = (0, 0, 0, 0);
 
     for i in 0..n {
         let Ok(query) = embedder.embed_text(&texts[i], DIM) else {
@@ -159,9 +173,9 @@ fn weighting_the_arms_by_text_content_preserves_both() {
 
         // The weights are a function of the file, so they are selected per
         // candidate rather than once. Every file in this corpus has text, so
-        // `WEIGHT_WITHOUT_TEXT` is the branch that never fires here - which is
-        // the honest statement about this corpus, and pinning it is what keeps
-        // a later change to the no-text case from being silently unseen.
+        // `WEIGHT_WITHOUT_TEXT` is the branch that never fires here — which is the
+        // honest statement about this corpus, and pinning it is what keeps a later
+        // change to the no-text case from being silently unseen.
         let fused = |equal_weight: bool| -> Vec<usize> {
             let mut scored: Vec<(usize, f32)> = (0..n)
                 .map(|j| {
@@ -182,35 +196,47 @@ fn weighting_the_arms_by_text_content_preserves_both() {
             scored.into_iter().map(|(j, _)| j).collect()
         };
 
-        let equal_ranked = fused(true);
-        let weighted_ranked = fused(false);
-        lexical_only += usize::from(image_ranked.first() == Some(&i));
-        let _ = lexical_only;
-        equal += usize::from(equal_ranked.first() == Some(&i));
-        weighted += usize::from(weighted_ranked.first() == Some(&i));
-        let lexical_hit = *lexical_rank.get(&i).unwrap() == 0;
-        equal -= 0;
-        weighted += 0;
-        let _ = lexical_hit;
+        lexical_alone += usize::from(lexical_ranked.first() == Some(&i));
+        image_alone += usize::from(image_ranked.first() == Some(&i));
+        equal += usize::from(fused(true).first() == Some(&i));
+        weighted += usize::from(fused(false).first() == Some(&i));
     }
 
     let d = n.max(1) as f64;
     eprintln!("\n== weighting the arms, on files that all have text ==");
     eprintln!(
-        "equal-weight RRF (ticket 10 as written)  {:.3}",
-        equal as f64 / d
+        "lexical arm alone                         {:.3}",
+        lexical_alone as f64 / d
+    );
+    eprintln!(
+        "image arm alone                           {:.3}",
+        image_alone as f64 / d
     );
     eprintln!(
         "weighted RRF (the correction)             {:.3}",
         weighted as f64 / d
     );
     eprintln!(
-        "\nIf the two numbers are the same, the weights are not doing what the\n\
-         ticket says they do. Worth knowing before building either of them."
+        "equal-weight RRF (ADR-0003 as written)    {:.3}",
+        equal as f64 / d
+    );
+    eprintln!(
+        "\nThe weighted row is the point of the design, so it is reported against\n\
+         the lexical arm rather than against equal weight alone. Whether the two\n\
+         are equal exactly is left as a report and not an assertion: this corpus\n\
+         is a folder of real screenshots on one machine, and an assertion on an\n\
+         exact tie would be asserting a fixture this test does not have."
     );
 
     assert!(
-        weighted as f64 / d > equal as f64 / d,
+        equal < lexical_alone,
+        "equal-weight fusion was expected to be far worse than the lexical arm \
+         alone on a corpus like this, and it was not ({equal} against \
+         {lexical_alone}); if that is genuinely true the correction is \
+         unnecessary and ticket 10 needs rewriting, not fixing"
+    );
+    assert!(
+        weighted > equal,
         "down-weighting the image arm did not help, so the correction is wrong"
     );
 }
