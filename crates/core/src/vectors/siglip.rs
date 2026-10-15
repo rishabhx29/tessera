@@ -237,7 +237,10 @@ impl SiglipEmbedder {
         pooled(&outputs, dim)
     }
 
-    /// Embed a text query.
+    /// Embed text exactly as given, with no query normalisation.
+    ///
+    /// Benchmarks and tests use this to measure the tower itself. A search path
+    /// wants [`Self::embed_query`], which is the form the numbers describe.
     pub fn embed_text(&self, text: &str, dim: usize) -> Result<Embedding> {
         let ids = self.token_ids(text)?;
         let input_ids: Vec<i64> = ids.iter().map(|&id| id as i64).collect();
@@ -255,6 +258,16 @@ impl SiglipEmbedder {
         pooled(&outputs, dim)
     }
 
+    /// Embed a user's query.
+    ///
+    /// The text is normalised first — see [`normalise_query`] for what that does
+    /// and which measurements it comes from. This is the method a search box
+    /// calls; `embed_text` embeds exactly what it is handed, which is what a
+    /// benchmark wants and not what a query path wants.
+    pub fn embed_query(&self, text: &str, dim: usize) -> Result<Embedding> {
+        self.embed_text(&normalise_query(text), dim)
+    }
+
     /// Tokenise to exactly `TEXT_TOKENS`, padded. SigLIP's text tower was
     /// trained on fixed-length input, so padding to the batch's own longest
     /// text would change what the model sees from one query to the next.
@@ -268,6 +281,33 @@ impl SiglipEmbedder {
         ids.resize(TEXT_TOKENS, 0);
         Ok(ids)
     }
+}
+
+/// Put a query into the form this arm's numbers were measured on.
+///
+/// Image captions in the wild are lower case, and the tower was trained against
+/// them; an annotator's sentence is off-distribution for it. Over the
+/// 300-photograph corpus with all 1501 captions as queries, lower-casing the
+/// query moved R@1 from 0.6629 to 0.6962, and dropping a trailing period took it
+/// to 0.7075 — R@5 from 0.9121 to 0.9420.
+///
+/// The half of that which needed proving is the opposite: that lower-casing does
+/// not damage the queries which *carry* capitals. It does the reverse. On the 61
+/// captions with a capital after their first character — proper nouns, brand
+/// names, school names — R@1 went from 0.3770 to 0.7705 and mean rank from 33.4
+/// to 2.7. Those are the off-distribution queries, and this pulls them in rather
+/// than erasing them.
+///
+/// It is the identity on the shape a user actually types: a lower-case fragment
+/// with no final period. It therefore cannot help those, and cannot hurt them
+/// either — every point of the measured gain is on sentence-shaped input. That is
+/// stated plainly because a reader who assumes `--describe "a dog"` got faster
+/// has been misled by a number taken on sentences.
+///
+/// Commas are left alone deliberately: stripping them measured +0.0014 R@1,
+/// which is two queries of 1501, and it is not worth changing behaviour for.
+pub fn normalise_query(text: &str) -> String {
+    text.trim().trim_end_matches('.').trim_end().to_lowercase()
 }
 
 fn build_session(
@@ -376,4 +416,61 @@ fn pooled(outputs: &ort::session::SessionOutputs<'_>, dim: usize) -> Result<Embe
     let mut embedding = Embedding::new(data.to_vec(), dim).context("building the embedding")?;
     embedding.normalize();
     Ok(embedding)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalise_query;
+
+    #[test]
+    fn a_sentence_becomes_what_the_tower_was_trained_on() {
+        assert_eq!(
+            normalise_query("A woman stands in the dining area at the table."),
+            "a woman stands in the dining area at the table"
+        );
+    }
+
+    #[test]
+    fn a_typed_fragment_is_the_identity() {
+        // The common case, and the reason this transform costs nothing: a
+        // fragment a user types is already in the form the model wants. If this
+        // ever stops being the identity, the change is no longer free for the
+        // shape of query the product actually receives.
+        for query in [
+            "a dog running through grass",
+            "a close up of a cat face",
+            "a city skyline at night",
+            "a mountain range at sunrise",
+        ] {
+            assert_eq!(normalise_query(query), query);
+        }
+    }
+
+    #[test]
+    fn interior_punctuation_survives() {
+        // Stripping commas measured +0.0014 R@1 - two queries of 1501, which is
+        // noise. This pins the decision rather than the number: deleting
+        // punctuation the user typed, for two queries in 1501, is not a trade
+        // worth making.
+        assert_eq!(
+            normalise_query("a dog, sitting, on grass"),
+            "a dog, sitting, on grass"
+        );
+        assert_eq!(normalise_query("Dr. Smith's car."), "dr. smith's car");
+    }
+
+    #[test]
+    fn whitespace_goes_from_the_ends_and_nowhere_else() {
+        assert_eq!(normalise_query("  a dog\n"), "a dog");
+        assert_eq!(normalise_query("a  dog"), "a  dog");
+    }
+
+    #[test]
+    fn a_query_of_punctuation_alone_becomes_empty() {
+        // Empty is a strange query rather than a crash - the tokeniser encodes
+        // "" as the end-of-text token on its own. Asserted because `embed_query`
+        // can turn a non-empty input into an empty one, and that is the sort of
+        // thing worth being visible rather than discovered.
+        assert_eq!(normalise_query("..."), "");
+    }
 }

@@ -291,7 +291,7 @@ pub fn run() -> Result<()> {
                 };
                 let embedder = std::sync::Arc::new(embedder);
                 let started = std::time::Instant::now();
-                let vector = embedder.embed_text(&description, IMAGE_EMBEDDING_DIM)?;
+                let vector = embedder.embed_query(&description, IMAGE_EMBEDDING_DIM)?;
                 let hits = store.describe(&vector, IMAGE_EMBEDDING_DIM, limit)?;
                 eprintln!(
                     "described in {:.0} ms",

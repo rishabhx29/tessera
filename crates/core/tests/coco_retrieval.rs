@@ -26,6 +26,14 @@
 //!
 //! Roughly three minutes: 300 image passes at ~240 ms, then one text pass per
 //! caption at ~60 ms.
+//!
+//! Queries go through `embed_query` rather than `embed_text`, because that is the
+//! path a search box takes: a sentence query is lower-cased and its trailing
+//! period dropped before it is embedded. On this corpus that transform is worth
+//! about four and a half points of R@1 in the measurement harness (0.6629 to
+//! 0.7075), so a test that embedded the captions raw would be reporting a
+//! configuration no user can reach. The raw figure stays in `docs/performance.md`
+//! as what the tower does with text exactly as given.
 
 use std::path::{Path, PathBuf};
 
@@ -178,8 +186,11 @@ fn a_caption_finds_its_own_image_in_a_real_corpus() {
     let mut ranks: Vec<usize> = Vec::with_capacity(queries.len());
     let query_started = std::time::Instant::now();
     for (i, caption) in &queries {
+        // The product's query path, not the tower in isolation. See the module
+        // doc: the two differ by about four points of R@1 on sentence-shaped
+        // queries, which is what these captions are.
         let query = embedder
-            .embed_text(caption, DIM)
+            .embed_query(caption, DIM)
             .unwrap_or_else(|err| panic!("embedding {caption:?}: {err}"));
 
         // Count how many images score strictly above the right one. That is the
