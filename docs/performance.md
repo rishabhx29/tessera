@@ -348,22 +348,48 @@ for text alone: the weak arm dilutes the strong one. Any fusion has to be
 weighted by how much text a given file actually has, which is not ticket 10's
 default reciprocal-rank treatment.
 
-### The embedding space is flat, and the int8 export is why
+**And the weight is a measurement, not a preference.** The same test sweeps the
+image arm's vote over the same 56 screenshots, changing nothing else:
+
+| `w_image` | top-1 | top-10 | rescued |
+|---|---|---|---|
+| 0.00 — lexical arm alone | 0.964 | 1.000 | 0/2 |
+| **0.05 — the weight ticket 10 pins** | **0.964** | 1.000 | 0/2 |
+| 0.10 | 0.857 | 1.000 | 0/2 |
+| 0.20 | 0.679 | 1.000 | 0/2 |
+| 1.00 — equal weight, ADR-0003 as written | 0.375 | 0.875 | 0/2 |
+
+`rescued` counts queries the lexical arm missed at rank 1 that fusion then put
+first, and it is 0 at every weight, equal weight included. That is not evidence
+against the image arm: the denominator is 2 — the lexical arm misses 2 of these 56
+queries — so this corpus has no headroom in which a second signal could show its
+value. It shows what an arm *costs*, and that is what the weight is set from.
+
+The cliff sits between 0.05 and 0.06, where one step of 0.01 costs 3.5 points. The
+value this project first chose, 0.10, costs 10.7.
+
+### The embedding space is flat, and the int8 export is not why
 
 Median cosine between two **unrelated** screenshots is **0.508**, and 63% of
 queries have their top two candidates within 0.01. The week-1 spike recorded the
 same thing independently â€” "cosine 0.55 against pure noise" â€” and filed it as a
 caveat.
 
-This is real, but it is **not** what is holding the feature back, and the
-control says so: the same int8 weights separate visual scenes perfectly. Flatness
-costs precision at the ambiguous middle, not the ability to tell a dog from a
-chart.
+The first reading of that number was that the quantised export had flattened the
+space, which made fp32 weights (776 MB) the obvious fix. Both halves of that were
+wrong, and both were measured rather than argued:
 
-fp32 SigLIP (776 MB) is the way to widen the dynamic range. **It was not
-obtained**: this machine received ~1.9 MB in 40 minutes from that host, roughly
-150 hours for the pair. It is the largest untested lever and is recorded as such
-rather than assumed to help.
+- **fp32 was obtained**, and compared against int8 later in this file. The noise
+  floor moved from 0.508 to 0.516 and top-1 did not move at all.
+- **A flat space is not a defect.** `cargo test --release -p tessera-core --test
+  cross_modal_alignment` measures it directly, and one of that test's assertions
+  is *that this stays high*: raw transformer embeddings are anisotropic, they
+  share a large common direction, so unrelated pairs sit near a positive baseline
+  instead of near zero. In a healthy model that is expected, not broken.
+
+What the flatness actually costs is precision in the ambiguous middle, not the
+ability to tell a dog from a chart: the six-scene control above scores 6/6 on
+these same weights.
 
 ### What this means for the feature
 
@@ -389,8 +415,9 @@ become queries. Hardware as above, release build, `ort` 2.0.0-rc.14 / ONNX
 Runtime 1.31 CPU provider, 4 intra-op threads.
 
 **The pinned weights are int8-quantised** (`*_model_quantized.onnx`), so every
-number here is for a quantised model. Quantisation is an obvious lever on
-retrieval quality and it has not been compared against fp32.
+number here is for a quantised model. Quantisation was the first thing suspected
+of causing the flat space described above; it was later compared directly against
+fp32 on the same corpora and made no difference. See "fp32 vs int8" below.
 
 | Metric | Value |
 |---|---|
@@ -515,7 +542,10 @@ would fix this.
 
 ## The right tensor is still the wrong shape
 
-Three candidate outputs were compared over 24 photographs:
+Three candidate outputs were compared over the photographs in `TESSERA_PHOTOS`,
+sampled to at most 24. The floors below reproduce to three decimals on the
+eleven-photo set, which is where the top-1 column comes from — so they are a
+property of the representation rather than of the folder:
 
 | Output | noise floor | description search top-1 |
 |---|---|---|
@@ -528,8 +558,46 @@ retrieval. That is not a contradiction to resolve: this export has 196 tokens
 with no CLS position, so token 0 is a 16x16 patch of the image. A patch discriminates
 images from each other beautifully and has no idea what any of them contains.
 
+The dash in the last row is filled in below, measured on the 300-photo corpus
+rather than on these 24 photographs: 0.0040 R@1.
+
 `pooler_output` stays, and all three numbers are recorded because the obvious
 alternatives both failing is itself the finding.
+
+### Why they fail — and it is not that they are worse
+
+The table above leaves the mechanism open, and its obvious reading is that a
+pooled average loses detail a patch keeps. That is not what is happening.
+Measured on the 300-photo corpus, same images and same captions as the headline:
+
+| pooling | tower | R@1 | R@5 | R@10 | mean rank |
+| --- | --- | --- | --- | --- | --- |
+| `pooler_output` — **shipped** | both | **0.6629** | 0.9121 | 0.9660 | 4.0 |
+| hidden state at the end token | text | 0.0020 | 0.0127 | 0.0266 | 153.9 |
+| mean over the 64 token positions | text | 0.0020 | 0.0153 | 0.0333 | 152.7 |
+| mean over the 196 patches | vision | 0.0040 | 0.0153 | 0.0380 | 143.3 |
+| max over the 196 patches | vision | 0.0020 | 0.0120 | 0.0280 | 147.8 |
+
+Chance is 1 in 300, which is 0.0033. Every alternative lands on it, and of the
+nine combinations of the two towers scored here, eight land on it — the ninth is
+the pair the engine ships.
+
+That is not a pooling result, it is a units error, and the diagnostic says so
+plainly: the cosine between `pooler_output` and the end token's hidden state,
+over the first 50 queries, averages 0.0115 and never exceeds 0.0826. If the
+pooler sliced a position out of `last_hidden_state` that cosine would be 1.0. It
+does not slice; it transforms, and `last_hidden_state` is therefore a *different
+vector space* from the one the other tower was trained to meet.
+
+So the honest reading is not "mean pooling loses information". It is "nothing
+comparable was tried". A pooled embedding can only be judged against a
+projection trained to read it, and this export contains exactly one such
+projection — the pooler it already ships. Judging the alternatives fairly would
+mean training a projection, which is a different project with a different
+budget.
+
+`pooler_output` stays, now for a stated reason rather than by default: in this
+export it is the only pooled embedding in the space the other tower lives in.
 
 ## The towers were always comparable, and "missing projection heads" was a category error
 
@@ -632,18 +700,29 @@ named by `TESSERA_CORPUS`. The corpus is 300 photographs drawn from the COCO
 2014 validation split, minimum side 320 px, each carrying the five captions real
 annotators wrote for it — 1501 queries over 300 images. The test measures
 `SiglipEmbedder`, the type the engine ships, with the shipped stretch
-preprocessing, so this is the product's number rather than a benchmark's.
+preprocessing and the shipped query path, so this is the product's number rather
+than a benchmark's.
 
-| metric | value |
-| --- | --- |
-| R@1 | **0.6582** (988 of 1501) |
-| R@5 | **0.9134** (1371 of 1501) |
-| R@10 | **0.9627** (1445 of 1501) |
-| median rank | 1 of 300 |
-| mean rank | 4.0 of 300 |
-| chance R@1 | 0.0033 |
-| indexing | 77.9 s — 260 ms per image |
-| queries | 98.4 s — 66 ms per query |
+| metric | caption embedded as written | **through the shipped query path** |
+| --- | --- | --- |
+| R@1 | 0.6582 (988 of 1501) | **0.7015** (1053 of 1501) |
+| R@5 | 0.9134 (1371 of 1501) | **0.9454** (1419 of 1501) |
+| R@10 | 0.9627 (1445 of 1501) | **0.9813** (1473 of 1501) |
+| median rank | 1 of 300 | 1 of 300 |
+| mean rank | 4.0 of 300 | 2.3 of 300 |
+| chance R@1 | 0.0033 | 0.0033 |
+
+Both columns are this one test, before and after the query transform below: the
+test embeds through `embed_query`, and the left column is the run that predates
+it. The right column is what the product does today.
+
+Latency does not move with it — the transform is string work in front of the same
+single encoder pass. The post-change run is its own control: it printed 312 ms per
+image against 260 ms on the *indexing* half, a path the change does not touch at
+all, on a machine that was downloading a model at the time. So the timings stand
+as the clean run measured them: **77.9 s to index**, 260 ms per image, and **98.4
+s for 1501 queries**, 66 ms per query. The 82 ms in the later run is the same load
+that 312 is, and neither figure is the one to quote.
 
 Ties are broken against the model: a caption's rank is one plus the number of
 images scoring *strictly* higher, so an image level with the right answer counts
@@ -653,10 +732,13 @@ headline by 0.07 percentage points rather than 9.
 ### What this number means
 
 The 0.85 that was asked for is **met at rank 5 and missed at rank 1**. Read as
-top-1 accuracy, description search is at 66%; read as "the right photograph is
-in the first row of results", it is at 91%. Both readings are honest and they
-answer different product questions, so the target cannot be scored until it is
-said which one it meant.
+top-1 accuracy, description search is at 70%; read as "the right photograph is in
+the first row of results", it is at 95%. Both readings are honest and they answer
+different product questions, so the target cannot be scored until it is said which
+one it meant. Nothing in `docs/product-definition.md` sets a numeric bar for this
+feature — it asks for a "CLIP text↔image embedding space for description queries"
+and says nothing about recall — so this is the one number in this file the
+repository cannot supply a reading for on its own.
 
 This is the first measurement on which mechanism comparisons are meaningful. 300
 images and 1501 queries resolve a difference of a few percentage points; the
@@ -669,6 +751,66 @@ interactive, and 66 ms per query is what a keystroke can afford only with
 debouncing. Any fix that adds a second encoder pass per query multiplies that 66
 ms, which is why the combined export was rejected on cost rather than on
 quality.
+
+### The query was worth more than the model — and it is shipped
+
+Before spending anything on a better encoder, the query itself was fixed. It cost
+nothing, and it moved rank 1 further than either mechanism below moves it.
+
+Captions written by annotators are sentences. The tower was trained on alt text,
+which is lower case and ends without a period, so a sentence is off-distribution
+for it. Five transforms, same 1501 captions, same images, one harness:
+
+| query transform | R@1 | R@5 | R@10 | mean rank |
+| --- | --- | --- | --- | --- |
+| as written — the shipped path until this change | 0.6629 | 0.9121 | 0.9660 | 4.04 |
+| first letter lower-cased | 0.6849 | 0.9287 | 0.9734 | 3.56 |
+| whole query lower-cased | 0.6962 | 0.9394 | 0.9827 | 2.34 |
+| lower-cased, trailing period dropped — **shipped** | **0.7075** | **0.9420** | **0.9833** | 2.28 |
+| lower-cased, period *and* commas dropped | 0.7089 | 0.9440 | 0.9840 | 2.27 |
+
+The last row is the one the harness found first, and commas are deliberately not
+in the shipped transform: they are worth +0.0014 R@1, two queries of 1501, and
+deleting punctuation a person typed, for two queries in 1501, is not a trade
+worth making. `SiglipEmbedder::normalise_query` lower-cases, drops the trailing
+period and trims, and `embed_query` applies it before the text tower sees
+anything.
+
+In the engine, through that path, the test above moves from 0.6582 to **0.7015**
+R@1 and from 0.9134 to **0.9454** R@5. The harness's 0.7075 and the engine's
+0.7015 sit 0.6 points apart, which is the same resize-rounding offset that
+separates the two raw columns from each other.
+
+**The transform that needed proving is the one that touches capitalisation.**
+Lower-casing is a no-op on a typed fragment, so on the query shape the product
+mostly receives it can only be harmless; the risk runs the other way — that a
+query *carrying* capitals loses information. It does not. Split on the 61
+captions that have a capital after their first character — proper nouns, brand
+names, `Goodmayes Boys' School`:
+
+| subset | n | R@1 as written | R@1 normalised | mean rank |
+| --- | --- | --- | --- | --- |
+| a capital after the first character | 61 | 0.3770 | **0.7705** | 33.38 → 2.69 |
+| no such capital | 1440 | 0.6750 | 0.7049 | 2.79 → 2.26 |
+
+The subset capitalisation was *for* is the subset that gains most — 39 points at
+rank 1, mean rank from 33 to 3. Those are the off-distribution queries: a
+capitalised token is one the tower barely saw in that position, and normalising
+pulls it in rather than erasing it.
+
+What this does **not** buy is a faster or better typed fragment. `--describe "a
+dog on grass"` is already lower case with no final period, so the transform is the
+identity on it, and every point above is on sentence-shaped input. Saying so
+matters more than the number does: a reader who takes 0.7075 as "the search box
+got four points better" has been misled by a number measured on sentences.
+
+**A prompt ensemble was measured and not shipped.** Averaging the text vector
+with `a photo of ...` and `a picture of ...` took R@1 from 0.7075 to 0.7135 — nine
+queries of 1501, half a standard error — for a second encoder pass per query,
+which doubles the measured 66 ms. It also retires the four-point gain this file
+previously attributed to ensembling: that measurement had the lower-casing
+*inside* its templates, so what it measured was the case fix. An ensemble with no
+case fix scores 0.6562, worse than the raw query alone at 0.6629.
 
 ### Two mechanisms this corpus ruled out
 
@@ -683,7 +825,8 @@ The harness that measured them is a Python script outside this repository, which
 is a gap: unlike the COCO baseline above, nothing here can be re-run from the
 repository today. It had to earn its place before its numbers were worth
 recording, and it did: its first variant is the shipped preprocessing, and it
-lands at **R@1 0.6629** against the Rust engine's 0.6582. Seven queries out of
+lands at **R@1 0.6629** against the Rust engine's 0.6582 — both with the caption
+embedded as written, the left column above. Seven queries out of
 1501 move between the two, which is the resize filter — Pillow's BICUBIC against
 the engine's CatmullRom — and not a difference in method. Every comparison below
 is between variants inside the one harness, so that offset cancels.
@@ -747,13 +890,13 @@ the absolute milliseconds as an upper bound; the ratios, which are what the
 argument uses, come from rows measured back to back.
 
 Neither mechanism is implemented. The two tables above are the argument for
-rejecting them, not a description of anything the engine ships: 0.6582 R@1 and
-0.9134 R@5 with the stretch at ingest and one vector per photograph remain the
-engine's numbers.
+rejecting them, not a description of anything the engine ships: 0.7015 R@1 and
+0.9454 R@5 with the stretch at ingest, one vector per photograph and the query
+transform above remain the engine's numbers.
 
 ## Where this leaves the feature
 
-The headline number is now COCO: **0.6582 R@1 and 0.9134 R@5** over 300
+The headline number is now COCO: **0.7015 R@1 and 0.9454 R@5** over 300
 photographs and 1501 real captions, measured through the shipped engine. The
 eleven-photo set remains useful as an attribute-binding floor — **0.455 top-1
 and 0.727 top-3** through the engine (`tests/image_retrieval.rs`), 0.545 top-1
@@ -770,15 +913,17 @@ fix.
 
 The honest position: **description search works, is wired into the CLI, and can
 be demonstrated today.** On COCO photographs it retrieves the right image at rank
-1 for 66% of real captions and within the top 5 for 91%. On screenshots the text
+1 for 70% of real captions and within the top 5 for 95%. On screenshots the text
 arm already wins 0.964 and the image arm is not the one doing the work. It is not
-yet a claim to put on a README, because 0.66 at rank 1 is a good retrieval aid
+yet a claim to put on a README, because 0.70 at rank 1 is a good retrieval aid
 rather than the 0.85 the feature was asked for.
 
 ### What is not measured
 
 A same-corpus comparison against another encoder. Every number here is SigLIP
-Si16-base as int8; 0.6582 says what this model does, not what the task allows.
+Si16-base as int8; 0.7015 says what this model does, not what the task allows.
+The SigLIP2 base towers are the obvious next comparison and it has not been run
+yet.
 
 The caption arm as a retrieval route. It runs now — eleven of eleven photographs
 produce a caption — but nothing indexes those captions and no retrieval number
