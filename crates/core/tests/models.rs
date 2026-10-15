@@ -637,18 +637,19 @@ fn forgetting_an_arm_makes_it_outstanding_work_again() {
 }
 #[test]
 fn the_pinned_manifest_names_the_models_v0_1_actually_runs() {
+    const EXPECTED_SETS: [&str; 4] = ["siglip", "minilm", "caption", "ppocr"];
     let dir = tempfile::tempdir().unwrap();
     // No network: this only reads the manifest compiled into the binary.
     let models = Models::open(dir.path()).unwrap();
     let names = models.set_names();
-    for expected in ["siglip", "minilm", "ppocr"] {
+    for expected in EXPECTED_SETS {
         assert!(
             names.contains(&expected),
             "the manifest is missing {expected}"
         );
     }
     let status = models.status().unwrap();
-    assert_eq!(status.len(), 3);
+    assert_eq!(status.len(), EXPECTED_SETS.len());
     assert!(
         status.iter().all(|set| !set.is_complete()),
         "an empty models dir cannot have anything installed"

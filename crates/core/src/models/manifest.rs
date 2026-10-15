@@ -269,14 +269,23 @@ mod tests {
         }
         // OCR models define no vector space: changing them must not
         // invalidate embeddings.
+        //
+        // Sets without an arm are allowed when they produce no vectors at all.
+        // That was true of OCR, and it is true of captioning: a caption is
+        // *text*, which the lexical arm indexes, so it needs no version pin of
+        // its own and must not invalidate an embedding arm.
         assert!(
             manifest
                 .sets()
                 .iter()
-                .all(|set| set.arm.is_some() || set.name == "ppocr"),
-            "a set without an arm other than OCR appeared"
+                .all(|set| set.arm.is_some() || ARMLESS_SETS.contains(&set.name.as_str())),
+            "a set without an arm appeared"
         );
     }
+
+    /// The model sets that produce no vectors, so they carry no arm and must not
+    /// invalidate one. Both emit text the lexical arm already indexes.
+    const ARMLESS_SETS: [&str; 2] = ["ppocr", "caption"];
 
     #[test]
     fn a_set_version_moves_when_any_pin_moves() {

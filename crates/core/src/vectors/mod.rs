@@ -35,6 +35,7 @@
 
 use anyhow::{bail, Result};
 
+pub mod caption;
 pub mod siglip;
 
 /// Bytes per float32 on disk. Named rather than written as `4` so the encoder

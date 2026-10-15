@@ -76,6 +76,36 @@
       ]
     },
     {
+      "name": "caption",
+      "arm": null,
+      "files": [
+        {
+          "name": "encoder.onnx",
+          "url": "https://huggingface.co/Xenova/vit-gpt2-image-captioning/resolve/main/onnx/encoder_model.onnx",
+          "sha256": "1e624fcd6a4a6a702dd1b60244adc6b6cbd169dcf3fbf9643be21a9bcf090b29",
+          "bytes": 343440631
+        },
+        {
+          "name": "decoder.onnx",
+          "url": "https://huggingface.co/Xenova/vit-gpt2-image-captioning/resolve/main/onnx/decoder_model_merged_quantized.onnx",
+          "sha256": "2f05cdb488d557c6ca2cccb276b1cbd0ca08d9d3ae70641618918dfa1cb860a3",
+          "bytes": 158331840
+        },
+        {
+          "name": "tokenizer.json",
+          "url": "https://huggingface.co/Xenova/vit-gpt2-image-captioning/resolve/main/tokenizer.json",
+          "sha256": "6e785cd4f004c9291dadeba7d8d1c2871318d368a1cfcd416c0571dcd8f11413",
+          "bytes": 2107928
+        },
+        {
+          "name": "preprocessor.json",
+          "url": "https://huggingface.co/Xenova/vit-gpt2-image-captioning/resolve/main/preprocessor_config.json",
+          "sha256": "cf194562deaa1949befaa94e8789a9bf37b0261a99d561f3b22af7306717a7cd",
+          "bytes": 1071
+        }
+      ]
+    },
+    {
       "name": "ppocr",
       "arm": null,
       "files": [
