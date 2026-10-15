@@ -389,7 +389,9 @@ wrong, and both were measured rather than argued:
 
 What the flatness actually costs is precision in the ambiguous middle, not the
 ability to tell a dog from a chart: the six-scene control above scores 6/6 on
-these same weights.
+these same weights. The standard response to a flat space — whitening it — is
+measured further down and is worse than doing nothing, on a held-out split, in
+every variant tried.
 
 ### What this means for the feature
 
@@ -812,14 +814,16 @@ previously attributed to ensembling: that measurement had the lower-casing
 *inside* its templates, so what it measured was the case fix. An ensemble with no
 case fix scores 0.6562, worse than the raw query alone at 0.6629.
 
-### Two mechanisms this corpus ruled out
+### Three mechanisms this corpus ruled out
 
-Two mechanisms were the obvious candidates for the remaining 34% of rank-1
+Two mechanisms were the obvious candidates for the remaining 30% of rank-1
 misses. One was image geometry at ingest: the engine stretches every photograph
 to a square and throws the aspect ratio away doing it. The other was matching
 against several crops of an image instead of one whole-image vector, because an
 object that fills a corner of the frame is a small fraction of a single pooled
-vector. Both are now measured, and neither is worth building.
+vector. Both are measured here, and neither is worth building. The third is not
+an ingest change at all — it is the standard inference-time response to a flat
+embedding space — and it is measured last.
 
 The harness that measured them is a Python script outside this repository, which
 is a gap: unlike the COCO baseline above, nothing here can be re-run from the
@@ -893,6 +897,50 @@ Neither mechanism is implemented. The two tables above are the argument for
 rejecting them, not a description of anything the engine ships: 0.7015 R@1 and
 0.9454 R@5 with the stretch at ingest, one vector per photograph and the query
 transform above remain the engine's numbers.
+
+**Whitening the space removes the alignment along with the flatness.** If a flat
+space costs precision in the ambiguous middle, the standard inference-time fix is
+whitening: centre the embeddings, rotate them onto their principal axes and
+rescale each axis to unit variance. It needs no labels and no trained projection,
+only the library's own vectors, which the engine has at index time — so unlike
+the pooling alternatives it is a mechanism that could have shipped.
+
+It was measured with a held-out split, because a transform fitted on the images
+it is then scored against proves nothing: the transform is fitted on half of the
+300 photographs, applied to both sides, and scored on the other half with the 750
+captions those images own. Chance over 150 candidates is 0.0067. Dimension counts
+are separate fits, not truncations of one. The harness is the same
+outside-repository Python script the geometry and crop tables came from — the
+same gap, stated once — and before it changes anything it reproduces the shipped
+configuration's 0.7075 to four decimals, on the full 300 candidates.
+
+| transform fitted on | R@1 | R@5 |
+| --- | --- | --- |
+| nothing — the shipped configuration | **0.7787** | 0.9800 |
+| centring only, the image mean removed | 0.5840 | 0.9160 |
+| whitening on the fit images, 768 / 384 / 256 dims | 0.0067 | 0.0373 |
+| whitening on the fit captions, 768 dims | 0.0853 | 0.2267 |
+| whitening on the fit captions, 384 / 256 dims | 0.5280 / 0.6493 | 0.7627 / 0.8813 |
+| whitening on images and captions together, 768 / 384 / 256 dims | 0.1493 / 0.5773 / 0.6333 | 0.3107 / 0.7987 / 0.8853 |
+
+Every variant is worse than doing nothing, and the sharpest result is the
+simplest one: whitening fitted on images alone lands **exactly on chance**. That
+is not an implementation failure, it is the answer. The large shared component is
+what the two towers *agree* on; a transform fitted in the image space and applied
+to text moves the text vectors somewhere the images no longer are, which is why
+the two sides come out unrelated. Even fitted on captions, and applied to both,
+whitening subtracts the direction that carries the cross-modal match. Five
+regularisation values from 1e-5 to 1e-1 times the mean eigenvalue move R@1
+between 0.0067 and 0.0227, so it is not a tuning problem; and fitting on all 300
+images — the leaky, most favourable version, which is what the engine would
+actually do — gives 0.0933, so the held-out split is not what makes it fail.
+
+Two things follow. The flatness is not a defect to be corrected at query time,
+which is the second time this file has had to say so: fp32 said it about the
+weights, and this says it about the space itself. And the baseline in that table
+is worth reading twice — 0.7787 with 150 candidates against 0.7075 with 300, same
+model, same captions, half the library. Rank 1 gets easier on a smaller shelf, so
+this feature's headline is a number about a library size rather than a constant.
 
 ## Where this leaves the feature
 
