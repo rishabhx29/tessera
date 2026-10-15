@@ -997,3 +997,10 @@ photograph's label, which is a floor for the arm being alive and nothing more.
 Everything on macOS. The Vision OCR adapter is written and has never been
 compiled or run on an Apple machine; the `macos-14` CI job is the gate, and until
 it is green the adapter is unverified rather than working.
+
+Image-side test-time augmentation. Averaging a photograph's embedding with that
+of its mirror image, or over two scales, is the remaining cheap way to buy
+robustness without a new model, and it costs a multiple of the 260 ms index time
+for one stored vector. It has not been tried. It is listed rather than dismissed
+because nothing else here bears on it: the nearest measured neighbour is the crop
+family, which is a different transform and lost on this corpus.
