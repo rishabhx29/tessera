@@ -624,33 +624,95 @@ the padding arms come from a one-off harness that is not in this repository.
 That is a gap, and it closes when the evaluation corpus below lands, which needs
 a real harness anyway.
 
+## COCO text-to-image retrieval — the baseline eleven photographs could not be
+
+**Provenance: measured, reproducible from this repository.**
+`crates/core/tests/coco_retrieval.rs`, run with `--release` against the corpus
+named by `TESSERA_CORPUS`. The corpus is 300 photographs drawn from the COCO
+2014 validation split, minimum side 320 px, each carrying the five captions real
+annotators wrote for it — 1501 queries over 300 images. The test measures
+`SiglipEmbedder`, the type the engine ships, with the shipped stretch
+preprocessing, so this is the product's number rather than a benchmark's.
+
+| metric | value |
+| --- | --- |
+| R@1 | **0.6582** (988 of 1501) |
+| R@5 | **0.9134** (1371 of 1501) |
+| R@10 | **0.9627** (1445 of 1501) |
+| median rank | 1 of 300 |
+| mean rank | 4.0 of 300 |
+| chance R@1 | 0.0033 |
+| indexing | 77.9 s — 260 ms per image |
+| queries | 98.4 s — 66 ms per query |
+
+Ties are broken against the model: a caption's rank is one plus the number of
+images scoring *strictly* higher, so an image level with the right answer counts
+as beating it. Every caption is a query, so one lucky retrieval moves the
+headline by 0.07 percentage points rather than 9.
+
+### What this number means
+
+The 0.85 that was asked for is **met at rank 5 and missed at rank 1**. Read as
+top-1 accuracy, description search is at 66%; read as "the right photograph is
+in the first row of results", it is at 91%. Both readings are honest and they
+answer different product questions, so the target cannot be scored until it is
+said which one it meant.
+
+This is the first measurement on which mechanism comparisons are meaningful. 300
+images and 1501 queries resolve a difference of a few percentage points; the
+eleven-photo set resolved 9.1 points per item and had already been queried often
+enough that tuning against it would have been fitting noise.
+
+Cost per image is a real constraint and is measured above: 260 ms to index one
+photograph is fine for a library import and unacceptable for anything
+interactive, and 66 ms per query is what a keystroke can afford only with
+debouncing. Any fix that adds a second encoder pass per query multiplies that 66
+ms, which is why the combined export was rejected on cost rather than on
+quality.
+
+### What the corpus does not yet decide
+
+Whether the remaining 34% of rank-1 misses are the encoder or the approach. Two
+mechanisms are the obvious candidates and neither is measured here: image
+geometry at ingest (the engine stretches every photograph to a square, which
+distorts aspect), and matching against several crops per image instead of one
+whole-image vector. Both are cheap to test on this corpus and both are queued —
+any figure for either until it appears in this file does not exist.
+
 ## Where this leaves the feature
 
-Description search on real photographs is at **0.455 top-1 and 0.727 top-3**
-measured through the engine (`tests/image_retrieval.rs`), and 0.545 top-1 in the
-harness above, which centre-crops where the engine stretches. Chance on 11
-images is 0.091. That is 5x chance and it is a real capability. It is not the
-0.85 that was asked for.
+The headline number is now COCO: **0.6582 R@1 and 0.9134 R@5** over 300
+photographs and 1501 real captions, measured through the shipped engine. The
+eleven-photo set remains useful as an attribute-binding floor — **0.455 top-1
+and 0.727 top-3** through the engine (`tests/image_retrieval.rs`), 0.545 top-1
+in the harness above, which centre-crops where the engine stretches, against a
+chance rate of 0.091 — but it is a stress test, not a baseline.
 
-The corpus makes the task hard on purpose. Four of the eleven photos are dogs and
-three of those are dogs on grass, so most of the ranking work is attribute
-binding: "running through grass" against "sitting on grass" against "with its
-tongue out". Three of the four miss at rank 1; two land in the top 3. A cat face
-is retrieved as a dog. This is the documented weakness of single-vector
+The eleven-photo corpus makes the task hard on purpose. Four of the eleven photos
+are dogs and three of those are dogs on grass, so most of the ranking work is
+attribute binding: "running through grass" against "sitting on grass" against
+"with its tongue out". Three of the four miss at rank 1; two land in the top 3. A
+cat face is retrieved as a dog. This is the documented weakness of single-vector
 image-text models, and it is the part a better encoder alone is least likely to
 fix.
 
-The honest position: **description search works and is wired in and can be
-demonstrated today.** On photographs it is a retrieval aid at roughly half
-accuracy at rank 1 and nearly three quarters within three; on screenshots the
-text arm already wins 0.964 and the image arm is not the one doing the work. It
-is not yet a claim to put on a README.
+The honest position: **description search works, is wired into the CLI, and can
+be demonstrated today.** On COCO photographs it retrieves the right image at rank
+1 for 66% of real captions and within the top 5 for 91%. On screenshots the text
+arm already wins 0.964 and the image arm is not the one doing the work. It is not
+yet a claim to put on a README, because 0.66 at rank 1 is a good retrieval aid
+rather than the 0.85 the feature was asked for.
 
 ### What is not measured
 
-Eleven photographs cannot decide a product target, and every rate above carries
-an `n` of 11 with a one-item resolution. The next measurement that matters is not
-another model: it is a corpus large enough for the number to mean something. A
-COCO validation sample with its real human captions is the standard corpus for
-this task and is being assembled; until it exists, 0.455 is a floor and a
-regression check, not a baseline to optimise against.
+The mechanism experiments. Image geometry at ingest and multiple crops per image
+are described above and are the two levers this corpus exists to test; until they
+appear in this file, no figure for either exists and 0.6582 is the only baseline.
+
+The caption arm. `tests/captioning.rs` is `#[ignore]`d and the decoder export
+pinned in `lock.json` does not load, so every captioning claim is unmeasured and
+the 502 MB it downloads on a fresh install is dead weight.
+
+Everything on macOS. The Vision OCR adapter is written and has never been
+compiled or run on an Apple machine; the `macos-14` CI job is the gate, and until
+it is green the adapter is unverified rather than working.
