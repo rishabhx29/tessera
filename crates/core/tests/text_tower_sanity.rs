@@ -111,7 +111,7 @@ fn the_text_tower_also_ignores_what_it_is_given() {
             .expect("int8 text"),
     );
     let tokenizer = tokenizers::Tokenizer::from_file(
-        &models
+        models
             .verified_path("siglip", "siglip-tokenizer.json")
             .expect("tokenizer"),
     )
