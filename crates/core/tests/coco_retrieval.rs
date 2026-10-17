@@ -14,10 +14,18 @@
 //!
 //! ```text
 //! TESSERA_CORPUS -> a directory containing manifest.json and images\
+//! TESSERA_CORPUS_MANIFEST -> an alternate manifest in that directory
 //! ```
 //!
 //! The manifest is a JSON array of `{ "path": ..., "id": ..., "captions": [...] }`
-//! with `path` relative to that directory.
+//! with `path` relative to that directory. The same directory carries two
+//! manifests: `manifest.json` is the 300-photograph sample every number in
+//! `docs/performance.md` was measured on, and the full Karpathy val split (5000
+//! photographs) lives beside it, because the scaling test below wants the whole
+//! shelf while the baseline tests want the sample. Point the scaling test at the
+//! full set with `TESSERA_CORPUS_MANIFEST=manifest-5000.json`; the other tests
+//! keep reading `manifest.json` and keep measuring what their numbers say they
+//! measure.
 //!
 //! ```
 //! $env:TESSERA_CORPUS="$env:LOCALAPPDATA\Temp\opencode\coco-eval"
@@ -39,6 +47,16 @@
 //! embeds: a mean vector subtracted from each query before ranking, fitted on one
 //! half of the corpus and scored on the other. It is measured rather than shipped,
 //! and its own doc comment says why it is here.
+//!
+//! The third asks the first question again at six library sizes, because recall
+//! is not a property of the model alone: it is the model against N candidates,
+//! and the same configuration measured 0.78 at 150 candidates and 0.70 at 300.
+//! A number quoted without its library size is not a number anyone can act on,
+//! so this test grows the corpus from 150 photographs to all of it and prints the
+//! whole curve. Its 300-candidate row is the corpus of the first test, so it
+//! reproduces that headline exactly; its 150-candidate row is the size the
+//! Python harness once measured in, and lands near that number with the same
+//! small harness offset the paragraphs above already describe.
 
 use std::path::{Path, PathBuf};
 
@@ -74,8 +92,17 @@ fn corpus_dir() -> PathBuf {
 
 /// Parse the manifest, failing loudly on anything that is not the documented
 /// shape. A corpus that silently arrives half-read measures the wrong thing.
+///
+/// The file is `manifest.json` in the corpus directory, or the file named by
+/// `TESSERA_CORPUS_MANIFEST`. That second name exists because the same
+/// directory can carry a sample and the whole set: the baseline tests and the
+/// numbers in `docs/performance.md` are taken on the sample, and the scaling
+/// test wants every photograph that is on disk. Two manifests, one image
+/// folder, and no run that silently measures the wrong one.
 fn read_manifest(dir: &Path) -> Vec<Entry> {
-    let manifest_path = dir.join("manifest.json");
+    let manifest_path = dir.join(
+        std::env::var("TESSERA_CORPUS_MANIFEST").unwrap_or_else(|_| "manifest.json".to_string()),
+    );
     let text = std::fs::read_to_string(&manifest_path)
         .unwrap_or_else(|err| panic!("reading {}: {err}", manifest_path.display()));
     let parsed: serde_json::Value =
@@ -261,6 +288,175 @@ fn a_caption_finds_its_own_image_in_a_real_corpus() {
         "R@1 {:.4} is not far enough above the {chance:.4} chance rate for {n} images; \
          either the corpus or the model wiring is wrong",
         recall[0]
+    );
+}
+
+/// The library sizes the scaling test walks. The first two are the sizes
+/// earlier measurements were taken at: the 300-candidate row shares its corpus
+/// and code path with the first test in this file, so it must print that test's
+/// headline, and 150 is the smaller shelf `docs/performance.md` records a number
+/// for. The rest double until the corpus runs out.
+const LADDER: [usize; 6] = [150, 300, 600, 1200, 2400, 5000];
+
+/// Recall as the library grows: the same model, the same queries, the same
+/// code, only N changes.
+///
+/// Embedding is done once; the curve is six rankings over subsets of the same
+/// vectors. Queries for each row are the captions of the photographs *in* that
+/// row's subset, so every query has its target among the candidates and the
+/// chance rate is exactly 1/N. Subsets are even-stride samples of the whole
+/// corpus, the formula the 300-photograph corpus was drawn with - so the
+/// 300-candidate row is exactly the first test's corpus and code path, and must
+/// print that test's headline. If it does not, one of the two changed without
+/// its number changing, which is the failure this shared formula would catch.
+///
+/// Nothing here is asserted except the floor on the smallest row. The curve is
+/// the measurement; an assertion on its shape would turn a finding into a claim
+/// the moment it passed.
+///
+/// ```
+/// $env:TESSERA_CORPUS="$env:LOCALAPPDATA\Temp\opencode\coco-eval"
+/// $env:TESSERA_CORPUS_MANIFEST="manifest-5000.json"
+/// cargo test --release -p tessera-core --test coco_retrieval recall_is_measured \
+///   -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "needs the siglip model set and a corpus in TESSERA_CORPUS"]
+fn recall_is_measured_at_every_library_size_of_the_corpus() {
+    let models = models();
+    assert!(
+        SiglipEmbedder::is_installed(&models),
+        "the siglip set is not installed; run: tessera models install --set siglip"
+    );
+    let dir = corpus_dir();
+    let entries = read_manifest(&dir);
+    let n = entries.len();
+    assert!(
+        n >= 8,
+        "a scaling curve over {n} photographs would measure the sample, not the scale"
+    );
+
+    let embedder = SiglipEmbedder::new(&models, 4).expect("the embedder loads");
+
+    let started = std::time::Instant::now();
+    let images: Vec<Embedding> = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            if index > 0 && index % 500 == 0 {
+                eprintln!(
+                    "  images {index}/{n} ({:.0} s)",
+                    started.elapsed().as_secs_f64()
+                );
+            }
+            embedder
+                .embed_image(&entry.path, DIM)
+                .unwrap_or_else(|err| panic!("embedding {}: {err}", entry.path.display()))
+        })
+        .collect();
+    let indexing = started.elapsed();
+
+    let query_list: Vec<(usize, &str)> = entries
+        .iter()
+        .enumerate()
+        .flat_map(|(i, entry)| entry.captions.iter().map(move |c| (i, c.as_str())))
+        .collect();
+    let started = std::time::Instant::now();
+    let mut captions: Vec<(usize, Embedding)> = Vec::with_capacity(query_list.len());
+    for (index, (i, caption)) in query_list.iter().enumerate() {
+        if index > 0 && index % 2000 == 0 {
+            eprintln!(
+                "  queries {index}/{} ({:.0} s)",
+                query_list.len(),
+                started.elapsed().as_secs_f64()
+            );
+        }
+        let query = embedder
+            .embed_query(caption, DIM)
+            .unwrap_or_else(|err| panic!("embedding {caption:?}: {err}"));
+        captions.push((*i, query));
+    }
+    let querying = started.elapsed();
+
+    let mut ladder: Vec<usize> = LADDER.iter().copied().filter(|k| *k <= n).collect();
+    if ladder.last() != Some(&n) {
+        ladder.push(n);
+    }
+
+    println!(
+        "\n== recall against a growing library: {n} photographs, {} captions ==",
+        captions.len()
+    );
+    println!(
+        "embedded: images {:.0} s, queries {:.0} s\n",
+        indexing.as_secs_f64(),
+        querying.as_secs_f64()
+    );
+    println!(
+        "{:>6} {:>7} {:>7} {:>7} {:>7} {:>8} {:>10} {:>9}",
+        "images", "queries", "R@1", "R@5", "R@10", "chance", "mean rank", "R@1 delta"
+    );
+
+    let mut first_row: Option<(f64, f64)> = None;
+    let mut previous_r1: Option<f64> = None;
+    for k in ladder {
+        // Even-stride subset, inclusive of both ends; identity when k == n.
+        let picked: Vec<usize> = (0..k).map(|i| i * (n - 1) / (k - 1)).collect();
+        let queries: Vec<(usize, &Embedding)> = captions
+            .iter()
+            .filter(|(owner, _)| picked.binary_search(owner).is_ok())
+            .map(|(owner, query)| (*owner, query))
+            .collect();
+
+        let scoring = std::time::Instant::now();
+        let mut hits = [0usize; CUTOFFS.len()];
+        let mut ranks: Vec<usize> = Vec::with_capacity(queries.len());
+        for (owner, query) in &queries {
+            let target = cosine(query, &images[*owner]);
+            let ahead = picked
+                .iter()
+                .filter(|candidate| {
+                    **candidate != *owner && cosine(query, &images[**candidate]) > target
+                })
+                .count();
+            let rank = ahead + 1;
+            ranks.push(rank);
+            for (slot, cutoff) in CUTOFFS.iter().enumerate() {
+                hits[slot] += usize::from(rank <= *cutoff);
+            }
+        }
+        let shared = scoring.elapsed();
+
+        let total = queries.len();
+        let recall = |slot: usize| hits[slot] as f64 / total as f64;
+        let mean_rank = ranks.iter().sum::<usize>() as f64 / ranks.len() as f64;
+        let delta = previous_r1
+            .map(|previous| format!("{:+.1}", (recall(0) - previous) * 100.0))
+            .unwrap_or_else(|| "-".to_string());
+        println!(
+            "{k:>6} {total:>7} {:>7.4} {:>7.4} {:>7.4} {:>8.4} {mean_rank:>10.1} {delta:>9}",
+            recall(0),
+            recall(1),
+            recall(2),
+            1.0 / k as f64
+        );
+        eprintln!("  ({k} candidates scored in {:.0} s)", shared.as_secs_f64());
+
+        if first_row.is_none() {
+            first_row = Some((recall(0), 1.0 / k as f64));
+        }
+        previous_r1 = Some(recall(0));
+    }
+
+    let (smallest_r1, smallest_chance) = first_row.expect("at least one row");
+    assert!(
+        smallest_r1 > 20.0 * smallest_chance,
+        "the smallest row's R@1 {smallest_r1:.4} is not far enough above its {smallest_chance:.4} \
+         chance rate; either the corpus or the model wiring is wrong"
+    );
+    println!(
+        "\nThe curve belongs in docs/performance.md. What is asserted is only that the\n\
+         smallest library retrieves far above chance - a wiring check, not a target."
     );
 }
 

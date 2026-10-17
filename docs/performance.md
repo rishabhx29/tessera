@@ -280,6 +280,128 @@ Honest caveats:
   reference hardware, so the gap is expected and is *not* evidence the engine is
   slower than the projection.
 
+## OCR at corpus scale — 1,775 photographs whose printed text was transcribed
+
+The bake-offs above rank engines on the format the OCR feature was designed
+around: screenshots, where text is large, rendered and clean. They cannot answer
+how often a word in a real *photograph* can be found, because 40 hand-picked
+screenshots are a sample of one kind. This section measures that question on a
+downloaded corpus: 1,775 real photographs whose signs, labels and graffiti
+people transcribed (COCO-Text V2 over COCO images), queried through the shipping
+engine and the shipping store.
+
+**Provenance: measured, reproducible from this repository.**
+`crates/core/tests/ocr_corpus.rs`, `--release`, against the corpus named by
+`TESSERA_OCR_CORPUS`; the annotations zip is pinned by sha256 and the builder
+script and images live beside the corpus, outside the repository (SECURITY.md),
+like every other real-image corpus here. Both columns are the same 1,775
+photographs, same machine, same day, one engine at a time. The corpus asks about
+6,013 words over 1,686 photographs — every transcription that is legible,
+English, at least four characters, and not a bare number (a number is a
+substring of the image's own file name, and file names are indexed on purpose).
+
+| metric | native (`windows`) | fallback (`onnx`) |
+| --- | ---: | ---: |
+| photographs yielding any text | 803 of 1,775 (45%) | 1,503 of 1,775 (85%) |
+| characters per image, p50 | 0 | 17 |
+| **transcribed words read** | **906 of 6,013 (15.1%)** | **2,622 of 6,013 (43.6%)** |
+| **words findable end to end** | **913 (15.2%)** | **2,650 (44.1%)** |
+| photographs answering every queried word | 74 of 1,686 | 287 of 1,686 |
+| photographs answering none | 1,254 of 1,686 | 677 of 1,686 |
+| p50 / mean per image | 25 / 27 ms | 148 / 216 ms |
+| words OCR read that the store then lost | 0 | 0 |
+
+The two metrics fail in different places. **Word read** means the engine's text
+contains the transcription whole, case-folded, as a contiguous substring — a
+word that OCR renders with a space counts as unread, which makes the figure a
+floor. **Word findable** asks the real `search` for the word and expects the
+right photograph back through the real SQLite trigram index. Neither engine lost
+a word the store was given; in the other direction the store *gained* 7 words
+(native) and 28 (fallback) that the strict read check called unread, because
+`search` expands each term into lookalike variants (0/o, 1/l) and OCR misreads
+characters into their lookalikes.
+
+Reading:
+
+- **On real photographs the native engine — the v0.1 default — finds 15% of the
+  transcribed words; the fallback finds 44%.** The loss is upstream of the store
+  and the query path: it is what the engine sees.
+- **It sees nothing at all on 55% of these photographs** (972 of 1,775; the
+  median photograph yields zero characters). This is a regime the OS engine was
+  not built for: small frames (COCO caps the long side at 640 px) with small,
+  stylised scene text — graffiti, distant shop signs — where on the screenshot
+  corpus just above the same engine found text on 39 of 40 images.
+- **The corpus's labels were spot-checked, not trusted**: the skate-park wall
+  that transcribes as "DRUMER" and "SPOOBY" really carries that graffiti, so
+  these low numbers are the engine's difficulty rather than annotation noise.
+  Some labels are annotators' own hard reads; both engines pay the same labels,
+  so the comparison between columns holds even where the absolute level is a
+  floor on a hard corpus.
+- **The fallback's price is a property of the library, not of the engine.** On
+  screenshots it was ~28× slower at p50 (949.6 ms against 34.4); here it is ~6×
+  (148 against 25), because the same width-driven cost that makes it slow on a
+  2 MP screenshot is small on a 0.3 MP photograph.
+
+Honest caveats:
+
+- One pass each. A second fallback pass, run while other work was
+  on the machine, gave p50 123 ms / mean 180 ms against 148 / 216 here, and the
+  native engine moved 25–36 ms p50 across three passes — the same lesson as the
+  screenshot bake-off's repeat pass: the ordering and the order of magnitude are
+  the finding, and the specific figures are one sample.
+
+### The per-file cascade, measured
+
+The two columns put a product question on the table that neither answers on its
+own: ask the fast engine first, and pay for the fallback only where the fast one
+found nothing. The same harness measures it —
+`a_native_then_onnx_cascade_reads_more_than_the_native_engine_alone`, Windows
+only, because "the platform engine" in that sentence is `Windows.Media.Ocr`.
+
+| metric | native | **native → fallback on an empty read** | fallback |
+| --- | ---: | ---: | ---: |
+| p50 per image | 25 ms | **73 ms** | 148 ms |
+| mean per image | 27 ms | **85 ms** | 216 ms |
+| photographs yielding any text | 803 (45%) | **1,529 (86%)** | 1,503 (85%) |
+| **transcribed words read** | 906 (15.1%) | **1,644 (27.3%)** | 2,622 (43.6%) |
+| **words findable end to end** | 913 (15.2%) | **1,658 (27.6%)** | 2,650 (44.1%) |
+| photographs answering every queried word | 74 | **186** | 287 |
+| photographs answering none | 1,254 | **861** | 677 |
+
+Reading:
+
+- **The cascade reads 81% more words than the native engine at about three
+  times its mean cost, and about two-thirds of the fallback's words at 39% of
+  the fallback's mean cost.** It is a real middle point, not a rounding error,
+  and the store lost none of it either (14 words came back the other way,
+  through lookalike expansion).
+- **The bill is lower than the retry rate suggests.** The trigger fires on 972
+  of 1,775 photographs (55%), and reading all of them took 150 s in total where
+  native's own pass plus the fallback at its average cost on those 55% would
+  project around 260 s: the
+  photographs the native engine misses are the fallback's cheap ones, because
+  the text-dense photographs that cost it the most are exactly the ones the
+  native engine already read.
+- **The union is bigger than either engine alone** — 1,529 photographs with any
+  text, against the fallback's 1,503 and the native's 803 — because each engine
+  is blind to a different handful.
+- **The trigger is what holds the quality back, and it is deliberately the
+  narrowest one.** An empty read fires only when native found *nothing*; on the
+  803 photographs where it found anything — often a stray mark — the cascade
+  keeps the native text and discards what the fallback would have read. A
+  trigger that also fires on short or low-quality native reads would move the
+  quality toward the fallback column and the price up with it; that version is
+  not measured, and this table is what the cheapest form of the idea delivers.
+- **On screenshots the same trigger would fire on 1 image in 40** (the one the
+  bake-off above records as native's single empty read), so there the cascade
+  is the native engine's speed with a fallback read once per forty images. That
+  is arithmetic on measured numbers, not a run of the cascade over screenshots,
+  which has not been made.
+- **It is not shipped, and the default engine is unchanged.** Which engine
+  ships is `preferred_engine`'s choice per platform (ADR-0008); this table is
+  the evidence a change would need, and a decision to change it is not one this
+  document makes.
+
 ## macOS Vision: not yet measured
 
 **There are no macOS numbers in this file, and there will not be any until
@@ -715,7 +837,7 @@ a real harness anyway.
 **Provenance: measured, reproducible from this repository.**
 `crates/core/tests/coco_retrieval.rs`, run with `--release` against the corpus
 named by `TESSERA_CORPUS`. The corpus is 300 photographs drawn from the COCO
-2014 validation split, minimum side 320 px, each carrying the five captions real
+2014 validation split, short side never below 160 px, each carrying the five captions real
 annotators wrote for it — 1501 queries over 300 images. The test measures
 `SiglipEmbedder`, the type the engine ships, with the shipped stretch
 preprocessing and the shipped query path, so this is the product's number rather
@@ -749,11 +871,13 @@ headline by 0.07 percentage points rather than 9.
 
 ### What this number means
 
-The 0.85 that was asked for is **met at rank 5 and missed at rank 1**. Read as
-top-1 accuracy, description search is at 70%; read as "the right photograph is in
-the first row of results", it is at 95%. Both readings are honest and they answer
-different product questions, so the target cannot be scored until it is said which
-one it meant. Nothing in `docs/product-definition.md` sets a numeric bar for this
+The 0.85 that was asked for is **met at rank 5 and missed at rank 1** — on this
+300-photograph baseline; the growing-library curve near the end of this file is
+not flat, and both readings thin out as the shelf grows. Read as top-1 accuracy,
+description search is at 70%; read as "the right photograph is in the first row
+of results", it is at 95%. Both readings are honest and they answer different
+product questions, so the target cannot be scored until it is said which one it
+meant. Nothing in `docs/product-definition.md` sets a numeric bar for this
 feature — it asks for a "CLIP text↔image embedding space for description queries"
 and says nothing about recall — so this is the one number in this file the
 repository cannot supply a reading for on its own.
@@ -1077,6 +1201,73 @@ The deltas above are also measured on halves; what the constant does to the full
 0.7015 is unmeasured, and taking that measurement is exactly the run a decision to
 ship would begin with.
 
+## Description search on a growing library — measured from 150 to 5,000 photographs
+
+The whitening table already said the quiet part out loud: 0.7787 with 150
+candidates against 0.7075 with 300, same model, same captions, half the library.
+Rank 1 gets easier on a smaller shelf, so 0.7015 is a number about a library
+size rather than a constant of the feature. This section measures the curve
+instead of inferring it from two points: the full Karpathy caption split over
+COCO 2014 `val` — **5,000 photographs and 25,010 human captions** — one
+embedding pass, six library sizes scored from the same vectors.
+
+**Provenance: measured, reproducible from this repository.**
+`crates/core/tests/coco_retrieval.rs`,
+`recall_is_measured_at_every_library_size_of_the_corpus`, `--release`, against
+the corpus named by `TESSERA_CORPUS`
+(`TESSERA_CORPUS_MANIFEST=manifest-5000.json`); the builder script and its
+sources live beside the corpus, outside the repository (SECURITY.md), like every
+other real-image corpus here. The 5,000 candidates are the whole split — all of
+`val`, COCO ids ascending, short side never below 159 px — and each row selects
+from them with the same evenly-spaced rule the corpus builder used (both ends
+included, identity at 5,000). The **300 row is therefore the 300-photograph
+corpus** of the sections above and prints that headline back exactly: 0.7015 /
+0.9454 / 0.9813. The 5,000 row is 25,010 real caption queries rather than a
+sample of them; the smallest row carries 751.
+
+| library | queries | R@1 | R@5 | R@10 | chance | mean rank | R@1, change vs previous row |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 150 | 751 | 0.7909 | 0.9867 | 0.9947 | 0.0067 | 1.6 | — |
+| 300 | 1,501 | **0.7015** | **0.9454** | **0.9813** | 0.0033 | 2.3 | −8.9 |
+| 600 | 3,004 | 0.6155 | 0.8798 | 0.9554 | 0.0017 | 3.9 | −8.6 |
+| 1,200 | 6,000 | 0.5288 | 0.7878 | 0.8813 | 0.0008 | 6.6 | −8.7 |
+| 2,400 | 12,005 | 0.4444 | 0.7108 | 0.8067 | 0.0004 | 11.6 | −8.4 |
+| 5,000 | 25,010 | 0.3552 | 0.6033 | 0.7040 | 0.0002 | 23.9 | −8.9 |
+
+Reading:
+
+- **Rank 1 decays linearly in the log of the library size — 8.4 to 8.9 points
+  per doubling, no knee.** 33× the shelf costs 43.6 points of R@1: 0.7909 at
+  150 photographs, 0.3552 at 5,000, with every step in between moving by 8.4 to
+  8.9. Nothing in the six rows suggests the line flattening out.
+- **The deeper ranks compound the loss.** R@5 stands at 0.6033 and R@10 at
+  0.7040 when the shelf is 5,000, but their per-step cost grows with the shelf:
+  R@5 sheds about 4 points on the first step and about 10 on the last, and R@10
+  grows from about 1 to about 10. "The right photograph is in the first row"
+  weakens faster than "it is the first result" does.
+- **The ranking concentrates far better than chance at every size.** Mean rank
+  grows 1.6 → 23.9 over 33× the library, where guessing would average 2,500, and
+  chance R@1 at 5,000 is 0.0002 against a measured 0.3552. The model is not
+  drowning; the shelf has outgrown the precision of the space.
+- **The 0.85 bar is a statement about shelf size.** R@1 never reaches it at any
+  size measured, best 0.7909 at 150 photographs. R@5 last clears it at 600
+  (0.8798) and is at 0.6033 by 5,000; R@10 last clears it at 1,200 (0.8813) and
+  is at 0.7040 by 5,000. On a library of thousands, no rank in this table
+  reaches 0.85.
+
+Honest caveats:
+
+- One embedding pass, one run. Each row's queries are its own subset's captions,
+  scored against that subset, so the table measures scale rather than sampling
+  noise; a second pass would move the cells by run-to-run jitter, not re-order
+  them. The pass ran while other work was on the machine — 297 ms per image and
+  69 ms per query here, against the clean 260 and 66 in the latency sections
+  above — which is why none of those timings is quoted as a latency result.
+- The queries are captions, the same distribution as the labels. A person typing
+  into a search box is not writing a caption — the same limitation the
+  query-side mean runs into — and this corpus cannot lift it. The curve measures
+  ranking under caption language.
+
 ## Where this leaves the feature
 
 The headline number is now COCO: **0.7015 R@1 and 0.9454 R@5** over 300
@@ -1096,13 +1287,17 @@ fix.
 
 The honest position: **description search works, is wired into the CLI, and can
 be demonstrated today.** On COCO photographs it retrieves the right image at rank
-1 for 70% of real captions and within the top 5 for 95%. On screenshots the text
-arm already wins 0.964 and the image arm is not the one doing the work. It is not
-yet a claim to put on a README, because 0.70 at rank 1 is a good retrieval aid
-rather than the 0.85 the feature was asked for. The cheapest lever on it is
-measured and deliberately unshipped: a query-side mean worth about +4 points at
-rank 1, held back because the constant would be fitted on this corpus rather than
-on the language the user actually types.
+1 for 70% of real captions and within the top 5 for 95% — for a 300-photograph
+library; the curve section above carries the full-size result, and against 5,000
+photographs the same shipped path gives **0.3552 R@1 / 0.6033 R@5 / 0.7040
+R@10**. On screenshots the text arm already wins 0.964 and the image arm is not
+the one doing the work. It is not yet a claim to put on a README: 0.70 at rank 1
+is a good retrieval aid rather than the 0.85 the feature was asked for, and the
+target recedes as a library grows — at 5,000 photographs even the top-5 reading
+is 0.6033. The cheapest lever on it is measured and deliberately unshipped: a
+query-side mean worth about +4 points at rank 1, held back because the constant
+would be fitted on this corpus rather than on the language the user actually
+types.
 
 ### What is not measured
 
@@ -1114,6 +1309,10 @@ because nothing was compared against it. What is still unmeasured is that
 comparison at fp32 (1.45 GB of weights), and a description corpus that is not
 COCO — which is also the only thing that could decide the query-side constant
 above.
+
+A library larger than 5,000 photographs: the curve stops there because the
+corpus does, and what the trend would do beyond the last measured row is an
+extrapolation this document does not write down.
 
 The caption arm as a retrieval route. It runs now — eleven of eleven photographs
 produce a caption — but nothing indexes those captions and no retrieval number
