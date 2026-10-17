@@ -344,9 +344,9 @@ Reading:
 
 Honest caveats:
 
-- One pass each. A second fallback pass, run while other work was
-  on the machine, gave p50 123 ms / mean 180 ms against 148 / 216 here, and the
-  native engine moved 25–36 ms p50 across three passes — the same lesson as the
+- One pass each. A second fallback pass, run while other work was on the
+  machine, gave p50 123 ms / mean 180 ms against 148 / 216 here, and the native
+  engine moved 25–36 ms p50 across three passes — the same lesson as the
   screenshot bake-off's repeat pass: the ordering and the order of magnitude are
   the finding, and the specific figures are one sample.
 
@@ -376,12 +376,11 @@ Reading:
   and the store lost none of it either (14 words came back the other way,
   through lookalike expansion).
 - **The bill is lower than the retry rate suggests.** The trigger fires on 972
-  of 1,775 photographs (55%), and reading all of them took 150 s in total where
-  native's own pass plus the fallback at its average cost on those 55% would
-  project around 260 s: the
-  photographs the native engine misses are the fallback's cheap ones, because
-  the text-dense photographs that cost it the most are exactly the ones the
-  native engine already read.
+  of 1,775 photographs (55%), and the whole run took 150 s against a projection
+  of about 260 s — native's own pass plus the fallback at its average cost on
+  those 55%: the photographs the native engine misses are the fallback's cheap
+  ones, because the text-dense photographs that cost it the most are exactly the
+  ones the native engine already read.
 - **The union is bigger than either engine alone** — 1,529 photographs with any
   text, against the fallback's 1,503 and the native's 803 — because each engine
   is blind to a different handful.
