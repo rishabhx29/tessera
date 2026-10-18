@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use super::{Kind, Pipeline, Tile};
+use super::{Extraction, Kind, Pipeline, Tile};
 
 const EXTENSIONS: &[&str] = &["txt", "md", "csv", "log"];
 
@@ -43,18 +43,21 @@ impl Pipeline for TextPipeline {
         EXTENSIONS.contains(&ext.as_str()).then_some(Kind::Text)
     }
 
-    fn process(&self, path: &Path) -> anyhow::Result<Vec<Tile>> {
+    fn process(&self, path: &Path) -> anyhow::Result<Extraction> {
         use anyhow::Context;
         let text =
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        Ok(chunk_text(&text)
-            .into_iter()
-            .enumerate()
-            .map(|(seq, text)| Tile {
-                seq: seq as u32,
-                text,
-            })
-            .collect())
+        Ok(Extraction::Tiles(
+            chunk_text(&text)
+                .into_iter()
+                .enumerate()
+                .map(|(seq, text)| Tile {
+                    seq: seq as u32,
+                    text,
+                    page: None,
+                })
+                .collect(),
+        ))
     }
 }
 

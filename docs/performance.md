@@ -652,7 +652,7 @@ the number means anything.
 ## Week-1 gate: PASS
 
 - image saveâ†’searchable: ~260â€“350 ms projected (target <1500 ms) â€” components measured
-- doc saveâ†’searchable: ~1000 ms measured (target <300 ms) â€” **still over**; doc extract is pypdf-bound. Accepted for v0.1 (docs are a minority of the corpus and indexing is background); revisit if dogfooding disagrees.
+- doc saveâ†’searchable: ~1000 ms measured (target <300 ms) â€” **still over**; doc extract is pypdf-bound. Accepted for v0.1 (docs are a minority of the corpus and indexing is background); revisit if dogfooding disagrees. (The extraction term is re-measured with the Rust pipelines at the end of this file; this line stands until save→searchable is.)
 - fused query: ~50 ms projected at personal scale (target <100 ms); 159 ms measured sequential
 - cross-modal sanity: 0.90 top-1 controlled (chance = 5%)
 
@@ -1328,3 +1328,82 @@ robustness without a new model, and it costs a multiple of the 260 ms index time
 for one stored vector. It has not been tried. It is listed rather than dismissed
 because nothing else here bears on it: the nearest measured neighbour is the crop
 family, which is a different transform and lost on this corpus.
+
+## Document extraction in the Rust engine — measured (ticket 08)
+
+The week-1 gate above blames the doc path on `pypdf`: 400 ms p50 to get text out
+of one document, inside a ~1000 ms save→searchable. Both document pipelines are
+now Rust — `pdf-extract` over `lopdf` for the text layer, a zip reader plus
+`quick-xml` for DOCX — so the extraction term is measured again.
+
+**Provenance: measured, reproducible from this repository.**
+`crates/core/tests/documents.rs`, `document_extraction_latency_is_measured`,
+`--release`, against the folder named by `TESSERA_DOCS_CORPUS`; one
+`Pipeline::process` call per file — file load through page text and chunking,
+which is the whole of extraction. Not the store, and not embedding. The run was
+the only work on the machine.
+
+Corpus: **70 RFC PDFs** (RFC 2616 and the 8650–9457 range — the modern series
+whose PDF renditions rfc-editor.org publishes — 27.9 MB) and **44 DOCX** (7.0
+MB): the 40 largest by size in Apache POI's public `test-data/document` fixtures
+plus the four `.docx` files in python-docx's `tests/test_files`. Real documents
+out of two production toolchains, public downloads, kept outside the repository
+like every other corpus (SECURITY.md).
+
+| format | files | MB | p50 | p95 | mean | no text | failed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| PDF | 70 | 27.9 | **77.1 ms** | 471.8 ms | 140.2 ms | 0 | 1 |
+| DOCX | 44 | 7.0 | **2.4 ms** | 9.6 ms | 4.4 ms | 7 | 6 |
+
+Reading:
+
+- **The pypdf-bound term is gone.** 77.1 ms p50 against the spike's 400 ms. The
+  corpora and the runtimes differ — the spike extracted 40 mixed personal
+  documents in Python, this extracts RFC-sized PDFs in Rust — so the honest
+  reading is that this term moved from hundreds of milliseconds to tens, not
+  that some exact factor belongs to a library swap.
+- **DOCX extraction is negligible**: 2.4 ms p50 means the cost of a Word file
+  is its embedding, not its reading.
+- **The tail is the large documents.** p95 471.8 ms belongs to the megabyte
+  class of the corpus (the biggest file is RFC 9110, 2.9 MB); the median file is
+  tens of KB and tens of ms. The spread in file size is the spread in time.
+- **What this does not measure is save→searchable**, so the week-1 gate line is
+  not rewritten by it: the extraction term it blamed is now 77 ms, but
+  chunking, embedding and the store were not re-measured in this configuration.
+- **One PDF made the parser panic, and the guard is what turned it into a
+  recorded failure.** RFC 8671 trips `pdf-extract` into a `panic!`
+  (`wrong type`) rather than returning an error; `catch_unwind` in the pipeline
+  records that one file as failed with the reason — *"the PDF parser panicked
+  (wrong type); the file is recorded as failed and the run continues"* — and
+  the other 69 PDFs complete. Without the guard, one damaged PDF would end the
+  index run. The default panic hook still prints its two lines to stderr; the
+  record in `tessera stats` is the reason.
+- **Six DOCX failed, all on a zip that will not open**: two password-protected
+  documents (a real-world category — an encrypted OOXML file is an OLE compound
+  file, not a zip) and four truncated clusterfuzz fixtures from POI's corpus.
+  Each is recorded failed with its reason and the run continues; all seven
+  failures are retried on the next `tessera index`, because a failed file is
+  pending work rather than a tombstone.
+- **Seven DOCX carry no body text**, and that is a scope line, not a bug: the
+  pipeline reads `word/document.xml`, so a document whose body is only an
+  inline image (`having-images.docx`) or whose words live in headers and
+  footers (`poi-headerFooter.docx`) indexes by name. Headers, footers,
+  footnotes and text inside embedded images are not read in v0.1.
+
+A scan is the other document shape, and its extraction is 0 ms of text on
+purpose: a PDF whose pages carry no text becomes `status='awaiting_ocr'`,
+counted as its own row in `tessera stats`, not searchable, and retried next run
+— which is what makes the v0.1.x OCR pass an addition rather than a migration
+(test `a_scanned_pdf_is_recorded_as_awaiting_ocr_and_visible_in_stats`).
+
+The same corpus indexed end-to-end through `tessera index` in release: **107
+indexed, 7 failed, 0 awaiting** — the failures and the panic record are the same
+files as the table, and `tessera stats` lists each by name with its reason.
+
+**Caveats.** Single machine, single run, one file at a time; p95 over 70 and 44
+files is a coarse quantile. The corpus is two open corpora rather than a
+personal Documents folder, so "RFC-sized" describes these files rather than
+anyone's. The DOCX side is the 40 *largest* POI fixtures, so sub-20 KB Word
+files are a minority there (the four python-docx fixtures are that minority).
+And extraction is not the whole document story until save→searchable is
+re-measured end to end.

@@ -48,8 +48,9 @@ design (ADR-0007), not a platform that fails to build.
 
 ## Glossary
 
-- **Tile** — one indexed item: an image, or a document page/chunk. From
-  *tessera*, a mosaic tile.
+- **Tile** — one indexed item: a numbered chunk of a document, or the whole
+  extracted text of an image — `seq`, `text`, and a 1-based `page` when the
+  format has pages. From *tessera*, a mosaic tile.
 - **Corpus** — the set of folders the user has chosen to index.
 - **Root** — one indexed folder. The corpus is the set of roots; each file row
   records the root it came from, which is what scopes deletion propagation.

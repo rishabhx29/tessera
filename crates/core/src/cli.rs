@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
-use crate::index::{image::ImagePipeline, index_folder, text::TextPipeline, Pipeline};
+use crate::index::{
+    docx::DocxPipeline, image::ImagePipeline, index_folder, pdf::PdfPipeline, text::TextPipeline,
+    Pipeline,
+};
 use crate::models::Models;
 use crate::ocr::{self, OcrChoice, OcrEngine};
 use crate::search::search;
@@ -57,7 +60,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Index every supported file under a folder (text formats today).
+    /// Index every supported file under a folder (text, PDF, Word and images).
     Index { folder: PathBuf },
     /// Search the index. Multiple terms all must appear in the same file.
     Search {
@@ -154,6 +157,8 @@ fn pipelines(ocr: &OcrChoice, models: &Models) -> Result<Vec<Box<dyn Pipeline>>>
     };
     Ok(vec![
         Box::new(TextPipeline),
+        Box::new(PdfPipeline),
+        Box::new(DocxPipeline),
         Box::new(ImagePipeline::new(engine).with_embedder(image_embedder(models))),
     ])
 }
@@ -221,12 +226,13 @@ pub fn run() -> Result<()> {
             let summary = index_folder(&store, &pipelines, &folder)?;
             println!(
                 "indexed {indexed}, {unchanged} unchanged, {moved} moved, {skipped} skipped, \
-                 {failed} failed, {removed} removed",
+                 {failed} failed, {awaiting} awaiting OCR, {removed} removed",
                 indexed = summary.indexed,
                 unchanged = summary.unchanged,
                 moved = summary.moved,
                 skipped = summary.skipped,
                 failed = summary.failed,
+                awaiting = summary.awaiting_ocr,
                 removed = summary.removed,
             );
             if summary.walk_errors > 0 {
@@ -308,8 +314,8 @@ pub fn run() -> Result<()> {
                 }
                 for hit in hits {
                     println!("{}", hit.path);
-                    if let Some(text) = hit.tiles.first() {
-                        println!("  {}", text.chars().take(120).collect::<String>());
+                    if let Some(tile) = hit.tiles.first() {
+                        println!("  {}", tile.text.chars().take(120).collect::<String>());
                     }
                 }
                 return Ok(());
@@ -324,9 +330,12 @@ pub fn run() -> Result<()> {
                 println!("no results");
                 return Ok(());
             }
-            for hit in hits {
+            for hit in hits.into_iter().take(limit) {
                 println!("{}", hit.path);
-                println!("  {}", hit.snippet);
+                match hit.page {
+                    Some(page) => println!("  page {page}: {}", hit.snippet),
+                    None => println!("  {}", hit.snippet),
+                }
             }
             Ok(())
         }
@@ -414,7 +423,7 @@ pub fn stats_report(store: &Store) -> Result<Vec<String>> {
     }
     let mut lines: Vec<String> = statuses
         .iter()
-        .map(|(status, count)| format!("{status:<10} {count}"))
+        .map(|(status, count)| format!("{status:<12} {count}"))
         .collect();
     lines.extend(
         store
@@ -579,6 +588,7 @@ mod tests {
                 &[Tile {
                     seq: 0,
                     text: "ok.txt\nthe invoice".into(),
+                    page: None,
                 }],
             )
             .unwrap();
@@ -598,8 +608,8 @@ mod tests {
         assert_eq!(
             stats_report(&store).unwrap(),
             vec![
-                "indexed    1".to_string(),
-                "skipped    1".to_string(),
+                "indexed      1".to_string(),
+                "skipped      1".to_string(),
                 "  cloud_placeholder  1".to_string(),
             ]
         );
@@ -628,6 +638,7 @@ mod tests {
                 &[Tile {
                     seq: 0,
                     text: "ok.txt\nthe invoice".into(),
+                    page: None,
                 }],
             )
             .unwrap();
@@ -642,8 +653,8 @@ mod tests {
             .unwrap();
 
         let report = stats_report(&store).unwrap();
-        assert!(report.contains(&"indexed    1".to_string()), "{report:?}");
-        assert!(report.contains(&"failed     1".to_string()), "{report:?}");
+        assert!(report.contains(&"indexed      1".to_string()), "{report:?}");
+        assert!(report.contains(&"failed       1".to_string()), "{report:?}");
         // The count alone answers nothing: the file name and the reason are the
         // whole point of asking.
         assert!(

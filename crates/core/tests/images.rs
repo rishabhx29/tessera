@@ -467,6 +467,7 @@ fn one_tile_per_image_and_the_kind_is_recorded() {
     let _: Tile = Tile {
         seq: 0,
         text: String::new(),
+        page: None,
     };
 }
 

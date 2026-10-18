@@ -11,7 +11,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::{Kind, Pipeline, Tile};
+use super::{Extraction, Kind, Pipeline, Tile};
 use crate::ocr::OcrEngine;
 use crate::store::IMAGE_EMBEDDING_DIM;
 use crate::vectors::siglip::SiglipEmbedder;
@@ -73,17 +73,21 @@ impl Pipeline for ImagePipeline {
         claims_extension(ext).then_some(Kind::Image)
     }
 
-    fn process(&self, path: &Path) -> Result<Vec<Tile>> {
+    fn process(&self, path: &Path) -> Result<Extraction> {
         let text = self.engine.recognize(path)?;
         // An image with no text is not a failure: a photo has nothing to read,
         // and filing it as failed would put half a photo library in the failed
         // column for doing nothing wrong. No tiles means the loop's filename
         // step still gives it a tile, so the image stays findable by name.
-        Ok(if text.trim().is_empty() {
+        Ok(Extraction::Tiles(if text.trim().is_empty() {
             Vec::new()
         } else {
-            vec![Tile { seq: 0, text }]
-        })
+            vec![Tile {
+                seq: 0,
+                text,
+                page: None,
+            }]
+        }))
     }
 
     /// SigLIP's embedding of the image, for the description arm.
@@ -151,10 +155,13 @@ mod tests {
     #[test]
     fn recognised_text_becomes_one_tile() {
         let pipeline = ImagePipeline::new(Box::new(Fixed("the invoice from the airline")));
-        let tiles = pipeline.process(Path::new("a.png")).unwrap();
+        let Extraction::Tiles(tiles) = pipeline.process(Path::new("a.png")).unwrap() else {
+            panic!("an image with text is not awaiting OCR");
+        };
         assert_eq!(tiles.len(), 1, "an image is one unit of search");
         assert_eq!(tiles[0].text, "the invoice from the airline");
         assert_eq!(tiles[0].seq, 0);
+        assert_eq!(tiles[0].page, None, "an image has no pages");
     }
 
     #[test]
@@ -162,7 +169,10 @@ mod tests {
         // A photo has nothing to read. Indexing it as failed would put half a
         // photo library in the failed column for doing nothing wrong.
         let pipeline = ImagePipeline::new(Box::new(Fixed("   \n  ")));
-        assert!(pipeline.process(Path::new("dog.png")).unwrap().is_empty());
+        assert_eq!(
+            pipeline.process(Path::new("dog.png")).unwrap(),
+            Extraction::Tiles(Vec::new())
+        );
     }
 
     #[test]

@@ -35,24 +35,31 @@ trait Pipeline {
     /// it. One method, not two: "do you handle this?" and "what kind is it?"
     /// cannot usefully disagree.
     fn accepts(&self, path: &Path) -> Option<Kind>;
-    fn process(&self, file: &FileRef) -> Result<Vec<Tile>, PipelineError>;
+    fn process(&self, path: &Path) -> Result<Extraction>;
 }
 ```
+
+`Extraction` is `Tiles(Vec<Tile>)` or `AwaitingOcr`. The third outcome is not
+an error: a scan has no text layer, the bytes were read successfully, and
+nothing in this build can read words out of it — so the loop records the file
+as awaiting the OCR pass, still pending work, rather than as a failure.
 
 This seam is the repo's one deliberate speculative generality, licensed by the
 locked spec's four v0.1 formats. It stays open for formats the spec names, not
 for anything else.
 
-A **tile** is the unit of indexing: an image, or a document page/chunk. Every
-pipeline emits tiles; the store and search code are format-agnostic. Video
-(v0.2) is a new pipeline that emits image tiles (keyframes) and text tiles
-(transcript chunks) — no store or search changes.
+A **tile** is the unit of indexing: a numbered chunk of a document, or the
+whole extracted text of an image. It carries `seq`, `text`, and — for a paged
+format — the 1-based `page` it came from, so a result can say "page 4" rather
+than "chunk 17". Every pipeline emits tiles; the store and search code are
+format-agnostic. Video (v0.2) is a new pipeline that emits image tiles
+(keyframes) and text tiles (transcript chunks) — no store or search changes.
 
 The engine's public surface is small on purpose. `index_folder(store, pipelines,
 folder) -> IndexSummary` is the whole indexing interface; `Store` exposes file
-lifecycle operations (`index_file`, `skip_file`, `fail_file`, `move_file`,
-`moved_candidate`, `remove_missing`) and search reads (`file_ids_matching`,
-`files_by_ids`). Two seams are deliberately *internal* rather than public,
+lifecycle operations (`index_file`, `skip_file`, `fail_file`, `await_ocr`,
+`move_file`, `moved_candidate`, `remove_missing`) and search reads
+(`file_ids_matching`, `files_by_ids`). Two seams are deliberately *internal* rather than public,
 because they have one adapter each and exist for testability: the file probe
 (so a Files On-Demand placeholder can be tested) and the hash thunk (so the
 change decision is a pure function).
@@ -161,7 +168,8 @@ files(
 tiles(
   id INTEGER PRIMARY KEY,
   file_id INTEGER REFERENCES files(id),
-  seq INTEGER,               -- page/position within the file
+  seq INTEGER,               -- 0-based position within the file
+  page INTEGER,              -- 1-based page for paged formats, NULL otherwise
   text TEXT                  -- OCR text or document chunk text
 );
 
@@ -221,7 +229,8 @@ watcher event / initial scan (newest-first)
   size > 50 MB?          ── yes → status='skipped', reason='too_large'
         │ no
         ▼
-  pipeline.process(file)  → tiles { text, embeddings }
+  pipeline.process(file)  → tiles { seq, page, text } | AwaitingOcr (no tiles,
+        │                     status='awaiting_ocr', retried next run)
         │
         ▼
   store upsert (files, tiles, tiles_fts, img_vec, txt_vec) — one transaction

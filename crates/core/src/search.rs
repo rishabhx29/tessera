@@ -23,6 +23,10 @@ pub struct Hit {
     pub path: String,
     pub kind: String,
     pub snippet: String,
+    /// The page the snippet sits on, when the file has pages (a PDF). The page
+    /// of the tile that matched, not of the file: "page 4" is where the words
+    /// are.
+    pub page: Option<u32>,
 }
 
 /// Character classes whose members are commonly confused for one another,
@@ -159,12 +163,29 @@ pub fn search(store: &Store, terms: &[&str]) -> anyhow::Result<Vec<Hit>> {
         .into_iter()
         .map(|file| {
             // The snippet is built here, not in the store: choosing the window
-            // around a match is a decision about presentation.
-            let joined = file.tiles.join(" ");
+            // around a match is a decision about presentation. It comes from
+            // the first tile that contains a term, because the tile is what
+            // knows its page — a result that names a page must name the page
+            // the words are on. A lookalike-only hit (matched through the FTS
+            // variants, not the literal text) falls back to the first tile.
+            let tile = file
+                .tiles
+                .iter()
+                .find(|tile| {
+                    terms
+                        .iter()
+                        .any(|term| find_case_insensitive(&tile.text, term).is_some())
+                })
+                .or_else(|| file.tiles.first());
+            let (snippet, page) = match tile {
+                Some(tile) => (snippet_around(&tile.text, terms, 240), tile.page),
+                None => (String::new(), None),
+            };
             Hit {
                 path: file.path,
                 kind: file.kind,
-                snippet: snippet_around(&joined, terms, 240),
+                snippet,
+                page,
             }
         })
         .collect())
@@ -238,5 +259,69 @@ mod tests {
         assert!(!s.contains('\n'));
         let s = snippet_around("hello world", &["zebra"], 20);
         assert_eq!(s, "hello world");
+    }
+
+    #[test]
+    fn a_hit_carries_the_page_its_match_sat_on() {
+        use crate::index::skip::FileFacts;
+        use crate::index::{Kind, Tile};
+        use crate::store::Store;
+
+        let data = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let store = Store::open(data.path()).unwrap();
+        let facts = FileFacts {
+            size: 10,
+            mtime: 1,
+            placeholder: false,
+        };
+        let report = corpus.path().join("report.pdf");
+        store
+            .index_file(
+                corpus.path(),
+                &report,
+                Kind::Pdf,
+                &facts,
+                Some("abc"),
+                &[
+                    Tile {
+                        seq: 0,
+                        text: "report.pdf\na cover page".into(),
+                        page: Some(1),
+                    },
+                    Tile {
+                        seq: 1,
+                        text: "the invoice from the airline".into(),
+                        page: Some(4),
+                    },
+                ],
+            )
+            .unwrap();
+        let note = corpus.path().join("note.txt");
+        store
+            .index_file(
+                corpus.path(),
+                &note,
+                Kind::Text,
+                &facts,
+                Some("def"),
+                &[Tile {
+                    seq: 0,
+                    text: "note.txt\nthe invoice from the bank".into(),
+                    page: None,
+                }],
+            )
+            .unwrap();
+
+        let hits = search(&store, &["invoice"]).unwrap();
+        let pdf = hits.iter().find(|h| h.kind == "pdf").unwrap();
+        assert_eq!(
+            pdf.page,
+            Some(4),
+            "the page comes from the tile the term is on, not the file's first tile"
+        );
+        assert!(pdf.snippet.contains("invoice"));
+        let text = hits.iter().find(|h| h.kind == "text").unwrap();
+        assert_eq!(text.page, None, "a format without pages says so");
     }
 }

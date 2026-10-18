@@ -26,7 +26,7 @@ use crate::vectors::Embedding;
 
 /// The schema version this engine understands. Bumping it means writing a
 /// migration; opening a future-version store must fail loudly.
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 /// The width of a SigLIP-base embedding. Pinned by the model's own output shape,
 /// so it is a constant rather than something read from a file that might be a
@@ -97,6 +97,11 @@ pub enum FileStatus {
     Skipped,
     /// A pipeline could not process it.
     Failed,
+    /// Read, but its content is images rather than text — a PDF with no text
+    /// layer — so there is nothing to extract until an OCR pass for that
+    /// format exists. Not a failure: nothing is wrong with the file, and the
+    /// row stays pending work (no hash, no tiles) until the pass arrives.
+    AwaitingOcr,
 }
 
 impl FileStatus {
@@ -105,6 +110,7 @@ impl FileStatus {
             FileStatus::Indexed => "indexed",
             FileStatus::Skipped => "skipped",
             FileStatus::Failed => "failed",
+            FileStatus::AwaitingOcr => "awaiting_ocr",
         }
     }
 
@@ -113,6 +119,7 @@ impl FileStatus {
             "indexed" => Some(FileStatus::Indexed),
             "skipped" => Some(FileStatus::Skipped),
             "failed" => Some(FileStatus::Failed),
+            "awaiting_ocr" => Some(FileStatus::AwaitingOcr),
             _ => None,
         }
     }
@@ -194,14 +201,25 @@ fn upsert_file(conn: &Connection, row: FileRow<'_>) -> Result<()> {
 /// A file row as the sweeper and the move detector need it: an id and a path.
 type FileRowRef = (i64, String);
 
+/// One matched tile: its position in the file, the page it came from when the
+/// format has pages, and the text itself. A result needs the tile rather than
+/// a joined string because only the tile knows its page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchedTile {
+    pub seq: u32,
+    pub page: Option<u32>,
+    pub text: String,
+}
+
 /// One matched file, with everything a search result needs to describe it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchedFile {
     pub file_id: i64,
     pub path: String,
     pub kind: String,
-    /// The file's tile texts in order — the text search matched against.
-    pub tiles: Vec<String>,
+    /// The file's tiles in order — the text search matched against, and where
+    /// a result finds out which page its snippet is on.
+    pub tiles: Vec<MatchedTile>,
 }
 
 fn row_to_ref(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRowRef> {
@@ -217,6 +235,7 @@ impl Store {
             .files_by_ids(&[file_id])?
             .into_iter()
             .flat_map(|file| file.tiles)
+            .map(|tile| tile.text)
             .collect())
     }
 
@@ -362,6 +381,14 @@ impl Store {
                      COMMIT;",
                 )
                 .context("migrating schema to v3")?,
+            4 => self
+                .conn
+                .execute_batch(
+                    "BEGIN;
+                     ALTER TABLE tiles ADD COLUMN page INTEGER;
+                     COMMIT;",
+                )
+                .context("migrating schema to v4")?,
             other => anyhow::bail!("no migration for schema version {other}"),
         }
         self.conn
@@ -519,8 +546,8 @@ impl Store {
         purge_tiles(&tx, file_id)?;
         for tile in tiles {
             tx.execute(
-                "INSERT INTO tiles(file_id, seq, text) VALUES (?1, ?2, ?3)",
-                rusqlite::params![file_id, tile.seq, tile.text],
+                "INSERT INTO tiles(file_id, seq, page, text) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![file_id, tile.seq, tile.page, tile.text],
             )?;
             let tile_id = tx.last_insert_rowid();
             tx.execute(
@@ -582,6 +609,32 @@ impl Store {
                 sha1: None,
                 status: FileStatus::Failed,
                 reason: Some(reason),
+            },
+        )
+    }
+
+    /// Record a file that was read but has nothing this build can read out of
+    /// it — a PDF with no text layer, waiting for an OCR pass. Not `failed`
+    /// (nothing is wrong with the file) and not `skipped` (which is for files
+    /// deliberately not read at all).
+    ///
+    /// The hash is dropped like a skip's and a failure's: no content was
+    /// extracted, so there is nothing to vouch for, and the row is pending
+    /// work — the next index run re-reads it, and the OCR pass that arrives
+    /// later finds it by its status. No tiles are written, both because there
+    /// are none and because a name tile would claim the file is searchable
+    /// when its content is exactly what is missing.
+    pub fn await_ocr(&self, root: &Path, path: &Path, kind: Kind, facts: &FileFacts) -> Result<()> {
+        upsert_file(
+            &self.conn,
+            FileRow {
+                path,
+                root,
+                kind,
+                facts: *facts,
+                sha1: None,
+                status: FileStatus::AwaitingOcr,
+                reason: Some("no_text_layer"),
             },
         )
     }
@@ -717,7 +770,7 @@ impl Store {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT f.id, f.path, f.kind, t.text
+            "SELECT f.id, f.path, f.kind, t.seq, t.page, t.text
              FROM files f JOIN tiles t ON t.file_id = f.id
              WHERE f.id IN ({holes})
              ORDER BY f.id, t.seq"
@@ -728,7 +781,11 @@ impl Store {
                 file_id: row.get::<_, i64>(0)?,
                 path: row.get(1)?,
                 kind: row.get::<_, String>(2)?,
-                tiles: vec![row.get::<_, String>(3)?],
+                tiles: vec![MatchedTile {
+                    seq: row.get::<_, u32>(3)?,
+                    page: row.get::<_, Option<u32>>(4)?,
+                    text: row.get(5)?,
+                }],
             })
         })?;
         let mut out: Vec<MatchedFile> = Vec::new();
@@ -887,20 +944,26 @@ impl Store {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT f.id, f.path, f.kind,
-                    (SELECT t.text FROM tiles t WHERE t.file_id = f.id ORDER BY t.seq LIMIT 1)
-             FROM files f WHERE f.id IN ({holes})"
+            "SELECT f.id, f.path, f.kind, t.seq, t.page, t.text
+             FROM files f
+             LEFT JOIN tiles t ON t.id =
+                 (SELECT t2.id FROM tiles t2 WHERE t2.file_id = f.id ORDER BY t2.seq LIMIT 1)
+             WHERE f.id IN ({holes})"
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(&ids), |row| {
+            let seq: Option<u32> = row.get(3)?;
+            let page: Option<u32> = row.get(4)?;
+            let text: Option<String> = row.get(5)?;
+            let tiles = match (seq, text) {
+                (Some(seq), Some(text)) => vec![MatchedTile { seq, page, text }],
+                _ => Vec::new(),
+            };
             Ok(MatchedFile {
                 file_id: row.get::<_, i64>(0)?,
                 path: row.get(1)?,
                 kind: row.get::<_, String>(2)?,
-                tiles: row
-                    .get::<_, Option<String>>(3)?
-                    .map(|t| vec![t])
-                    .unwrap_or_default(),
+                tiles,
             })
         })?;
         let mut by_id: std::collections::HashMap<i64, MatchedFile> =
@@ -1020,6 +1083,7 @@ mod tests {
                 &[Tile {
                     seq: 0,
                     text: "a screenshot".into(),
+                    page: None,
                 }],
             )
             .expect("index it");
@@ -1203,6 +1267,7 @@ mod tests {
             .map(|(seq, text)| Tile {
                 seq: seq as u32,
                 text: (*text).to_string(),
+                page: None,
             })
             .collect()
     }
@@ -1376,6 +1441,93 @@ mod tests {
         assert!(gone.is_empty());
     }
 
+    #[test]
+    fn a_tiles_page_survives_the_round_trip() {
+        let (_dir, store) = tmp_store();
+        store
+            .index_file(
+                Path::new("/corpus"),
+                Path::new("/corpus/report.pdf"),
+                Kind::Pdf,
+                &facts(10),
+                Some("abc123"),
+                &[
+                    Tile {
+                        seq: 0,
+                        text: "a report".into(),
+                        page: Some(1),
+                    },
+                    Tile {
+                        seq: 1,
+                        text: "more text".into(),
+                        page: Some(2),
+                    },
+                    Tile {
+                        seq: 2,
+                        text: "no page here".into(),
+                        page: None,
+                    },
+                ],
+            )
+            .unwrap();
+        let mut files = store.files_by_ids(&[1]).unwrap();
+        let file = files.remove(0);
+        let pages: Vec<Option<u32>> = file.tiles.iter().map(|t| t.page).collect();
+        assert_eq!(
+            pages,
+            vec![Some(1), Some(2), None],
+            "pages are what the pipeline said, not positions"
+        );
+        let texts: Vec<&str> = file.tiles.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(texts, vec!["a report", "more text", "no page here"]);
+    }
+
+    #[test]
+    fn an_awaiting_file_is_recorded_without_claiming_anything() {
+        let (_dir, store) = tmp_store();
+        store
+            .await_ocr(
+                Path::new("/corpus"),
+                Path::new("/corpus/scan.pdf"),
+                Kind::Pdf,
+                &facts(2048),
+            )
+            .unwrap();
+
+        let state = store
+            .file_state(Path::new("/corpus/scan.pdf"))
+            .unwrap()
+            .expect("the file is recorded");
+        assert!(!state.extracted, "the file is pending work, not indexed");
+        assert_eq!(
+            state.sha1, None,
+            "nothing was extracted, so nothing is claimed"
+        );
+        assert_eq!(
+            store.stats().unwrap(),
+            vec![("awaiting_ocr".to_string(), 1)]
+        );
+        assert!(
+            store.skip_reasons().unwrap().is_empty(),
+            "awaiting OCR is not a pre-read skip and does not belong in that breakdown"
+        );
+        assert!(
+            store
+                .moved_candidate(
+                    Path::new("/corpus"),
+                    "abc123",
+                    Path::new("/corpus/moved.pdf")
+                )
+                .unwrap()
+                .is_none(),
+            "an awaiting row carries no hash and cannot be moved by one"
+        );
+        assert!(
+            store.files_by_ids(&[1]).unwrap().is_empty(),
+            "no tiles means the file is not searchable by its content"
+        );
+    }
+
     /// The transactional promise: a rejected upsert must leave the previous
     /// version of the tiles — in the tiles table *and* in the FTS index —
     /// exactly as it was, not a mixture of old and new.
@@ -1389,10 +1541,12 @@ mod tests {
             Tile {
                 seq: 0,
                 text: "brand new words".into(),
+                page: None,
             },
             Tile {
                 seq: 0,
                 text: "second tile".into(),
+                page: None,
             },
         ];
         let err = store.index_file(

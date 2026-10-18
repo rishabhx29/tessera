@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use tessera_core::index::skip::MAX_FILE_BYTES;
-use tessera_core::index::{index_folder, text::TextPipeline, Kind, Pipeline};
+use tessera_core::index::{index_folder, text::TextPipeline, Extraction, Kind, Pipeline};
 use tessera_core::search::search;
 use tessera_core::store::Store;
 
@@ -42,7 +42,7 @@ impl Pipeline for Recorded {
         TextPipeline.accepts(path)
     }
 
-    fn process(&self, path: &Path) -> Result<Vec<tessera_core::index::Tile>> {
+    fn process(&self, path: &Path) -> Result<Extraction> {
         let opened = {
             let mut opened = self.0.opened.lock().unwrap();
             opened.push(path.to_path_buf());

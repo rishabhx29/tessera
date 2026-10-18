@@ -1,6 +1,6 @@
 //! Format pipelines: turn one file on disk into searchable tiles.
 //!
-//! Every format (text today; images, PDF, DOCX, video later) lives behind the
+//! Every format (text, images, PDF, DOCX today; video later) lives behind the
 //! [`Pipeline`] trait so a new format never touches the store or the search
 //! code (AGENTS.md convention). A **tile** is the unit of indexing: one chunk
 //! of a document, or the whole extracted text of an image.
@@ -10,7 +10,9 @@
 //! *before* anything opens it, a rename updates one row instead of indexing
 //! the same bytes twice, and a deletion removes its results.
 
+pub mod docx;
 pub mod image;
+pub mod pdf;
 pub mod skip;
 pub mod text;
 
@@ -27,6 +29,29 @@ use crate::store::{FileState, Store};
 pub struct Tile {
     pub seq: u32,
     pub text: String,
+    /// The page this tile came from, for formats that have pages (PDF).
+    /// 1-based, because it is what a person reads off the page ("page 4");
+    /// `None` for formats without them.
+    pub page: Option<u32>,
+}
+
+/// What processing one file produced.
+///
+/// Three outcomes, not two, because "this file could not be read" and "there
+/// is nothing to read *yet*" are different facts about it: a scanned PDF has
+/// no text layer, and filing it as failed would blame the user's file for a
+/// capability this build does not have. What each outcome becomes in the
+/// store is the loop's business; the pipeline only says which one happened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Extraction {
+    /// The file's searchable content — possibly empty, because a file with no
+    /// text at all is still findable by its name.
+    Tiles(Vec<Tile>),
+    /// The file is images rather than text: a PDF with no text layer, waiting
+    /// for the OCR pass the spec schedules for v0.1.x. Recorded as
+    /// `awaiting_ocr` with its reason — not a failure, and never silently
+    /// dropped ("SKIP reasons are recorded, not swallowed", architecture).
+    AwaitingOcr,
 }
 
 /// What kind of file a pipeline produces. A closed set, so a format added
@@ -63,9 +88,10 @@ pub trait Pipeline {
     /// own this file.
     fn accepts(&self, path: &Path) -> Option<Kind>;
 
-    /// Extract the file's content into tiles. Errors mean "this file failed",
-    /// never "the whole index run failed".
-    fn process(&self, path: &Path) -> anyhow::Result<Vec<Tile>>;
+    /// Extract the file's content. Errors mean "this file failed", never "the
+    /// whole index run failed"; [`Extraction::AwaitingOcr`] means the file has
+    /// no text this build can read.
+    fn process(&self, path: &Path) -> anyhow::Result<Extraction>;
 
     /// The file's embedding for the semantic arm, if this pipeline produces
     /// one.
@@ -101,6 +127,10 @@ pub struct IndexSummary {
     pub skipped: usize,
     /// Files a pipeline accepted but could not extract; recorded on the file row.
     pub failed: usize,
+    /// Files whose content is images rather than text (scanned PDFs): recorded
+    /// as awaiting an OCR pass, counted separately so "why can't I search my
+    /// scans?" has an answer that is not "failure".
+    pub awaiting_ocr: usize,
     /// Rows dropped because the file is gone from disk.
     pub removed: usize,
     /// Paths that could not be walked or examined at all. Not file failures,
@@ -175,6 +205,7 @@ fn with_filename(path: &Path, mut tiles: Vec<Tile>) -> Vec<Tile> {
         None => tiles.push(Tile {
             seq: 0,
             text: name.to_string(),
+            page: None,
         }),
     }
     tiles
@@ -280,10 +311,15 @@ pub(crate) fn index_folder_with(
         // find its photographs by description, and losing the whole image
         // because the *text* half failed would be throwing away a working half.
         let row_written = match pipeline.process(path) {
-            Ok(tiles) => {
+            Ok(Extraction::Tiles(tiles)) => {
                 let sha = Some(hash.get()?);
                 store.index_file(folder, path, kind, &facts, sha, &with_filename(path, tiles))?;
                 summary.indexed += 1;
+                true
+            }
+            Ok(Extraction::AwaitingOcr) => {
+                store.await_ocr(folder, path, kind, &facts)?;
+                summary.awaiting_ocr += 1;
                 true
             }
             Err(err) => {
@@ -349,13 +385,15 @@ mod tests {
     }
 
     #[test]
-    fn tile_holds_seq_and_text() {
+    fn tile_holds_seq_text_and_page() {
         let t = Tile {
             seq: 0,
             text: "hello".into(),
+            page: Some(4),
         };
         assert_eq!(t.seq, 0);
         assert_eq!(t.text, "hello");
+        assert_eq!(t.page, Some(4), "a tile from a paged format knows its page");
         let _ = t; // Tile is Clone + Debug + PartialEq, exercised by the derive
     }
 
@@ -366,9 +404,15 @@ mod tests {
             vec![Tile {
                 seq: 0,
                 text: "body".into(),
+                page: Some(2),
             }],
         );
         assert_eq!(tiles[0].text, "zwiebel.md\nbody");
+        assert_eq!(
+            tiles[0].page,
+            Some(2),
+            "prepending the name must not move the tile off its page"
+        );
     }
 
     #[test]
@@ -376,6 +420,7 @@ mod tests {
         let tiles = with_filename(Path::new("empty/photo.png.txt"), Vec::new());
         assert_eq!(tiles.len(), 1);
         assert_eq!(tiles[0].text, "photo.png.txt");
+        assert_eq!(tiles[0].page, None, "a name tile belongs to no page");
     }
 
     #[test]
@@ -541,7 +586,7 @@ mod tests {
             fn accepts(&self, path: &Path) -> Option<Kind> {
                 TextPipeline.accepts(path)
             }
-            fn process(&self, path: &Path) -> Result<Vec<Tile>> {
+            fn process(&self, path: &Path) -> Result<Extraction> {
                 assert!(
                     !path.to_string_lossy().contains("cloud-only"),
                     "the pipeline was asked to open the cloud placeholder {}",
@@ -581,6 +626,54 @@ mod tests {
                 .unwrap()
                 .is_empty(),
             "a file that was never read must not have searchable text"
+        );
+    }
+
+    /// A pipeline that claims `.scan` files and reports that nothing can be
+    /// read yet — the shape a PDF with no text layer produces.
+    struct ScansNothing;
+
+    impl Pipeline for ScansNothing {
+        fn accepts(&self, path: &Path) -> Option<Kind> {
+            (path.extension().and_then(|e| e.to_str())? == "scan").then_some(Kind::Pdf)
+        }
+
+        fn process(&self, _path: &Path) -> Result<Extraction> {
+            Ok(Extraction::AwaitingOcr)
+        }
+    }
+
+    #[test]
+    fn a_file_with_nothing_to_read_yet_is_awaiting_ocr_not_failed() {
+        let data = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let dir = corpus.path();
+        write(dir, "invoice.scan", "bytes whose content is an image");
+
+        let store = Store::open(data.path()).unwrap();
+        let summary = index_folder(&store, &[Box::new(ScansNothing)], dir).unwrap();
+
+        assert_eq!(
+            (summary.indexed, summary.failed, summary.awaiting_ocr),
+            (0, 0, 1),
+            "waiting for OCR is its own outcome, not a failure and not an index"
+        );
+        assert_eq!(
+            store.stats().unwrap(),
+            vec![("awaiting_ocr".to_string(), 1)]
+        );
+        assert!(
+            store.skip_reasons().unwrap().is_empty(),
+            "awaiting OCR is not one of the pre-read skip reasons"
+        );
+        let row = store
+            .file_state(&dir.join("invoice.scan"))
+            .unwrap()
+            .expect("the file is recorded");
+        assert!(!row.extracted, "the row is still pending work");
+        assert_eq!(
+            row.sha1, None,
+            "nothing was extracted, so nothing is claimed"
         );
     }
 
