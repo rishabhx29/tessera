@@ -1407,3 +1407,73 @@ anyone's. The DOCX side is the 40 *largest* POI fixtures, so sub-20 KB Word
 files are a minority there (the four python-docx fixtures are that minority).
 And extraction is not the whole document story until save→searchable is
 re-measured end to end.
+
+## The text arm in the Rust engine — measured (ticket 09)
+
+The spike measured a text arm in Python (35.0 ms p50 for one MiniLM query), but
+until now the engine had none: neither document chunks nor OCR text carried a
+vector, and meaning was not a way to search. It is now a real arm —
+`crates/core/src/vectors/minilm.rs`, one 384-d vector per tile in `txt_vec`,
+filled by a post-walk sweep — and `tessera search --describe-text` is its query
+surface until ticket 10 fuses the arms into one box.
+
+**Provenance: measured, reproducible from this repository.** The query-side
+number is `crates/core/tests/text_arm.rs`,
+`query_embedding_latency_is_measured` (ignored; run with the pinned `minilm`
+set installed), `--release`, 40 samples after one warm-up pass, the run the
+only work on the machine. The end-to-end numbers are `tessera index` and
+`tessera search --describe-text` over the corpus of the ticket-08 section
+above: 70 RFC PDFs and 44 DOCX, 107 files indexed, 7 recorded failures, one
+file at a time.
+
+| Measure | Result | Runs |
+| --- | ---: | ---: |
+| Query embedding (MiniLM int8), p50 | **20.6 ms** | 40 |
+| Query embedding, p95 | 23.2 ms | 40 |
+| Full meaning query, 6,425 chunk vectors in `txt_vec` | **43–45 ms** | 6 |
+| First `tessera index` pass: walk + extract + embed 6,425 chunks | 154.8 s | 1 |
+| Re-index of the untouched corpus: 0 chunks embedded | 7.8 s | 1 |
+
+Machine: the one in **Hardware** above (AMD Ryzen 3 5300U, 8 threads); the
+MiniLM session runs on 8 threads, as the CLI clamps it.
+
+Reading:
+
+- **The spike's "tens of milliseconds" held.** 20.6 ms p50 here against the
+  spike's 35.0 ms, measured in a Python script in week 1. Different runtime,
+  different sample set, so read it as "the same class, confirmed in the engine
+  that ships it" rather than as a speedup claim about a library.
+- **A full query is roughly embed plus scan.** 43–45 ms total: ~21 ms of query
+  embedding, the rest the brute-force cosine scan over all 6,425 vectors and
+  the store reads. There is no ANN index and none is needed at this size — the
+  same choice the image arm's section records; the scan is the term that grows
+  linearly with the corpus.
+- **Indexing pays the same per-chunk cost.** 154.8 s for the first pass with
+  extraction included (ticket 08 measured extraction in the tens of ms per
+  file); setting that aside puts the sweep at about 21–22 ms per chunk, the
+  query-pass cost again, because it is the same ONNX call.
+- **The steady state is free.** The second pass over the untouched corpus took
+  7.8 s and embedded 0 chunks: the sweep asks the store which tiles have no
+  vector and the answer is none. A missing vector, a moved model pin and a
+  fresh install are one repair path
+  (`Store::tiles_without_text_vectors`), which is also what will make ticket
+  11's watcher affordable — new text is embedded once, and nothing else moves.
+- **The known-answer check is a test, not an anecdote.** `text_arm.rs` builds
+  three small files, asks for "the contract that stops me working for a
+  competitor", and requires the lease first — while asserting that the lease's
+  text does not contain the word *competitor*, so the match cannot be explained
+  by the words.
+
+A pin that moves is not a silent blend: `tessera index` drops the whole text
+arm when the manifest's MiniLM pin differs from the version recorded in `meta`,
+and the sweep rebuilds it from the tiles already stored — the text is never
+re-read for this. The image arm's pin has no equivalent drop-in path yet (its
+only writer is the image pipeline, per file), which is left as it is rather
+than half-fixed here.
+
+**Caveats.** One machine; one indexing pass; six query runs whose range is the
+whole spread, not an interval; p95 from 40 embeddings of short sentences, so
+the 256-token cap is not exercised. The corpus is two open corpora rather than
+a personal Documents folder, and 6,425 chunks is a small index — the scan half
+of the query has not been measured beyond it, and no retrieval-quality metric
+for meaning search over documents is claimed here.

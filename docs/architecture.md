@@ -233,7 +233,12 @@ watcher event / initial scan (newest-first)
         │                     status='awaiting_ocr', retried next run)
         │
         ▼
-  store upsert (files, tiles, tiles_fts, img_vec, txt_vec) — one transaction
+  store upsert (files, tiles, tiles_fts) — one transaction
+        │
+        ▼
+  arms write their vectors after it: img_vec per file from the image pipeline,
+  txt_vec by a post-walk sweep over tiles that have no vector yet (a moved pin,
+  a fresh install and a crash all repair through that same sweep)
         │
         ▼
   rows under this root whose file is gone → deleted (deletion propagates)
@@ -259,7 +264,11 @@ query
 ```
 
 One search box. The user does not choose modes; the arms all run and the
-fusion hides which ones hit. Typo tolerance has two layers: the trigram
+fusion hides which ones hit — that is the design, and until ticket 10's
+weighted fusion lands the arms are reachable individually (`tessera search`,
+`--describe`, `--describe-text`). The text arm embeds every tile the store
+holds, so a document chunk, an OCR line and a file name are all findable by
+meaning. Typo tolerance has two layers: the trigram
 tokenizer makes partial words match (`invoic` finds `invoice`), and each query
 term is expanded into its lookalike variants (`0`↔`o`, `1`↔`l`↔`i`, `5`↔`s`,
 `8`↔`b`) and OR-ed, so `inv0ice` finds `invoice`. Trigram alone cannot do this
@@ -273,7 +282,7 @@ inside the corpus.
 |---|---|---|
 | RapidOCR PP-OCRv5 (ONNX, mobile) | OCR for images/screenshots | ~15 MB; multilingual models exist (Devanagari is a v0.1.x fast-follow) |
 | MobileCLIP2-S0 or SigLIP-base (int8 ONNX) | image↔text description search | ~60–100 MB |
-| all-MiniLM-L6-v2 (int8 ONNX) | document meaning search | ~90 MB |
+| all-MiniLM-L6-v2 (int8 ONNX) | document meaning search | ~24 MB (the pinned int8 set); one vector per tile, documents and OCR text alike |
 | *(fallback)* Windows.Media.Ocr | OCR, Windows-only | nominated only if the spike shows RapidOCR too slow on CPU |
 
 All downloaded once on first run, checksum-pinned (ADR-0004). No network

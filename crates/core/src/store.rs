@@ -14,7 +14,7 @@
 //!   mid-index leaves the previous version of those tiles rather than a
 //!   half-written mix.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -26,12 +26,17 @@ use crate::vectors::Embedding;
 
 /// The schema version this engine understands. Bumping it means writing a
 /// migration; opening a future-version store must fail loudly.
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 /// The width of a SigLIP-base embedding. Pinned by the model's own output shape,
 /// so it is a constant rather than something read from a file that might be a
 /// different model.
 pub const IMAGE_EMBEDDING_DIM: usize = 768;
+
+/// The width of a MiniLM embedding. all-MiniLM-L6-v2's output shape, pinned here
+/// for the same reason as the image width: a query vector of the wrong width is
+/// a silent wrong answer, not an error, unless it is caught.
+pub const TEXT_EMBEDDING_DIM: usize = 384;
 
 /// Schema v1, the tracer-bullet shape. Kept verbatim as the migration source
 /// so a test can build a real v1 index and prove the v1 → v2 path works.
@@ -226,6 +231,18 @@ fn row_to_ref(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRowRef> {
     Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
 }
 
+/// One tile row plus its file's identity, for the text arm's tile → file
+/// collapse. Private because it is a shape the store builds and consumes; the
+/// public result is [`MatchedFile`].
+struct TileRow {
+    file_id: i64,
+    path: String,
+    kind: String,
+    seq: u32,
+    page: Option<u32>,
+    text: String,
+}
+
 impl Store {
     /// Tests and diagnostics read the stored text back through the same
     /// interface a search uses, so they cannot drift from it.
@@ -389,6 +406,18 @@ impl Store {
                      COMMIT;",
                 )
                 .context("migrating schema to v4")?,
+            5 => self
+                .conn
+                .execute_batch(
+                    "BEGIN;
+                     CREATE TABLE IF NOT EXISTS txt_vec(
+                       tile_id INTEGER PRIMARY KEY REFERENCES tiles(id) ON DELETE CASCADE,
+                       dim     INTEGER NOT NULL,
+                       vec     BLOB NOT NULL
+                     );
+                     COMMIT;",
+                )
+                .context("migrating schema to v5")?,
             other => anyhow::bail!("no migration for schema version {other}"),
         }
         self.conn
@@ -701,6 +730,16 @@ impl Store {
             tx.execute(
                 "INSERT INTO tiles_fts(rowid, text) VALUES (?1, ?2)",
                 rusqlite::params![tile_id, title],
+            )?;
+            // The text arm's vector for this tile was an embedding of the old
+            // name plus the text. The name just changed, so the vector is not a
+            // claim about the tile that is there any more: drop it and let the
+            // post-walk sweep embed the one tile again. Leaving it would let a
+            // meaning query for the file's old name keep finding it while a
+            // query for the new one might not.
+            tx.execute(
+                "DELETE FROM txt_vec WHERE tile_id = ?1",
+                rusqlite::params![tile_id],
             )?;
         }
         tx.execute(
@@ -1015,6 +1054,181 @@ impl Store {
             .map_err(Into::into)
     }
 
+    /// Store one tile's text embedding, normalized at this boundary for the
+    /// same reason as the image arm: a scan can then be a dot product, and a row
+    /// written by a repair path is comparable with one written by the indexer.
+    ///
+    /// The tile id is the key, so re-embedding a tile replaces its vector rather
+    /// than accumulating a second one.
+    pub fn put_text_embedding(&self, tile_id: i64, embedding: &Embedding) -> Result<()> {
+        let mut stored = embedding.clone();
+        stored.normalize();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO txt_vec(tile_id, dim, vec) VALUES (?1, ?2, ?3)",
+            rusqlite::params![tile_id, stored.dim() as i64, stored.to_blob()],
+        )?;
+        Ok(())
+    }
+
+    /// How many tiles currently carry a text vector. The number that answers
+    /// "did the sweep fill the arm in?" — a missing vector does not fail a
+    /// query, it just quietly returns fewer results.
+    pub fn text_embedding_count(&self) -> Result<i64> {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM txt_vec", [], |row| row.get(0))
+            .map_err(Into::into)
+    }
+
+    /// Every stored text vector, paired with its tile id, corrupt rows
+    /// quarantined rather than fatal — one bad blob must not take the text arm
+    /// down for every other document.
+    pub fn text_embeddings(&self, dim: usize) -> Result<Vec<(i64, Embedding)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT tile_id, vec FROM txt_vec ORDER BY tile_id")?;
+        let mut rows = stmt.query([])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let tile_id: i64 = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            match Embedding::from_blob(&blob, dim) {
+                Ok(embedding) => out.push((tile_id, embedding)),
+                Err(err) => eprintln!(
+                    "skipping a corrupt text vector for tile {tile_id}: {err:#}. Re-index that \
+                     file to repair it; every other document is still searchable by meaning."
+                ),
+            }
+        }
+        Ok(out)
+    }
+
+    /// The tiles that have no text vector yet: the sweep's whole work list.
+    ///
+    /// This is what makes a changed model pin, a crash mid-run and a fresh
+    /// install the same repair path. It reads text, so it is called once per
+    /// index run rather than per file.
+    pub fn tiles_without_text_vectors(&self) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.id, t.text
+             FROM tiles t LEFT JOIN txt_vec v ON v.tile_id = t.id
+             WHERE v.tile_id IS NULL
+             ORDER BY t.id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Forget the text arm: drop every vector **and** clear its version pin, in
+    /// one transaction, for the reason [`Store::forget_image_arm`] records — the
+    /// other order reports a complete arm whose queries return nothing.
+    pub fn forget_text_arm(&self) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM txt_vec", [])?;
+        tx.execute(
+            "DELETE FROM meta WHERE key = ?1",
+            rusqlite::params![Arm::Text.meta_key()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The files whose tiles best match `query`, best first.
+    ///
+    /// This is the text arm on its own: cosine against every stored tile
+    /// vector, then one hit per file, carrying the tile that actually matched
+    /// so a result can say "page 4" with the snippet from page 4.
+    ///
+    /// Ties and near-ties are resolved by [`crate::vectors::rank`], not here;
+    /// this function's job is the tile → file collapse. It fetches ranked tiles
+    /// in batches because a file with a hundred chunks should not be able to
+    /// force a read of every tile's text to find the next file.
+    pub fn describe_text(
+        &self,
+        query: &Embedding,
+        dim: usize,
+        limit: usize,
+    ) -> Result<Vec<MatchedFile>> {
+        let embeddings = self.text_embeddings(dim)?;
+        let ranked = crate::vectors::rank(
+            query,
+            embeddings.iter().map(|(id, e)| (*id, e)).collect(),
+            embeddings.len(),
+        );
+
+        const BATCH: usize = 200;
+        let mut hits: Vec<MatchedFile> = Vec::new();
+        let mut seen: HashSet<i64> = HashSet::new();
+        let mut start = 0;
+        while start < ranked.len() && hits.len() < limit {
+            let end = (start + BATCH).min(ranked.len());
+            let ids: Vec<i64> = ranked[start..end].iter().map(|r| r.file_id).collect();
+            let rows = self.tile_rows(&ids)?;
+            for scored in &ranked[start..end] {
+                let Some(row) = rows.get(&scored.file_id) else {
+                    continue;
+                };
+                if !seen.insert(row.file_id) {
+                    continue;
+                }
+                hits.push(MatchedFile {
+                    file_id: row.file_id,
+                    path: row.path.clone(),
+                    kind: row.kind.clone(),
+                    tiles: vec![MatchedTile {
+                        seq: row.seq,
+                        page: row.page,
+                        text: row.text.clone(),
+                    }],
+                });
+                if hits.len() == limit {
+                    break;
+                }
+            }
+            start = end;
+        }
+        Ok(hits)
+    }
+
+    /// Tile ids resolved to their file and position for one batch of
+    /// [`Store::describe_text`].
+    fn tile_rows(&self, ids: &[i64]) -> Result<HashMap<i64, TileRow>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let holes = (1..=ids.len())
+            .map(|i| format!("?{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT t.id, t.file_id, f.path, f.kind, t.seq, t.page, t.text
+             FROM tiles t JOIN files f ON f.id = t.file_id
+             WHERE t.id IN ({holes})"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(ids), |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                TileRow {
+                    file_id: row.get(1)?,
+                    path: row.get(2)?,
+                    kind: row.get(3)?,
+                    seq: row.get(4)?,
+                    page: row.get(5)?,
+                    text: row.get(6)?,
+                },
+            ))
+        })?;
+        let mut out = HashMap::with_capacity(ids.len());
+        for row in rows {
+            let (id, tile) = row?;
+            out.insert(id, tile);
+        }
+        Ok(out)
+    }
+
     /// Row counts by status, for `tessera stats`.
     pub fn stats(&self) -> Result<Vec<(String, i64)>> {
         let mut stmt = self
@@ -1249,6 +1463,279 @@ mod tests {
             store.arm_version(Arm::Text).unwrap(),
             None,
             "clearing one arm must not touch another"
+        );
+    }
+
+    /// A text vector at the model's real width, carrying a direction in its
+    /// first two values.
+    fn text_embedding(values: [f32; 2]) -> Embedding {
+        let mut v = vec![0f32; TEXT_EMBEDDING_DIM];
+        v[0] = values[0];
+        v[1] = values[1];
+        Embedding::new(v, TEXT_EMBEDDING_DIM).unwrap()
+    }
+
+    fn text_tile_ids(store: &Store, path: &str) -> Vec<i64> {
+        let file_id = store.file_id(Path::new(path)).unwrap();
+        let mut stmt = store
+            .conn
+            .prepare("SELECT id FROM tiles WHERE file_id = ?1 ORDER BY seq")
+            .unwrap();
+        let rows = stmt
+            .query_map(rusqlite::params![file_id], |row| row.get(0))
+            .unwrap();
+        rows.map(|row| row.unwrap()).collect()
+    }
+
+    #[test]
+    fn a_text_vector_round_trips_and_is_normalized_on_write() {
+        let (_dir, store) = tmp_store();
+        indexed_file(&store, "/corpus/a.txt", &["alpha", "beta"]);
+        let ids = text_tile_ids(&store, "/corpus/a.txt");
+
+        store
+            .put_text_embedding(ids[0], &text_embedding([3.0, 4.0]))
+            .unwrap();
+
+        assert_eq!(store.text_embedding_count().unwrap(), 1);
+        let read = store.text_embeddings(TEXT_EMBEDDING_DIM).unwrap();
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].0, ids[0]);
+        let norm = read[0].1.values().iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!(
+            (norm - 1.0).abs() < 1e-6,
+            "the store must normalize on write, got a norm of {norm}"
+        );
+
+        // The other tile is still outstanding work for the sweep.
+        assert_eq!(
+            store.tiles_without_text_vectors().unwrap(),
+            vec![(ids[1], "beta".to_string())]
+        );
+    }
+
+    #[test]
+    fn re_indexing_a_file_drops_its_old_text_vectors_with_the_tiles() {
+        let (_dir, store) = tmp_store();
+        indexed_file(&store, "/corpus/a.txt", &["alpha", "beta"]);
+        for id in text_tile_ids(&store, "/corpus/a.txt") {
+            store
+                .put_text_embedding(id, &text_embedding([1.0, 0.0]))
+                .unwrap();
+        }
+        assert_eq!(store.text_embedding_count().unwrap(), 2);
+
+        indexed_file(&store, "/corpus/a.txt", &["alpha"]);
+
+        assert_eq!(
+            store.text_embedding_count().unwrap(),
+            0,
+            "vectors for tiles that no longer exist must not survive re-indexing"
+        );
+        let pending = store.tiles_without_text_vectors().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].1, "alpha");
+    }
+
+    #[test]
+    fn deleting_a_file_drops_its_text_vectors() {
+        let (_dir, store) = tmp_store();
+        let corpus = tempfile::tempdir().unwrap();
+        let path = corpus.path().join("a.txt");
+        std::fs::write(&path, "alpha").unwrap();
+        store
+            .index_file(
+                corpus.path(),
+                &path,
+                Kind::Text,
+                &facts(5),
+                Some("abc"),
+                &tiles(&["alpha"]),
+            )
+            .unwrap();
+        let tile: i64 = store
+            .conn
+            .query_row("SELECT id FROM tiles", [], |row| row.get(0))
+            .unwrap();
+        store
+            .put_text_embedding(tile, &text_embedding([1.0, 0.0]))
+            .unwrap();
+
+        std::fs::remove_file(&path).unwrap();
+        store.remove_missing(corpus.path()).expect("sweep");
+
+        assert_eq!(
+            store.text_embedding_count().unwrap(),
+            0,
+            "a vector outliving its file would be scored for a document that is gone"
+        );
+        assert!(store.tiles_without_text_vectors().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_meaning_query_returns_one_hit_per_file_at_the_matching_tile() {
+        let (_dir, store) = tmp_store();
+        let lease = vec![
+            Tile {
+                seq: 0,
+                page: Some(1),
+                text: "the landlord shall maintain the roof".to_string(),
+            },
+            Tile {
+                seq: 1,
+                page: Some(4),
+                text: "the tenant shall not compete within five miles".to_string(),
+            },
+        ];
+        store
+            .index_file(
+                Path::new("/corpus"),
+                Path::new("/corpus/lease.pdf"),
+                Kind::Pdf,
+                &facts(10),
+                Some("a"),
+                &lease,
+            )
+            .unwrap();
+        indexed_file(&store, "/corpus/invoice.txt", &["airline ticket receipt"]);
+
+        let lease_ids = text_tile_ids(&store, "/corpus/lease.pdf");
+        store
+            .put_text_embedding(lease_ids[0], &text_embedding([0.0, 1.0]))
+            .unwrap();
+        store
+            .put_text_embedding(lease_ids[1], &text_embedding([1.0, 0.0]))
+            .unwrap();
+        let invoice_ids = text_tile_ids(&store, "/corpus/invoice.txt");
+        store
+            .put_text_embedding(invoice_ids[0], &text_embedding([0.6, 0.8]))
+            .unwrap();
+
+        let hits = store
+            .describe_text(&text_embedding([1.0, 0.0]), TEXT_EMBEDDING_DIM, 10)
+            .unwrap();
+        assert_eq!(hits.len(), 2, "one hit per file, not per tile");
+        assert_eq!(hits[0].path, "/corpus/lease.pdf");
+        assert_eq!(hits[0].tiles.len(), 1);
+        assert_eq!(
+            hits[0].tiles[0].seq, 1,
+            "the hit must carry the tile that matched, not the file's first tile"
+        );
+        assert_eq!(hits[0].tiles[0].page, Some(4));
+        assert_eq!(hits[1].path, "/corpus/invoice.txt");
+
+        // The limit counts files, which is what the caller asked for.
+        assert_eq!(
+            store
+                .describe_text(&text_embedding([1.0, 0.0]), TEXT_EMBEDDING_DIM, 1)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn one_corrupt_text_vector_does_not_take_the_arm_down() {
+        let (_dir, store) = tmp_store();
+        indexed_file(&store, "/corpus/good.txt", &["alpha"]);
+        indexed_file(&store, "/corpus/bad.txt", &["beta"]);
+        let good = text_tile_ids(&store, "/corpus/good.txt")[0];
+        let corrupt = text_tile_ids(&store, "/corpus/bad.txt")[0];
+        store
+            .put_text_embedding(good, &text_embedding([1.0, 0.0]))
+            .unwrap();
+        store
+            .conn
+            .execute(
+                "INSERT INTO txt_vec(tile_id, dim, vec) VALUES (?1, ?2, ?3)",
+                rusqlite::params![corrupt, TEXT_EMBEDDING_DIM as i64, vec![0u8; 8]],
+            )
+            .unwrap();
+
+        let read = store
+            .text_embeddings(TEXT_EMBEDDING_DIM)
+            .expect("the scan must survive one bad row");
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].0, good);
+        assert_eq!(store.text_embedding_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn a_changed_pin_makes_the_text_arm_outstanding_work_and_forgets_its_vectors() {
+        let (_dir, store) = tmp_store();
+        store
+            .set_arm_version(Arm::Image, "image-pin")
+            .expect("the other arm's pin");
+        store.set_arm_version(Arm::Text, "pin-old").unwrap();
+        indexed_file(&store, "/corpus/a.txt", &["alpha"]);
+        let id = text_tile_ids(&store, "/corpus/a.txt")[0];
+        store
+            .put_text_embedding(id, &text_embedding([1.0, 0.0]))
+            .unwrap();
+
+        store.forget_text_arm().expect("forget the arm");
+
+        assert_eq!(
+            store.arm_version(Arm::Text).unwrap(),
+            None,
+            "a forgotten arm has no version, so it reads as outstanding work"
+        );
+        assert_eq!(store.text_embedding_count().unwrap(), 0);
+        assert_eq!(
+            store.arm_version(Arm::Image).unwrap().as_deref(),
+            Some("image-pin"),
+            "clearing one arm must not touch another"
+        );
+        assert_eq!(
+            store.tiles_without_text_vectors().unwrap().len(),
+            1,
+            "the tiles remain, so the next sweep rebuilds the arm from the text"
+        );
+    }
+
+    #[test]
+    fn a_moved_file_loses_the_text_vector_for_its_retitled_tile_only() {
+        let (_dir, store) = tmp_store();
+        // The real convention: the file's name is the head of its first tile
+        // (index::with_filename), which is what a move re-titles.
+        indexed_file(
+            &store,
+            "/corpus/old name.txt",
+            &["old name.txt\nalpha", "beta"],
+        );
+        let ids = text_tile_ids(&store, "/corpus/old name.txt");
+        for id in &ids {
+            store
+                .put_text_embedding(*id, &text_embedding([1.0, 0.0]))
+                .unwrap();
+        }
+
+        let file_id = store.file_id(Path::new("/corpus/old name.txt")).unwrap();
+        store
+            .move_file(
+                file_id,
+                Path::new("/corpus/new name.txt"),
+                &facts(10),
+                "abc123",
+            )
+            .expect("move it");
+
+        assert_eq!(
+            store.text_embedding_count().unwrap(),
+            1,
+            "the retitled tile's vector stopped matching its text the moment the name changed"
+        );
+        let pending = store.tiles_without_text_vectors().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].0, ids[0]);
+        assert_eq!(
+            pending[0].1, "new name.txt\nalpha",
+            "the sweep must re-embed the tile under its new name"
+        );
+        assert_eq!(
+            store.text_embeddings(TEXT_EMBEDDING_DIM).unwrap()[0].0,
+            ids[1],
+            "the second tile did not change and keeps its vector"
         );
     }
 

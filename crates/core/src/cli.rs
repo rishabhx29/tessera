@@ -6,13 +6,14 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use crate::index::{
-    docx::DocxPipeline, image::ImagePipeline, index_folder, pdf::PdfPipeline, text::TextPipeline,
-    Pipeline,
+    docx::DocxPipeline, image::ImagePipeline, index_folder, index_folder_with_text,
+    pdf::PdfPipeline, text::TextPipeline, Pipeline,
 };
 use crate::models::Models;
 use crate::ocr::{self, OcrChoice, OcrEngine};
-use crate::search::search;
-use crate::store::{Store, IMAGE_EMBEDDING_DIM};
+use crate::search::{search, snippet_around};
+use crate::store::{Arm, Store, IMAGE_EMBEDDING_DIM, TEXT_EMBEDDING_DIM};
+use crate::vectors::minilm::MiniLm;
 use crate::vectors::siglip::SiglipEmbedder;
 
 /// Where the models live: the override if given, otherwise a `models` folder
@@ -77,6 +78,15 @@ enum Command {
         /// files), so reach for this when keywords have nothing to go on.
         #[arg(long, value_name = "DESCRIPTION")]
         describe: Option<String>,
+        /// Find documents by meaning instead of by the words they contain:
+        /// `tessera search --describe-text "the contract with the non-compete"`.
+        ///
+        /// This is the text arm — MiniLM over every chunk the index holds. It is
+        /// the counterpart to `--describe`, which searches images by what they
+        /// look like. The separate surfaces are temporary: fusion will run every
+        /// arm from one query.
+        #[arg(long, value_name = "MEANING", conflicts_with = "describe")]
+        describe_text: Option<String>,
         /// How many results to show. Defaults to 10.
         #[arg(long, short, default_value_t = 10)]
         limit: usize,
@@ -186,6 +196,27 @@ pub fn image_embedder(models: &Models) -> Option<std::sync::Arc<SiglipEmbedder>>
     }
 }
 
+/// The text arm's embedder, when its model set is installed and loads.
+///
+/// `None` is not an error: an index without MiniLM is still a keyword index,
+/// and a folder of documents should not fail because an optional model is
+/// missing. The caller says so once rather than once per file.
+pub fn text_embedder(models: &Models) -> Option<MiniLm> {
+    if !MiniLm::is_installed(models) {
+        return None;
+    }
+    match MiniLm::new(models, default_threads()) {
+        Ok(embedder) => Some(embedder),
+        Err(err) => {
+            eprintln!(
+                "the minilm models are installed but the embedder would not load, so documents \
+                 will be indexed without meaning search: {err:#}"
+            );
+            None
+        }
+    }
+}
+
 /// A CPU-bound session should not let ONNX Runtime spawn a thread per core and
 /// fight the rest of the engine for them.
 fn default_threads() -> usize {
@@ -223,7 +254,29 @@ pub fn run() -> Result<()> {
                 );
             }
             let pipelines = pipelines(&ocr, &models)?;
-            let summary = index_folder(&store, &pipelines, &folder)?;
+            // A moved pin means the old vectors are from another space. Drop
+            // the whole text arm before the sweep rather than mixing spaces;
+            // the sweep rebuilds it from the tiles, so re-indexing any one
+            // folder repairs the whole index. The image arm is left alone here
+            // — it has no equivalent sweep, and dropping its vectors would make
+            // them unrecoverable without walking every image again.
+            for stale in models.stale_arms(&store)? {
+                if stale.arm == Arm::Text && stale.is_from_a_different_model() {
+                    store.forget_text_arm()?;
+                    eprintln!(
+                        "warning: the MiniLM pin moved (vectors built by {}, pinned is {}); \
+                         dropping the text arm's vectors, which this run rebuilds from the text \
+                         already indexed",
+                        stale.built_by.as_deref().unwrap_or("an unknown model"),
+                        stale.pinned
+                    );
+                }
+            }
+            let text = text_embedder(&models);
+            let summary = match &text {
+                Some(text) => index_folder_with_text(&store, &pipelines, &folder, text)?,
+                None => index_folder(&store, &pipelines, &folder)?,
+            };
             println!(
                 "indexed {indexed}, {unchanged} unchanged, {moved} moved, {skipped} skipped, \
                  {failed} failed, {awaiting} awaiting OCR, {removed} removed",
@@ -235,6 +288,18 @@ pub fn run() -> Result<()> {
                 awaiting = summary.awaiting_ocr,
                 removed = summary.removed,
             );
+            if text.is_some() {
+                println!(
+                    "{} text chunk(s) embedded for meaning search",
+                    summary.text_embedded
+                );
+            }
+            if summary.text_unembedded > 0 {
+                println!(
+                    "{} text chunk(s) could not be embedded; they stay searchable by keyword",
+                    summary.text_unembedded
+                );
+            }
             if summary.walk_errors > 0 {
                 println!("{} unreadable path(s)", summary.walk_errors);
             }
@@ -281,6 +346,7 @@ pub fn run() -> Result<()> {
         Command::Search {
             query,
             describe,
+            describe_text,
             limit,
         } => {
             // `--describe` is the other arm, not a rephrasing of this one: it
@@ -321,6 +387,46 @@ pub fn run() -> Result<()> {
                 return Ok(());
             }
 
+            if let Some(meaning) = describe_text {
+                let models = Models::open(&models_dir(&data_dir, cli.models_dir.as_deref()))?;
+                let Some(embedder) = text_embedder(&models) else {
+                    anyhow::bail!(
+                        "meaning search needs the minilm models, which are not installed. \
+                         Fix it with: tessera models install --set minilm"
+                    );
+                };
+                let started = std::time::Instant::now();
+                let vector = embedder.embed_query(&meaning)?;
+                let hits = store.describe_text(&vector, TEXT_EMBEDDING_DIM, limit)?;
+                eprintln!(
+                    "searched meaning in {:.0} ms",
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
+                if hits.is_empty() {
+                    println!("no results");
+                    println!(
+                        "  (the text arm searched {} embedded chunk(s); if that is 0, run \
+                         `tessera index <folder>` again now that the models are installed)",
+                        store.text_embedding_count()?
+                    );
+                    return Ok(());
+                }
+                for hit in hits {
+                    println!("{}", hit.path);
+                    if let Some(tile) = hit.tiles.first() {
+                        // A window, collapsed to one line: the tile starts with
+                        // the file's name (index::with_filename), and printing
+                        // that again under the path it just printed reads as a
+                        // bug even when it is the text on file.
+                        let preview = snippet_around(&tile.text, &[], 160);
+                        match tile.page {
+                            Some(page) => println!("  page {page}: {preview}"),
+                            None => println!("  {preview}"),
+                        }
+                    }
+                }
+                return Ok(());
+            }
             let terms = split_terms(&query);
             let hits = search(
                 &store,

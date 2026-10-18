@@ -33,10 +33,28 @@
 //! The cost is linear in the corpus, and `docs/performance.md` carries the
 //! measurement of what that actually is rather than a projection.
 
+use std::sync::OnceLock;
+
 use anyhow::{bail, Result};
 
 pub mod caption;
+pub mod minilm;
 pub mod siglip;
+
+/// ONNX Runtime allows exactly one environment per process, so it is created
+/// once and shared by every embedder. Duplicating this per module is how you
+/// get two embedders in one process where the second fails to start — and the
+/// text arm and the image arm run side by side in one search.
+pub(crate) fn environment() -> Result<&'static ort::environment::Environment> {
+    // The error is kept as a string because `ort`'s error type is not `Send`,
+    // and a `OnceLock` shared across threads has to hold something that is.
+    static ENVIRONMENT: OnceLock<std::result::Result<ort::environment::Environment, String>> =
+        OnceLock::new();
+    match ENVIRONMENT.get_or_init(|| ort::init().build().map_err(|err| format!("{err}"))) {
+        Ok(environment) => Ok(environment),
+        Err(message) => bail!("starting ONNX Runtime: {message}"),
+    }
+}
 
 /// Bytes per float32 on disk. Named rather than written as `4` so the encoder
 /// and the decoder cannot drift apart.
@@ -133,6 +151,19 @@ impl Embedding {
         self.normalize();
         self
     }
+}
+
+/// What the index sweep and the query path need from a text embedder.
+///
+/// A trait rather than the concrete MiniLM type so the sweep's bookkeeping —
+/// which tiles are missing, what a failed tile does, when the pin is written —
+/// is testable without ONNX models, and a future model swap is one
+/// implementation rather than a change in every caller.
+pub trait TextEmbedder {
+    /// The version token for this model, as the manifest pins it.
+    fn version(&self) -> &str;
+    /// Embed one tile or query. The result is normalized by the implementation.
+    fn embed_text(&self, text: &str) -> Result<Embedding>;
 }
 
 /// Cosine similarity, in `[-1, 1]`, with `0.0` for anything degenerate.

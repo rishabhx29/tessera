@@ -1,10 +1,11 @@
 //! Tessera core: the indexing and search engine.
 //!
 //! Status: the week 2–3 engine is being built ticket by ticket from
-//! `docs/product-definition.md`; this crate currently contains the
-//! text slice end to end: store, text pipeline, lexical search, incremental
-//! indexing (change detection, skip rules, move and deletion propagation), and
-//! the CLI.
+//! `docs/product-definition.md`; this crate currently contains the search
+//! engine end to end: the SQLite store (full-text and vectors), the text, PDF,
+//! DOCX and image pipelines, both OCR engines behind one seam, lexical search,
+//! the SigLIP image arm and the MiniLM text arm, incremental indexing (change
+//! detection, skip rules, move and deletion propagation), and the CLI.
 //!
 //! Everything the engine needs has a home in this crate: the folder watcher,
 //! the per-format indexing pipelines, the SQLite store (full-text + vectors),

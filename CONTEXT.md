@@ -32,12 +32,16 @@ file's reason that dropped the cause chain, and an atomicity guarantee asserted
 in prose with no test behind it — and both fixes are pinned by tests that were
 verified to fail against the old behaviour.
 
-**The frontier is ticket 07** (the SigLIP image arm), but the bigger gap is
-that **no search arm beyond lexical exists yet**: there is no `img_vec`, no
-`txt_vec`, no SigLIP, no MiniLM and no RRF fusion, so search is keyword-only and
-the document pipelines that produce two of the three formats in the headline
-demo have not been built (ticket 08). Tickets 07–10 are the real remaining work
-in weeks 2–3.
+**The frontier is ticket 10.** Tickets 06–09 are also resolved: the macOS
+Vision adapter (below), the SigLIP image arm for description search, the PDF
+and DOCX pipelines (page-aware tiles), and the MiniLM text arm — every tile now
+carries a 384-d vector when the `minilm` set is installed, filled by a
+post-walk sweep and queried with `tessera search --describe-text`. What remains
+in weeks 2–3: **ticket 10** (weighted RRF fusion of the three arms), **11**
+(the folder watcher) and **12** (the mixed-format milestone gate). The
+description-search objective set in the product definition is still unmet; its
+measured state and the one deliberate, unshipped lever are recorded under
+"Where this leaves the feature" in `docs/performance.md`.
 
 Ticket 06 (the macOS Vision adapter) landed behind the same seam, cfg-gated to
 macOS and proven to work on a `macos-14` runner. **It has no latency number and
@@ -58,9 +62,12 @@ design (ADR-0007), not a platform that fails to build.
   `meta` beside the vectors; a mismatch means the arm is outstanding work, never
   that old vectors may be blended with new ones.
 - **Arm** — one search channel. Three exist: **lexical** (FTS5), **image** (SigLIP),
-  **text** (MiniLM). A query runs up to three arms and fuses their rankings.
-  Only the two embedding arms hold vectors; the lexical arm has none, and OCR
-  belongs to no arm at all — it produces text, which the lexical arm indexes.
+  **text** (MiniLM). A query will run all three and fuse their rankings
+  (ticket 10); until then the arms are reachable individually (`tessera search`,
+  `--describe`, `--describe-text`). Only the two embedding arms hold vectors —
+  one per image file, one per tile — and the lexical arm has none. OCR belongs
+  to no arm at all: it produces text, which the lexical arm indexes and the
+  text arm embeds like any other tile.
 - **Pin** — the SHA-256 a model file must hash to before the engine will use it,
   compiled into the binary (ADR-0009). A pin that lives beside the bytes it
   checks is not a pin.

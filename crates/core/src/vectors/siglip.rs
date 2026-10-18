@@ -25,7 +25,7 @@
 //!   sees.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context as _, Result};
 use ort::session::builder::GraphOptimizationLevel;
@@ -76,20 +76,6 @@ const POOLED_TOKEN: usize = 0;
 /// `pooler_output`, not `last_hidden_state`, because that is what measures
 /// better here — 0.455 against 0.091. See the note on `POOLED_TOKEN`.
 const POOLED_OUTPUT: &str = "pooler_output";
-
-/// ONNX Runtime allows exactly one environment per process, so it is created
-/// once and shared — the same reason the OCR engine does it, and the same
-/// failure if it is not: the second `ort::init()` call errors outright.
-fn environment() -> Result<&'static ort::environment::Environment> {
-    // The error is kept as a string because `ort`'s error type is not `Send`,
-    // and a `OnceLock` shared across threads has to hold something that is.
-    static ENVIRONMENT: OnceLock<std::result::Result<ort::environment::Environment, String>> =
-        OnceLock::new();
-    match ENVIRONMENT.get_or_init(|| ort::init().build().map_err(|err| format!("{err}"))) {
-        Ok(environment) => Ok(environment),
-        Err(message) => bail!("starting ONNX Runtime: {message}"),
-    }
-}
 
 /// The doc says this type is shared across index workers; this is the
 /// constraint, so a dependency bump that makes it untrue fails the build here
@@ -176,7 +162,7 @@ impl SiglipEmbedder {
             )
         })?;
 
-        let environment = environment()?;
+        let environment = super::environment()?;
         let vision = build_session(environment, &vision_path, threads)?;
         let text = build_session(environment, &text_path, threads)?;
 

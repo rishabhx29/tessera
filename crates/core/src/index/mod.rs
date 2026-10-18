@@ -22,7 +22,8 @@ use anyhow::Result;
 
 use crate::hash::LazyHash;
 use crate::index::skip::{FileFacts, FileProbe, SystemProbe};
-use crate::store::{FileState, Store};
+use crate::store::{Arm, FileState, Store};
+use crate::vectors::TextEmbedder;
 
 /// One indexed unit: a numbered chunk of extracted text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +144,13 @@ pub struct IndexSummary {
     /// count exists so "why can't I search my photos by description?" is
     /// answerable from `tessera stats` rather than by guessing.
     pub unembedded: usize,
+    /// Tiles this run embedded for the text arm. Tiles, not files: a PDF with
+    /// forty pages and a text file with one chunk are both one file and very
+    /// different amounts of work.
+    pub text_embedded: usize,
+    /// Tiles the text arm could not embed. Like `unembedded`, the text is still
+    /// searchable by keyword; only meaning search lacks this tile.
+    pub text_unembedded: usize,
 }
 
 /// Whether a file has to be re-extracted.
@@ -234,7 +242,23 @@ pub fn index_folder(
     pipelines: &[Box<dyn Pipeline>],
     folder: &Path,
 ) -> Result<IndexSummary> {
-    index_folder_with(store, pipelines, folder, &SystemProbe)
+    index_folder_with(store, pipelines, folder, &SystemProbe, None)
+}
+
+/// [`index_folder`] with the text arm attached.
+///
+/// After the walk, every tile with no MiniLM vector gets one — including tiles
+/// indexed by an earlier run before the models were installed, and the whole
+/// index after a model pin moved. That is why this is a sweep over the store
+/// rather than work done inside the per-file loop: the repair path and the
+/// fresh-install path are the same code.
+pub fn index_folder_with_text(
+    store: &Store,
+    pipelines: &[Box<dyn Pipeline>],
+    folder: &Path,
+    text: &dyn TextEmbedder,
+) -> Result<IndexSummary> {
+    index_folder_with(store, pipelines, folder, &SystemProbe, Some(text))
 }
 
 /// [`index_folder`] against an injected [`FileProbe`]. Internal: the probe is
@@ -245,11 +269,28 @@ pub(crate) fn index_folder_with(
     pipelines: &[Box<dyn Pipeline>],
     folder: &Path,
     probe: &dyn FileProbe,
+    text: Option<&dyn TextEmbedder>,
 ) -> Result<IndexSummary> {
     use walkdir::WalkDir;
 
     if !folder.is_dir() {
         anyhow::bail!("{} is not a folder", folder.display());
+    }
+
+    // Vectors from two MiniLM builds are not comparable. The CLI drops the arm
+    // when the pin moves; a caller that did not is refused rather than allowed
+    // to blend two spaces in one index.
+    if let Some(text) = text {
+        if let Some(recorded) = store.arm_version(Arm::Text)? {
+            if recorded != text.version() {
+                anyhow::bail!(
+                    "the text arm's vectors were built by MiniLM {recorded}, but the pinned model \
+                     is {}; drop the arm with `Store::forget_text_arm` and re-index instead of \
+                     mixing two vector spaces",
+                    text.version()
+                );
+            }
+        }
     }
 
     let mut summary = IndexSummary::default();
@@ -358,6 +399,33 @@ pub(crate) fn index_folder_with(
         }
     }
     summary.removed = store.remove_missing(folder)?;
+
+    // The text arm's whole write path. It runs last so a file removed above
+    // cannot leave a vector behind, and it reads the tiles the store already
+    // holds, so re-embedding never re-reads a file.
+    if let Some(text) = text {
+        for (tile_id, tile_text) in store.tiles_without_text_vectors()? {
+            match text.embed_text(&tile_text) {
+                Ok(embedding) => {
+                    store.put_text_embedding(tile_id, &embedding)?;
+                    summary.text_embedded += 1;
+                }
+                Err(err) => {
+                    // One unembeddable tile must not end the sweep or the run.
+                    // It stays in the work list for the next pass.
+                    eprintln!("could not embed tile {tile_id} for meaning search: {err:#}");
+                    summary.text_unembedded += 1;
+                }
+            }
+        }
+        // Only claim the arm is built by this model when every tile in the
+        // index has a vector from it. A partial run is outstanding work, which
+        // is exactly what the missing pin means.
+        if summary.text_unembedded == 0 {
+            store.set_arm_version(Arm::Text, text.version())?;
+        }
+    }
+
     Ok(summary)
 }
 
@@ -603,6 +671,7 @@ mod tests {
             &CloudyProbe {
                 marker: "cloud-only",
             },
+            None,
         )
         .unwrap();
 
@@ -699,6 +768,7 @@ mod tests {
             &CloudyProbe {
                 marker: "cloud.txt",
             },
+            None,
         )
         .unwrap();
 
@@ -739,6 +809,7 @@ mod tests {
             &CloudyProbe {
                 marker: "invoice.txt",
             },
+            None,
         )
         .unwrap();
         assert_eq!((summary.skipped, summary.indexed), (1, 0));
@@ -759,6 +830,154 @@ mod tests {
                 .len(),
             1,
             "the text of an evicted file is no longer searchable"
+        );
+    }
+
+    /// A text embedder with no model behind it: the sweep's bookkeeping is what
+    /// these tests exercise, and it must not need 22 MB of ONNX to be tested.
+    struct FakeText {
+        version: &'static str,
+        fail_on: Option<&'static str>,
+    }
+
+    impl TextEmbedder for FakeText {
+        fn version(&self) -> &str {
+            self.version
+        }
+
+        fn embed_text(&self, text: &str) -> Result<crate::vectors::Embedding> {
+            if self.fail_on.is_some_and(|needle| text.contains(needle)) {
+                anyhow::bail!("this tile will not embed");
+            }
+            let mut values = vec![0f32; crate::store::TEXT_EMBEDDING_DIM];
+            values[0] = 1.0;
+            crate::vectors::Embedding::new(values, crate::store::TEXT_EMBEDDING_DIM)
+        }
+    }
+
+    #[test]
+    fn the_sweep_embeds_every_tile_and_records_the_model_pin() {
+        let data = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        write(corpus.path(), "a.txt", "alpha beta gamma");
+        write(corpus.path(), "b.txt", "delta epsilon");
+        let store = Store::open(data.path()).unwrap();
+        let text = FakeText {
+            version: "minilm-pin",
+            fail_on: None,
+        };
+
+        let summary = index_folder_with(
+            &store,
+            &[Box::new(TextPipeline)],
+            corpus.path(),
+            &SystemProbe,
+            Some(&text),
+        )
+        .unwrap();
+
+        assert_eq!(summary.indexed, 2);
+        assert_eq!(summary.text_embedded, 2, "one tile per file here");
+        assert_eq!(summary.text_unembedded, 0);
+        assert_eq!(store.text_embedding_count().unwrap(), 2);
+        assert!(store.tiles_without_text_vectors().unwrap().is_empty());
+        assert_eq!(
+            store.arm_version(Arm::Text).unwrap().as_deref(),
+            Some("minilm-pin"),
+            "a finished sweep claims the arm for the model that built it"
+        );
+        assert_eq!(
+            store.arm_version(Arm::Image).unwrap(),
+            None,
+            "the text sweep must not claim the image arm"
+        );
+    }
+
+    #[test]
+    fn a_tile_that_cannot_be_embedded_stays_outstanding_and_the_arm_is_not_claimed() {
+        let data = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        write(corpus.path(), "a.txt", "alpha beta");
+        write(corpus.path(), "b.txt", "delta epsilon");
+        let store = Store::open(data.path()).unwrap();
+        let failing = FakeText {
+            version: "minilm-pin",
+            fail_on: Some("delta"),
+        };
+
+        let summary = index_folder_with(
+            &store,
+            &[Box::new(TextPipeline)],
+            corpus.path(),
+            &SystemProbe,
+            Some(&failing),
+        )
+        .unwrap();
+
+        assert_eq!(summary.text_embedded, 1);
+        assert_eq!(summary.text_unembedded, 1);
+        assert_eq!(
+            store.arm_version(Arm::Text).unwrap(),
+            None,
+            "a partial run is outstanding work, not a completed arm"
+        );
+        assert_eq!(
+            store.tiles_without_text_vectors().unwrap().len(),
+            1,
+            "the failed tile stays in the work list"
+        );
+
+        // The next run has nothing to extract and still repairs the arm: the
+        // sweep reads the store, not the files.
+        let fixed = FakeText {
+            version: "minilm-pin",
+            fail_on: None,
+        };
+        let again = index_folder_with(
+            &store,
+            &[Box::new(TextPipeline)],
+            corpus.path(),
+            &SystemProbe,
+            Some(&fixed),
+        )
+        .unwrap();
+        assert_eq!((again.indexed, again.unchanged), (0, 2));
+        assert_eq!(again.text_embedded, 1);
+        assert_eq!(store.text_embedding_count().unwrap(), 2);
+        assert_eq!(
+            store.arm_version(Arm::Text).unwrap().as_deref(),
+            Some("minilm-pin")
+        );
+    }
+
+    #[test]
+    fn a_moved_pin_is_refused_rather_than_mixed() {
+        let data = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        write(corpus.path(), "a.txt", "alpha beta");
+        let store = Store::open(data.path()).unwrap();
+        store.set_arm_version(Arm::Text, "old-pin").unwrap();
+        let text = FakeText {
+            version: "new-pin",
+            fail_on: None,
+        };
+
+        let err = index_folder_with(
+            &store,
+            &[Box::new(TextPipeline)],
+            corpus.path(),
+            &SystemProbe,
+            Some(&text),
+        )
+        .expect_err("an index holding another model's vectors must be refused");
+        assert!(
+            format!("{err:#}").contains("mixing two vector spaces"),
+            "{err:#}"
+        );
+        assert_eq!(
+            store.arm_version(Arm::Text).unwrap().as_deref(),
+            Some("old-pin"),
+            "the refusal must not have touched the pin"
         );
     }
 }
