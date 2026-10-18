@@ -252,21 +252,25 @@ unloaded after; the whole pipeline pauses on battery / per the user's schedule.
 ```
 query
  ├─ lexical arm   → FTS5 trigram BM25 over tiles_fts        (filenames + OCR + doc text)
- ├─ image arm     → CLIP text query → img_vec cosine          (description queries)
+ ├─ image arm     → SigLIP text query → img_vec cosine        (description queries)
  ├─ text arm      → MiniLM query   → txt_vec cosine             (meaning over documents)
- └─ filters       → type / folder / date
+ └─ filters       → type / folder / date, applied inside every arm
         │
         ▼
- Reciprocal Rank Fusion (rank-based; score scales are incomparable)
+ weighted Reciprocal Rank Fusion (rank-based; score scales are incomparable)
         │
         ▼
- ranked tiles, each annotated with the arm(s) that surfaced it
+ ranked files, at the matching tile, each annotated with the arm(s) that
+ surfaced it
 ```
 
-One search box. The user does not choose modes; the arms all run and the
-fusion hides which ones hit — that is the design, and until ticket 10's
-weighted fusion lands the arms are reachable individually (`tessera search`,
-`--describe`, `--describe-text`). The text arm embeds every tile the store
+One search box. The user does not choose modes: the three arms run on
+threads, one store connection each (WAL lets them read together), and
+`fusion::fuse` merges their lists with each arm's vote scaled by how much
+text the file carries — the measured answer to what an equal image voice
+costs on text-bearing files (0.964 → 0.375 top-1; ADR-0003's amendment holds
+the table). `--describe` and `--describe-text` remain as arm-isolating
+diagnostics, not modes. The text arm embeds every tile the store
 holds, so a document chunk, an OCR line and a file name are all findable by
 meaning. Typo tolerance has two layers: the trigram
 tokenizer makes partial words match (`invoic` finds `invoice`), and each query

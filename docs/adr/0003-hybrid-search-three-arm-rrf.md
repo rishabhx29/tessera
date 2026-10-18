@@ -57,3 +57,40 @@ OR-ed into the MATCH expression. The write-time folded second index
 (gyotaku's mechanism, which also survives OCR misreads inside the corpus)
 remains a v0.1.x follow-up. The decision itself — three arms, RRF — is
 unchanged; only this rationale line is corrected.
+
+## Amendment (ticket 10, the fused search box)
+
+The decision above says RRF; the first cut of it treated each arm's vote as
+equal. Ticket 10 built the one search box and the sweep in
+`crates/core/tests/image_fusion.rs` measured what equal treatment costs on 56
+real screenshots, where the text arm alone gets top-1 0.964: an equal image
+voice takes it to **0.375**, a 0.10 voice to 0.857, while a **0.05** voice
+holds 0.964 (`docs/performance.md`). So a vote is weighted by evidence the
+index already holds — how much text the file's tiles carry:
+
+| evidence (tile text in the file) | lexical | image | text |
+|---|---|---|---|
+| Full — more than 120 characters | 1.0 | **0.05** | 1.0 |
+| Little — 1 to 120 characters | 0.5 | 0.5 | 0.5 |
+| None — no tiles at all | 0.0 | 1.0 | 0.0 |
+
+The Full row is measured; the Little and None rows are the honest
+split-the-difference and image-alone defaults until something measures them —
+they live in `CHOSEN` in `crates/core/src/fusion.rs` so that is a one-edit
+change, and nothing here claims more than it measured. The text arm follows
+the lexical arm's weight because it is the same signal — the file's own text —
+read by a different mechanism.
+
+Mechanics pinned with the weights: a vote whose weight is zero or less is
+skipped entirely (no score, and the arm is not named on the hit); a file's
+score is the sum of `weight / (60 + position)`, positions zero-based, ties
+broken by file id, the list truncated at the limit. The `type:`, `in:`,
+`before:` and `after:` filters are parsed from the same arguments and applied
+to every arm — as SQL on the lexical arm, as an allowed set on the semantic
+arms — because a filter honoured by one arm and not another lets the excluded
+files straight back in.
+
+The arithmetic lives in one pure function (`fuse`: ranked lists in, order
+out); the offline sweep re-derives its numbers through it rather than through
+a copy, so the constant is chosen from what ships. The query path runs the
+three arms on threads and hands their lists to that function.

@@ -62,9 +62,9 @@ design (ADR-0007), not a platform that fails to build.
   `meta` beside the vectors; a mismatch means the arm is outstanding work, never
   that old vectors may be blended with new ones.
 - **Arm** — one search channel. Three exist: **lexical** (FTS5), **image** (SigLIP),
-  **text** (MiniLM). A query will run all three and fuse their rankings
-  (ticket 10); until then the arms are reachable individually (`tessera search`,
-  `--describe`, `--describe-text`). Only the two embedding arms hold vectors —
+  **text** (MiniLM). A query runs all three and fuses their rankings (ticket 10);
+  `--describe` and `--describe-text` still run a single arm, as diagnostics.
+  Only the two embedding arms hold vectors —
   one per image file, one per tile — and the lexical arm has none. OCR belongs
   to no arm at all: it produces text, which the lexical arm indexes and the
   text arm embeds like any other tile.
@@ -73,7 +73,16 @@ design (ADR-0007), not a platform that fails to build.
   checks is not a pin.
 - **Fusion / RRF** — Reciprocal Rank Fusion. Merges arm rankings by rank
   position rather than raw score, because BM25 and cosine scores are not
-  comparable quantities.
+  comparable quantities. Weighted since ticket 10: an arm's vote is scaled by
+  the file's **evidence** — Full (a text-bearing file): lexical 1.0, image
+  0.05, text 1.0; Little (a few axis labels): 0.5 / 0.5 / 0.5; None (no tiles,
+  a photo): 0.0 / 1.0 / 0.0. The Full row is measured; the other two are
+  defaults until something measures them, and all three live in `CHOSEN`
+  (`crates/core/src/fusion.rs`).
+- **Evidence** — the fusion class of a file: how much summed tile text the
+  index holds for it (Full, Little, None — above). A photo is exactly where
+  the image arm should be trusted; a text-bearing file is where an equal image
+  voice measured away 59 points of top-1 (`docs/performance.md`).
 - **Spike** — the week-1 throwaway experiment that measures model latency on
   real hardware before the engine is built. Throwaway code, real numbers.
 - **Kill criteria** — pre-committed stop conditions (ADR-0005). Decided before

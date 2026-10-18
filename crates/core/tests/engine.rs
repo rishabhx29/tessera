@@ -6,14 +6,16 @@
 use std::fs;
 use std::path::Path;
 
-use tessera_core::cli::{index_text_folder, split_terms};
+use tessera_core::cli::index_text_folder;
+use tessera_core::fusion::parse_query;
 use tessera_core::models::Models;
 use tessera_core::search::search;
 use tessera_core::store::Store;
 
 /// The engine's search terms, the way the CLI derives them from arguments.
 fn terms_from(args: &[&str]) -> Vec<String> {
-    split_terms(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>())
+    let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+    parse_query(&args).expect("the test queries parse").terms
 }
 
 fn write(dir: &Path, name: &str, contents: &str) {

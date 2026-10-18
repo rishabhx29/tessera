@@ -182,9 +182,10 @@ impl Models {
     ///
     /// Read from disk every time, not remembered: the question "is this still
     /// the file we pinned?" has to keep being true after someone fills the disk
-    /// or restores a backup over the directory. Callers reach this from
-    /// indexing, never from a query — a search over the lexical arm does not
-    /// touch this module at all.
+    /// or restores a backup over the directory. The callers are the places an
+    /// embedder is constructed — indexing, and a query that attaches a
+    /// semantic arm — so the cost is paid once per load, never per result; a
+    /// query that runs only the lexical arm does not touch this module at all.
     pub fn is_verified(&self, file: &ModelFile) -> bool {
         let path = self.path_of(file);
         matches!(fetch::digest_of(&path), Some(digest) if digest == file.sha256)
@@ -232,16 +233,38 @@ impl Models {
     /// - every file in the set must match its pin, not just the one being loaded;
     /// - the answer names the command that fixes it, because "file not found" for
     ///   a file that was never downloaded is a dead end.
+    ///
+    /// Each call re-reads the whole set from disk. A constructor that needs
+    /// several files of one set should ask [`Self::verified_paths`] instead:
+    /// with the current pins, verifying the image set is about a gigabyte of
+    /// SHA-256, and one `SiglipEmbedder::new` used to pay it three times.
     pub fn verified_path(&self, set: &str, file: &str) -> Result<PathBuf> {
+        let mut paths = self.verified_paths(set, &[file])?;
+        Ok(paths
+            .pop()
+            .expect("one file was asked for, one path comes back"))
+    }
+
+    /// The paths of several files from one set, with the set verified **once**.
+    ///
+    /// The policy is exactly [`Self::verified_path`]'s, applied to one read of
+    /// the set: name resolution first, then a single pass over every file in
+    /// the set, then the paths in the order they were asked for.
+    pub fn verified_paths(&self, set: &str, files: &[&str]) -> Result<Vec<PathBuf>> {
         let set_record = self
             .manifest
             .set(set)
             .with_context(|| format!("no model set named {set:?} in the manifest"))?;
-        let wanted = set_record
-            .files
+        let wanted: Vec<&ModelFile> = files
             .iter()
-            .find(|candidate| candidate.name == file)
-            .with_context(|| format!("model set {set:?} has no file named {file:?}"))?;
+            .map(|file| {
+                set_record
+                    .files
+                    .iter()
+                    .find(|candidate| candidate.name == *file)
+                    .with_context(|| format!("model set {set:?} has no file named {file:?}"))
+            })
+            .collect::<Result<_>>()?;
         let missing: Vec<&str> = set_record
             .files
             .iter()
@@ -255,7 +278,7 @@ impl Models {
                 missing.join(", ")
             );
         }
-        Ok(self.path_of(wanted))
+        Ok(wanted.into_iter().map(|file| self.path_of(file)).collect())
     }
 
     /// Whether every file of a named set is installed and verified. Cheaper than

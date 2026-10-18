@@ -20,28 +20,29 @@
 //! weakest and the one where down-weighting it has to be justified rather than
 //! asserted. The sweep at the foot of the test reports the top-1, top-10 and
 //! kept-in-top-10 accuracy for each value of the image arm's vote, from 0
-//! (lexical alone) to 1 (equal weight), and how many queries fusion rescued that
-//! text alone missed. It found the cliff between 0.05 and 0.06 — so 0.1, which an
-//! earlier run of this corpus endorsed, costs 10.7 points — and it found that
-//! `rescued` is 0 at every weight, on a denominator of 2. The lexical arm misses
-//! 2 of these 56 queries, so this corpus cannot show what a second arm adds; it
-//! can only show what one costs. The sweep reports that, and the ticket picks the
-//! constant from it, without either claiming a benefit the corpus cannot see.
+//! (lexical alone) to 1 (equal weight) — through the production `fuse`, so the
+//! arithmetic a constant is chosen from is the arithmetic the engine runs — and
+//! how many queries fusion rescued that text alone missed. It found the cliff
+//! between 0.05 and 0.06 — so 0.1, which an earlier run of this corpus endorsed,
+//! costs 10.7 points — and it found that `rescued` is 0 at every weight, on a
+//! denominator of 2. The lexical arm misses 2 of these 56 queries, so this corpus
+//! cannot show what a second arm adds; it can only show what one costs. The sweep
+//! reports that, and the ticket picks the constant from it, without either
+//! claiming a benefit the corpus cannot see.
 //!
 //! ```
 //! cargo test --release -p tessera-core --test image_fusion -- --ignored --nocapture
 //! ```
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
+use tessera_core::fusion::{fuse, Arm, ArmWeights, Ranked, TextEvidence, Weights};
 use tessera_core::models::Models;
 use tessera_core::vectors::siglip::SiglipEmbedder;
 use tessera_core::vectors::{cosine, Embedding};
 
 const DIM: usize = 768;
-/// The constant every Reciprocal Rank Fusion formula shares.
-const RRF_K: f32 = 60.0;
 
 fn models() -> Models {
     let dir = std::env::var("TESSERA_MODELS_DIR")
@@ -84,34 +85,52 @@ fn rank_by(scores: Vec<(usize, f32)>) -> Vec<usize> {
     scored.into_iter().map(|(i, _)| i).collect()
 }
 
-/// Reciprocal Rank Fusion with the image arm's vote scaled.
-///
-/// Ranks are positions, so this is the arithmetic ADR-0003 specifies — never a
-/// raw score, because an overlap ratio and a cosine are not the same quantity.
-/// `w_image` scales one arm's contribution; `1.0` is the equal-weight fusion
-/// ADR-0003 describes and `0.0` is the lexical arm alone.
-fn fuse(image_rank: &[usize], text_rank: &[usize], n: usize, w_image: f32) -> Vec<usize> {
-    // Both arms rank every file, so a position always exists; an absent one
-    // would score as the worst rank rather than being dropped, which is how RRF
-    // treats a document one arm did not return.
-    let position = |ranks: &[usize], i: usize| {
+/// The sweep's weights for one image-arm vote. The OCR-text ranking stands in
+/// for the keyword arm — it is a term-overlap ranking, and in the index the
+/// same text would be scored by BM25 — so it carries the keyword weight the
+/// shipped constants give a text-bearing file. The MiniLM text arm is not part
+/// of this corpus's question and carries 0; the OCR text and the image are the
+/// only two signals here.
+fn sweep_weights(w_image: f32) -> Weights {
+    let row = ArmWeights {
+        lexical: 1.0,
+        image: w_image,
+        text: 0.0,
+    };
+    Weights {
+        full: row,
+        little: row,
+        none: row,
+    }
+}
+
+/// Fuse one query through the **production** function, with the two arms this
+/// corpus has. The sweep must re-derive its numbers through the arithmetic the
+/// engine actually runs, or the constant it picks would describe a formula
+/// nobody ships.
+fn fused_order(
+    image_ranks: &[usize],
+    text_ranks: &[usize],
+    evidence: &HashMap<i64, TextEvidence>,
+    w_image: f32,
+) -> Vec<usize> {
+    let ranked = |ranks: &[usize]| -> Vec<Ranked> {
         ranks
             .iter()
-            .position(|x| *x == i)
-            .map_or(n as f32, |position| position as f32)
-    };
-    rank_by(
-        (0..n)
-            .map(|j| {
-                let image_rank = position(image_rank, j);
-                let text_rank = position(text_rank, j);
-                (
-                    j,
-                    1.0 / (RRF_K + text_rank + 1.0) + w_image / (RRF_K + image_rank + 1.0),
-                )
+            .map(|i| Ranked {
+                file_id: *i as i64,
+                tile_id: None,
             })
-            .collect(),
-    )
+            .collect()
+    };
+    let arms = vec![
+        (Arm::Lexical, ranked(text_ranks)),
+        (Arm::Image, ranked(image_ranks)),
+    ];
+    fuse(&arms, evidence, &sweep_weights(w_image), image_ranks.len())
+        .into_iter()
+        .map(|hit| hit.file_id as usize)
+        .collect()
 }
 
 /// The image arm's vote, swept. `1.0` reproduces equal-weight RRF and `0.0` is
@@ -186,6 +205,11 @@ fn does_fusing_the_ocr_text_recover_description_search() {
     eprintln!("corpus: {} images with text", images.len());
 
     let n = images.len();
+    // Every file in this corpus carries OCR text — that is the filter the loop
+    // above applies — so every file is full-evidence as the production weights
+    // read it.
+    let evidence: HashMap<i64, TextEvidence> =
+        (0..n).map(|i| (i as i64, TextEvidence::Full)).collect();
     let (mut img_only, mut txt_only, mut scored, mut lexical_misses) = (0, 0, 0, 0);
     // One slot per weight in the sweep: top-1, top-10, the share of answers that
     // stayed inside the fused top 10, and the queries fusion put first that the
@@ -239,7 +263,7 @@ fn does_fusing_the_ocr_text_recover_description_search() {
         // One fusion per weight, computed once and used for every column.
         let fusions: Vec<Vec<usize>> = IMAGE_WEIGHTS
             .iter()
-            .map(|w_image| fuse(&image_ranks, &text_ranks, n, *w_image))
+            .map(|w_image| fused_order(&image_ranks, &text_ranks, &evidence, *w_image))
             .collect();
 
         // The queries the image arm could possibly help with: the ones the text

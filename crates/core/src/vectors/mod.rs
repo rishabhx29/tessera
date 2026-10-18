@@ -159,11 +159,28 @@ impl Embedding {
 /// which tiles are missing, what a failed tile does, when the pin is written —
 /// is testable without ONNX models, and a future model swap is one
 /// implementation rather than a change in every caller.
-pub trait TextEmbedder {
+///
+/// `Send + Sync` because the query path embeds a description while the other
+/// arms' work is already running: one `&dyn TextEmbedder` crosses a thread
+/// boundary in `/fusion`, exactly as the concrete embedder does today.
+pub trait TextEmbedder: Send + Sync {
     /// The version token for this model, as the manifest pins it.
     fn version(&self) -> &str;
     /// Embed one tile or query. The result is normalized by the implementation.
     fn embed_text(&self, text: &str) -> Result<Embedding>;
+}
+
+/// What the query path needs from the image embedder: one description in, one
+/// normalized vector out.
+///
+/// A trait for the same reasons [`TextEmbedder`] is one — the fused search
+/// runs its arms on threads, and its tests run without ONNX models — and it
+/// keeps the fusion module from needing to know what SigLIP is.
+pub trait QueryEmbedder: Send + Sync {
+    /// The width of the vectors this embedder produces.
+    fn dim(&self) -> usize;
+    /// Embed one query. The result is normalized by the implementation.
+    fn embed_query(&self, text: &str) -> Result<Embedding>;
 }
 
 /// Cosine similarity, in `[-1, 1]`, with `0.0` for anything degenerate.

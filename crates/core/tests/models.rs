@@ -231,6 +231,48 @@ fn a_tampered_file_is_not_usable_even_before_anything_replaces_it() {
     );
 }
 
+/// The multi-file form of `verified_path`: one answer for several files of a
+/// set, with the set-wide policy intact — a file nobody asked for that no
+/// longer matches its pin still blocks every path the set could hand out.
+#[test]
+fn verified_paths_answers_for_several_files_under_one_set_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let (one, two) = (b"first file".to_vec(), b"second file".to_vec());
+    let manifest = Manifest::parse(&format!(
+        r#"{{"sets":[{{"name":"a-set","arm":"image","files":[
+             {{"name":"one.bin","url":"https://e/one","sha256":"{}","bytes":{}}},
+             {{"name":"two.bin","url":"https://e/two","sha256":"{}","bytes":{}}}]}}]}}"#,
+        sha256_of(&one),
+        one.len(),
+        sha256_of(&two),
+        two.len()
+    ))
+    .expect("the test manifest is valid");
+    let models = models_in(dir.path(), manifest);
+    std::fs::write(dir.path().join("one.bin"), &one).unwrap();
+    std::fs::write(dir.path().join("two.bin"), &two).unwrap();
+
+    let paths = models
+        .verified_paths("a-set", &["one.bin", "two.bin"])
+        .unwrap();
+    assert_eq!(
+        paths,
+        vec![dir.path().join("one.bin"), dir.path().join("two.bin")],
+        "paths come back in the order they were asked for"
+    );
+
+    // Tamper with the file nobody asked for: `two.bin` is not in the request,
+    // and the answer must still refuse to hand out `one.bin`.
+    std::fs::write(dir.path().join("two.bin"), b"tampered here").unwrap();
+    let err = models.verified_paths("a-set", &["one.bin"]).unwrap_err();
+    assert!(format!("{err:#}").contains("two.bin"), "{err:#}");
+
+    // A name that is not in the set is reported before any verification is
+    // attempted, exactly as the single-file form reports it.
+    let err = models.verified_paths("a-set", &["three.bin"]).unwrap_err();
+    assert!(format!("{err:#}").contains("no file named"), "{err:#}");
+}
+
 /// A file that was tampered with on disk is replaced, loudly: a pin moving is a
 /// routine event during development, and making every user hand-delete files to
 /// get past one is a bug report waiting to happen. What must never happen is the

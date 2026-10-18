@@ -13,6 +13,7 @@
 //! this crate never depends on the shell.
 
 pub mod cli;
+pub mod fusion;
 pub mod hash;
 pub mod index;
 pub mod models;

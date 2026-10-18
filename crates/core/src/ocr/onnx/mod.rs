@@ -147,12 +147,12 @@ impl OnnxOcr {
     /// Fails rather than falling back to something weaker: an engine that
     /// half-loads produces text-shaped noise, and the pipeline would index it.
     pub fn new(models: &Models) -> Result<Self> {
-        let det_path = models
-            .verified_path(MODEL_SET, DET_FILE)
-            .context("the OCR engine needs its detection model")?;
-        let rec_path = models
-            .verified_path(MODEL_SET, REC_FILE)
-            .context("the OCR engine needs its recognition model")?;
+        // One verification pass for both files: each per-file check re-hashes
+        // the whole set.
+        let paths = models.verified_paths(MODEL_SET, &[DET_FILE, REC_FILE])?;
+        let [det_path, rec_path] = paths
+            .try_into()
+            .expect("verified_paths returned one path per requested file");
 
         // A sensible default for a CPU-bound recogniser; ONNX Runtime would
         // otherwise spawn a thread per core and fight the index queue for them.

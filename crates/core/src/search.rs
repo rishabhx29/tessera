@@ -15,7 +15,9 @@
 //! Multi-term queries are AND across the file's whole text — the terms may
 //! live in different tiles.
 
-use crate::store::Store;
+use std::collections::{HashMap, HashSet};
+
+use crate::store::{Filter, Store};
 
 /// A search result: the file plus a snippet around the first matching term.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,6 +139,100 @@ pub fn snippet_around(text: &str, terms: &[&str], window: usize) -> String {
         out.push_str("...");
     }
     out.replace('\n', " ")
+}
+
+/// The lexical arm's result for fusion: files matching every term — across
+/// tiles, not within one tile, the same contract as [`search`] — best first,
+/// each with the tile that carried it.
+///
+/// Ranking is defined for every shape a query can take, because a query that
+/// cannot be ranked must still be *ordered by something*:
+///
+/// - terms FTS5 can index (three characters or more) are ranked by BM25, and a
+///   file's position is its *worst* position across the per-term lists: every
+///   term must match, so the weakest match is what the file honestly earned;
+/// - terms under three characters cannot be trigrams at all, so they narrow
+///   the result (a `LIKE` scan) and contribute no order;
+/// - a query of only short terms has no order to give, and comes back by file
+///   id.
+pub fn lexical_ranked(
+    store: &Store,
+    terms: &[&str],
+    filter: &Filter,
+) -> anyhow::Result<Vec<(i64, Option<i64>)>> {
+    /// Below three characters there is no trigram to match, so FTS5 cannot
+    /// answer and the fallback scans. The tokenizer's limit, not a choice.
+    const TRIGRAM_CHARS: usize = 3;
+
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (long, short): (Vec<&str>, Vec<&str>) = terms
+        .iter()
+        .partition(|term| term.chars().count() >= TRIGRAM_CHARS);
+
+    // Per term: position, and the tile that earned it. A file absent from any
+    // one list is not a result at all, so the first list is the seed and each
+    // further list narrows by intersection.
+    let mut ranked: Option<Vec<(i64, Option<i64>, usize)>> = None;
+    for term in &long {
+        let list = store.ranked_ids_for_expr(&term_match_expr(term), filter)?;
+        match &mut ranked {
+            None => {
+                ranked = Some(
+                    list.into_iter()
+                        .enumerate()
+                        .map(|(position, (file_id, tile_id))| (file_id, Some(tile_id), position))
+                        .collect(),
+                );
+            }
+            Some(kept) => {
+                let position_of: HashMap<i64, usize> = list
+                    .into_iter()
+                    .enumerate()
+                    .map(|(position, (file_id, _tile))| (file_id, position))
+                    .collect();
+                kept.retain_mut(|(file_id, _tile, worst)| {
+                    let Some(position) = position_of.get(file_id) else {
+                        return false;
+                    };
+                    // Every term must match, so the weakest match is the rank
+                    // the file earned. The tile stays the one the first list
+                    // matched: a snippet searches the tile for any term, so
+                    // any matched tile shows the right thing.
+                    *worst = (*worst).max(*position);
+                    true
+                });
+            }
+        }
+        if ranked.as_ref().is_some_and(|kept| kept.is_empty()) {
+            return Ok(Vec::new());
+        }
+    }
+
+    for term in &short {
+        let list = store.files_containing(term, filter)?;
+        let allowed: HashSet<i64> = list.iter().map(|(file_id, _)| *file_id).collect();
+        match &mut ranked {
+            Some(kept) => kept.retain(|(file_id, _, _)| allowed.contains(file_id)),
+            None => {
+                // Only short terms so far: intersect the scans, ordered by
+                // file id, carrying the first scan's tile.
+                ranked = Some(
+                    list.into_iter()
+                        .map(|(file_id, tile_id)| (file_id, Some(tile_id), 0))
+                        .collect(),
+                );
+            }
+        }
+    }
+
+    let mut kept = ranked.unwrap_or_default();
+    kept.sort_by(|a, b| a.2.cmp(&b.2).then(a.0.cmp(&b.0)));
+    Ok(kept
+        .into_iter()
+        .map(|(file_id, tile_id, _)| (file_id, tile_id))
+        .collect())
 }
 
 /// Search the corpus: every term must appear somewhere in the file (across
@@ -323,5 +419,129 @@ mod tests {
         assert!(pdf.snippet.contains("invoice"));
         let text = hits.iter().find(|h| h.kind == "text").unwrap();
         assert_eq!(text.page, None, "a format without pages says so");
+    }
+
+    /// A small indexed corpus for the fusion arm's ranking tests: one tile per
+    /// text, no files on disk — the same shape the store's own tests use.
+    fn index(store: &Store, name: &str, texts: &[&str]) {
+        use crate::index::skip::FileFacts;
+        use crate::index::{Kind, Tile};
+
+        let tiles: Vec<Tile> = texts
+            .iter()
+            .enumerate()
+            .map(|(seq, text)| Tile {
+                seq: seq as u32,
+                text: (*text).to_string(),
+                page: None,
+            })
+            .collect();
+        store
+            .index_file(
+                std::path::Path::new("/corpus"),
+                std::path::Path::new(&format!("/corpus/{name}")),
+                Kind::Text,
+                &FileFacts {
+                    size: 10,
+                    mtime: 1,
+                    placeholder: false,
+                },
+                Some("h"),
+                &tiles,
+            )
+            .unwrap();
+    }
+
+    /// Every term is a vote: a file must hold all of them, and its rank is the
+    /// worst position any one of them gave it — the weakest match is what the
+    /// file honestly earned.
+    #[test]
+    fn lexical_ranked_intersects_files_and_ranks_by_the_weakest_term() {
+        use crate::store::Store;
+
+        let data = tempfile::tempdir().unwrap();
+        let store = Store::open(data.path()).unwrap();
+        // Inserted a, b, c, d — id order is deliberately not the answer.
+        index(&store, "a.txt", &["a.txt\nalpha alpha alpha alpha beta"]);
+        index(&store, "b.txt", &["b.txt\nalpha beta"]);
+        index(&store, "c.txt", &["c.txt\nbeta beta beta beta alpha"]);
+        index(&store, "d.txt", &["d.txt\nalpha only here"]);
+        let id = |name: &str| {
+            store
+                .file_id(std::path::Path::new(&format!("/corpus/{name}")))
+                .unwrap()
+        };
+
+        let ranked = lexical_ranked(&store, &["alpha", "beta"], &Filter::default()).unwrap();
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|(file_id, _)| *file_id)
+                .collect::<Vec<_>>(),
+            vec![id("b.txt"), id("a.txt"), id("c.txt")],
+            "b is second on both terms; a is first on alpha and last on beta, \
+             so alpha's lead cannot outvote beta's verdict"
+        );
+        assert!(
+            ranked.iter().all(|(_, tile)| tile.is_some()),
+            "every ranked file names the tile a snippet is built from"
+        );
+    }
+
+    /// Terms under three characters cannot be trigrams: they narrow the result
+    /// by scanning, and they never pretend the files they find are unfindable.
+    #[test]
+    fn lexical_ranked_scans_for_terms_too_short_to_index() {
+        use crate::store::Store;
+
+        let data = tempfile::tempdir().unwrap();
+        let store = Store::open(data.path()).unwrap();
+        index(&store, "a.txt", &["a.txt\ninvoice from go travel"]);
+        index(&store, "b.txt", &["b.txt\ninvoice only"]);
+        index(&store, "c.txt", &["c.txt\nwe go now"]);
+        let id = |name: &str| {
+            store
+                .file_id(std::path::Path::new(&format!("/corpus/{name}")))
+                .unwrap()
+        };
+
+        let ranked = lexical_ranked(&store, &["invoice", "go"], &Filter::default()).unwrap();
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|(file_id, _)| *file_id)
+                .collect::<Vec<_>>(),
+            vec![id("a.txt")],
+            "b holds invoice but not go, c holds go but not invoice"
+        );
+
+        let ranked = lexical_ranked(&store, &["go"], &Filter::default()).unwrap();
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|(file_id, _)| *file_id)
+                .collect::<Vec<_>>(),
+            vec![id("a.txt"), id("c.txt")],
+            "a query of only short terms is still a query"
+        );
+    }
+
+    /// Multi-term AND runs across the file's tiles, not within one tile — the
+    /// contract `search` already had, kept by the ranked arm.
+    #[test]
+    fn lexical_ranked_matches_terms_across_tiles() {
+        use crate::store::Store;
+
+        let data = tempfile::tempdir().unwrap();
+        let store = Store::open(data.path()).unwrap();
+        index(
+            &store,
+            "e.txt",
+            &["e.txt\nalpha", "beta lives on another tile"],
+        );
+        index(&store, "f.txt", &["f.txt\nalpha on the same tile as beta"]);
+
+        let ranked = lexical_ranked(&store, &["alpha", "beta"], &Filter::default()).unwrap();
+        assert_eq!(ranked.len(), 2, "both files hold both terms, tiles or not");
     }
 }

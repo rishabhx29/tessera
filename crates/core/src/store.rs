@@ -231,16 +231,123 @@ fn row_to_ref(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRowRef> {
     Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
 }
 
-/// One tile row plus its file's identity, for the text arm's tile → file
-/// collapse. Private because it is a shape the store builds and consumes; the
-/// public result is [`MatchedFile`].
-struct TileRow {
-    file_id: i64,
-    path: String,
-    kind: String,
-    seq: u32,
-    page: Option<u32>,
-    text: String,
+/// One tile row plus its file's identity. [`Store::describe_text`] and the
+/// fused display path resolve chosen tiles through this; the arm ranking's
+/// collapse needs only identity, and asks `tile_file_ids` instead. Private to
+/// the crate because it is a shape the store builds and consumes; the public
+/// result is [`MatchedFile`], and fusion reads the fields it needs to render a
+/// hit.
+pub(crate) struct TileRow {
+    pub(crate) file_id: i64,
+    pub(crate) path: String,
+    pub(crate) kind: String,
+    pub(crate) seq: u32,
+    pub(crate) page: Option<u32>,
+    pub(crate) text: String,
+}
+
+/// What a search may consider: the `type:`, `in:`, `before:` and `after:`
+/// filters, built once and applied as plain `WHERE` clauses to every arm —
+/// lexical and semantic alike. A filter honoured by one arm and not another
+/// would let the other arm smuggle back exactly the files the user excluded.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Filter {
+    /// Kind names, already mapped from the user's `type:` vocabulary.
+    pub kinds: Vec<String>,
+    /// A path fragment the file must contain (the `in:` filter).
+    pub in_folder: Option<String>,
+    /// Epoch nanoseconds; `mtime >= this` (the `after:` filter).
+    pub after_ns: Option<i64>,
+    /// Epoch nanoseconds; `mtime < this` (the `before:` filter).
+    pub before_ns: Option<i64>,
+}
+
+/// Identity and first tile of one file, the shape a fused hit renders from
+/// when the arm that surfaced the file named no tile of its own.
+pub struct FileDisplay {
+    pub path: String,
+    pub kind: String,
+    /// The file's first tile: id, page, text. Absent for a file with no tiles.
+    pub first_tile: Option<(i64, Option<u32>, String)>,
+}
+
+/// One `?n` per row, numbered from 1: the shape every `IN (...)` in this file
+/// needs, written once.
+fn holes(n: usize) -> String {
+    (1..=n)
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Escape `LIKE`'s metacharacters so a user's `%` or `_` is a literal.
+fn like_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+impl Filter {
+    /// Whether this filter constrains anything at all. The common case — the
+    /// user typed no filters — must not pay for the filter machinery.
+    pub fn is_empty(&self) -> bool {
+        self.kinds.is_empty()
+            && self.in_folder.is_none()
+            && self.after_ns.is_none()
+            && self.before_ns.is_none()
+    }
+
+    /// Clauses against the `files` alias `f`, numbered from `first`, with
+    /// their parameters in order. Numbering starts where the caller's own
+    /// parameters stop: `?1` is a MATCH expression in one query and a `LIKE`
+    /// pattern in another, and the filters append after it.
+    fn clauses(&self, first: usize) -> (Vec<String>, Vec<Box<dyn rusqlite::ToSql>>) {
+        let mut clauses = Vec::new();
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        let mut next = first;
+        if !self.kinds.is_empty() {
+            let mut placeholders = Vec::with_capacity(self.kinds.len());
+            for _ in &self.kinds {
+                placeholders.push(format!("?{next}"));
+                next += 1;
+            }
+            clauses.push(format!("f.kind IN ({})", placeholders.join(",")));
+            for kind in &self.kinds {
+                params.push(Box::new(kind.clone()));
+            }
+        }
+        if let Some(folder) = &self.in_folder {
+            clauses.push(format!("f.path LIKE ?{next} ESCAPE '\\'"));
+            params.push(Box::new(format!("%{}%", like_escape(folder))));
+            next += 1;
+        }
+        if let Some(after) = self.after_ns {
+            clauses.push(format!("f.mtime >= ?{next}"));
+            params.push(Box::new(after));
+            next += 1;
+        }
+        if let Some(before) = self.before_ns {
+            clauses.push(format!("f.mtime < ?{next}"));
+            params.push(Box::new(before));
+        }
+        (clauses, params)
+    }
+
+    /// The clauses as an appendable `" AND …"` fragment for a query whose
+    /// first free parameter is `first`, or the empty string.
+    fn sql(&self, first: usize) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+        let (clauses, params) = self.clauses(first);
+        if clauses.is_empty() {
+            (String::new(), params)
+        } else {
+            (format!(" AND {}", clauses.join(" AND ")), params)
+        }
+    }
 }
 
 impl Store {
@@ -841,6 +948,240 @@ impl Store {
         Ok(out)
     }
 
+    /// Files matching one FTS5 expression, best BM25 first, each with the tile
+    /// that achieved its best match.
+    ///
+    /// Different from [`Store::file_ids_matching`] in the two things a fusion
+    /// arm needs: an order — BM25 relevance, ties by file id, not the row id a
+    /// set intersection happened to leave behind — and the tile the order came
+    /// from, so a hit can be shown where its words are. One row per file: the
+    /// file's first row in BM25 order, which is also the tile a snippet is
+    /// built from.
+    pub fn ranked_ids_for_expr(
+        &self,
+        match_expr: &str,
+        filter: &Filter,
+    ) -> Result<Vec<(i64, i64)>> {
+        let (filter_sql, filter_params) = filter.sql(2);
+        // bm25() is computed in its own query level because both the window
+        // function and the outer order need it, and a window may only order by
+        // expressions of the query it sits in.
+        let sql = format!(
+            "SELECT file_id, tile_id
+             FROM (
+               SELECT file_id, tile_id, rank,
+                      ROW_NUMBER() OVER (
+                        PARTITION BY file_id ORDER BY rank, tile_id
+                      ) AS rn
+               FROM (
+                 SELECT t.file_id AS file_id, t.id AS tile_id,
+                        bm25(tiles_fts) AS rank
+                 FROM tiles_fts
+                 JOIN tiles t ON t.id = tiles_fts.rowid
+                 JOIN files f ON f.id = t.file_id
+                 WHERE tiles_fts MATCH ?1{filter_sql}
+               )
+             )
+             WHERE rn = 1
+             ORDER BY rank, file_id"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(1 + filter_params.len());
+        params.push(Box::new(match_expr.to_string()));
+        params.extend(filter_params);
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Files with a tile containing `needle` as a literal substring: the
+    /// fallback for terms the trigram tokenizer cannot index (under three
+    /// characters), where FTS5 can only fail to answer. A lone `go` is a real
+    /// query; the trigram index does not contain it, so a scan is what honesty
+    /// costs.
+    ///
+    /// One row per file — its first matching tile — ordered by file id. There
+    /// is no relevance order to give: a term the tokenizer cannot see is one
+    /// BM25 has nothing to say about.
+    pub fn files_containing(&self, needle: &str, filter: &Filter) -> Result<Vec<(i64, i64)>> {
+        let (filter_sql, filter_params) = filter.sql(2);
+        let sql = format!(
+            "SELECT t.file_id, MIN(t.id)
+             FROM tiles t JOIN files f ON f.id = t.file_id
+             WHERE t.text LIKE ?1 ESCAPE '\\'{filter_sql}
+             GROUP BY t.file_id
+             ORDER BY t.file_id"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> =
+            vec![Box::new(format!("%{}%", like_escape(needle)))];
+        params.extend(filter_params);
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Every indexed file the filter admits, newest first.
+    ///
+    /// This is the filter-only query — `tessera search type:pdf` with no words
+    /// to rank by — and it lists only `indexed` files: a skipped or failed file
+    /// is not something search can find, and listing it would make the result
+    /// count a lie.
+    pub fn filtered_file_ids(&self, filter: &Filter) -> Result<Vec<i64>> {
+        let (filter_sql, params) = filter.sql(1);
+        let sql = format!(
+            "SELECT f.id FROM files f
+             WHERE f.status = 'indexed'{filter_sql}
+             ORDER BY f.mtime DESC, f.id"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| row.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Characters of text each file holds, summed over its tiles: the evidence
+    /// the fusion weights are chosen from. A file with no tiles at all — a
+    /// photo with nothing to read — is absent from the map, which is the same
+    /// statement as a count of 0.
+    pub fn tile_text_lengths(&self, file_ids: &[i64]) -> Result<HashMap<i64, u64>> {
+        if file_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let sql = format!(
+            "SELECT file_id, SUM(LENGTH(text)) FROM tiles
+             WHERE file_id IN ({})
+             GROUP BY file_id",
+            holes(file_ids.len())
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(file_ids), |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut out = HashMap::with_capacity(file_ids.len());
+        for row in rows {
+            let (file_id, length) = row?;
+            // LENGTH never goes negative; the cast is the type rusqlite speaks.
+            out.insert(file_id, length.max(0) as u64);
+        }
+        Ok(out)
+    }
+
+    /// Identity and first tile for each file, in one round trip: what a fused
+    /// hit needs to render when the arm that surfaced it named no tile of its
+    /// own (the image arm ranks files, not positions). A chosen tile from an
+    /// arm is fetched with [`Store::tile_rows`] instead.
+    pub fn file_displays(&self, file_ids: &[i64]) -> Result<HashMap<i64, FileDisplay>> {
+        if file_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let sql = format!(
+            "SELECT f.id, f.path, f.kind, t.id, t.page, t.text
+             FROM files f
+             LEFT JOIN tiles t
+               ON t.file_id = f.id
+              AND t.seq = (SELECT MIN(seq) FROM tiles WHERE file_id = f.id)
+             WHERE f.id IN ({})",
+            holes(file_ids.len())
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(file_ids), |row| {
+            let tile_id: Option<i64> = row.get(3)?;
+            let first_tile = match tile_id {
+                Some(id) => Some((id, row.get(4)?, row.get(5)?)),
+                None => None,
+            };
+            Ok((
+                row.get::<_, i64>(0)?,
+                FileDisplay {
+                    path: row.get(1)?,
+                    kind: row.get(2)?,
+                    first_tile,
+                },
+            ))
+        })?;
+        let mut out = HashMap::with_capacity(file_ids.len());
+        for row in rows {
+            let (file_id, display) = row?;
+            out.insert(file_id, display);
+        }
+        Ok(out)
+    }
+
+    /// The image arm's order: every embedded image, most similar first. Only
+    /// ids — fusion fuses ranks, and the display row is fetched once, for the
+    /// survivors.
+    pub fn ranked_image_file_ids(&self, query: &Embedding, dim: usize) -> Result<Vec<i64>> {
+        let embeddings = self.image_embeddings(dim)?;
+        Ok(crate::vectors::rank(
+            query,
+            embeddings.iter().map(|(id, e)| (*id, e)).collect(),
+            embeddings.len(),
+        )
+        .into_iter()
+        .map(|scored| scored.file_id)
+        .collect())
+    }
+
+    /// The text arm's order: every embedded chunk, most similar first,
+    /// collapsed to one row per file at that file's best chunk — the chunk the
+    /// hit will be shown from.
+    pub fn ranked_text_file_tiles(&self, query: &Embedding, dim: usize) -> Result<Vec<(i64, i64)>> {
+        let embeddings = self.text_embeddings(dim)?;
+        let ranked = crate::vectors::rank(
+            query,
+            embeddings.iter().map(|(id, e)| (*id, e)).collect(),
+            embeddings.len(),
+        );
+        // Ranked rows carry tile ids; the tile → file collapse runs in
+        // batches, the same shape describe_text uses, and keeps each file's
+        // first appearance. Identity only: the chosen tile's text is fetched
+        // for the final hits alone, not for every chunk in the ranking. A
+        // thousand ids per query keeps a full ranking to a handful of
+        // round trips.
+        const BATCH: usize = 1000;
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        for batch in ranked.chunks(BATCH) {
+            let ids: Vec<i64> = batch.iter().map(|scored| scored.file_id).collect();
+            let tiles = self.tile_file_ids(&ids)?;
+            for scored in batch {
+                let Some(&file_id) = tiles.get(&scored.file_id) else {
+                    continue;
+                };
+                if seen.insert(file_id) {
+                    out.push((file_id, scored.file_id));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Tile ids → the file each belongs to, without the tile's text or the
+    /// file's path. [`Self::tile_rows`] answers the rendering question and pays
+    /// for a JOIN and a corpus's worth of text; this answers the ranking's
+    /// question, which is only "whose was this?".
+    fn tile_file_ids(&self, ids: &[i64]) -> Result<HashMap<i64, i64>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let sql = format!(
+            "SELECT id, file_id FROM tiles WHERE id IN ({})",
+            holes(ids.len())
+        );
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(ids), |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut out = HashMap::with_capacity(ids.len());
+        for row in rows {
+            let (tile_id, file_id) = row?;
+            out.insert(tile_id, file_id);
+        }
+        Ok(out)
+    }
+
     /// The model version whose vectors `arm` currently holds, or `None` if
     /// that arm has never been embedded.
     ///
@@ -1193,8 +1534,9 @@ impl Store {
     }
 
     /// Tile ids resolved to their file and position for one batch of
-    /// [`Store::describe_text`].
-    fn tile_rows(&self, ids: &[i64]) -> Result<HashMap<i64, TileRow>> {
+    /// [`Store::describe_text`] — and, since ticket 10, for rendering the tile
+    /// a fused hit was found in.
+    pub(crate) fn tile_rows(&self, ids: &[i64]) -> Result<HashMap<i64, TileRow>> {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
@@ -2307,5 +2649,309 @@ mod tests {
         let (_dir, store) = tmp_store();
         store.conn.pragma_update(None, "user_version", 99).unwrap();
         assert!(store.migrate().is_err());
+    }
+
+    /// The lexical arm's ordering contract: BM25 relevance, not the insertion
+    /// order the rows happen to have, and the tile the order came from.
+    #[test]
+    fn lexical_ranking_is_bm25_order_with_the_matching_tile() {
+        let (_dir, store) = tmp_store();
+        // Inserted c, b, a, d — id order is deliberately not the answer.
+        indexed_file(
+            &store,
+            "/corpus/c.txt",
+            &["c.txt\nan invoice appears once amid a great deal of diluting text"],
+        );
+        indexed_file(&store, "/corpus/b.txt", &["b.txt\ninvoice"]);
+        indexed_file(&store, "/corpus/a.txt", &["a.txt\ninvoice invoice invoice"]);
+        indexed_file(
+            &store,
+            "/corpus/d.txt",
+            &["d.txt\nnothing here", "the invoice arrives"],
+        );
+
+        let ranked = store
+            .ranked_ids_for_expr(
+                &crate::search::term_match_expr("invoice"),
+                &Filter::default(),
+            )
+            .unwrap();
+        let name = |file_id: i64| -> String {
+            store
+                .conn
+                .query_row("SELECT path FROM files WHERE id = ?1", [file_id], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+        };
+        let order: Vec<String> = ranked.iter().map(|(id, _)| name(*id)).collect();
+        assert_eq!(
+            order.first().map(String::as_str),
+            Some("/corpus/a.txt"),
+            "three occurrences beat one: {order:?}"
+        );
+        assert_eq!(
+            order.last().map(String::as_str),
+            Some("/corpus/c.txt"),
+            "one occurrence in a long tile ranks last: {order:?}"
+        );
+        let d = store.file_id(Path::new("/corpus/d.txt")).unwrap();
+        let d_tiles = text_tile_ids(&store, "/corpus/d.txt");
+        assert_eq!(
+            ranked
+                .iter()
+                .find(|(id, _)| *id == d)
+                .map(|(_, tile)| *tile),
+            Some(d_tiles[1]),
+            "the pair names the tile the match is on, not tile 0"
+        );
+    }
+
+    /// Terms the trigram tokenizer cannot index still find files, and `%` or
+    /// `_` in user input stays a literal while they do.
+    #[test]
+    fn short_terms_fall_back_to_like_with_literal_metacharacters() {
+        let (_dir, store) = tmp_store();
+        indexed_file(&store, "/corpus/a.txt", &["a.txt\ngot it? go"]);
+        indexed_file(&store, "/corpus/b.txt", &["b.txt\ngo west"]);
+        indexed_file(&store, "/corpus/c.txt", &["c.txt\n50% off"]);
+        indexed_file(&store, "/corpus/d.txt", &["d.txt\n50x off"]);
+        indexed_file(&store, "/corpus/e.txt", &["e.txt\n5x0 down, 5_0 stage"]);
+
+        let files = |needle: &str| -> Vec<String> {
+            store
+                .files_containing(needle, &Filter::default())
+                .unwrap()
+                .into_iter()
+                .map(|(file_id, _)| {
+                    store
+                        .conn
+                        .query_row("SELECT path FROM files WHERE id = ?1", [file_id], |row| {
+                            row.get(0)
+                        })
+                        .unwrap()
+                })
+                .collect()
+        };
+
+        assert_eq!(files("go"), vec!["/corpus/a.txt", "/corpus/b.txt"]);
+        assert_eq!(
+            files("GO"),
+            vec!["/corpus/a.txt", "/corpus/b.txt"],
+            "LIKE is case-insensitive, and so is a search"
+        );
+        assert_eq!(
+            files("50%"),
+            vec!["/corpus/c.txt"],
+            "an unescaped % would match d.txt too"
+        );
+        assert_eq!(
+            files("5_0"),
+            vec!["/corpus/e.txt"],
+            "an unescaped _ would match the 5x0 in the same tile"
+        );
+    }
+
+    /// Filters reach every surface that can return a file — the ranked FTS
+    /// list and the filter-only listing — and the listing excludes files
+    /// search cannot find.
+    #[test]
+    fn filters_narrow_the_ranked_list_and_the_filter_only_listing() {
+        let (_dir, store) = tmp_store();
+        let corpus = tempfile::tempdir().unwrap();
+        let add = |name: &str, kind: Kind, mtime: i64| {
+            let path = corpus.path().join(name);
+            store
+                .index_file(
+                    corpus.path(),
+                    &path,
+                    kind,
+                    &FileFacts {
+                        size: 10,
+                        mtime,
+                        placeholder: false,
+                    },
+                    Some("h"),
+                    &tiles(&[&format!("{name}\ninvoice")]),
+                )
+                .unwrap();
+        };
+        add("a.pdf", Kind::Pdf, 100);
+        add("b.txt", Kind::Text, 200);
+        add("c.pdf", Kind::Pdf, 300);
+
+        let a = store.file_id(&corpus.path().join("a.pdf")).unwrap();
+        let b = store.file_id(&corpus.path().join("b.txt")).unwrap();
+        let c = store.file_id(&corpus.path().join("c.pdf")).unwrap();
+
+        let ranked_ids = |filter: &Filter| -> Vec<i64> {
+            let mut ids: Vec<i64> = store
+                .ranked_ids_for_expr(&crate::search::term_match_expr("invoice"), filter)
+                .unwrap()
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect();
+            ids.sort_unstable();
+            ids
+        };
+        let pdfs = Filter {
+            kinds: vec!["pdf".into()],
+            ..Filter::default()
+        };
+        assert_eq!(ranked_ids(&pdfs), vec![a, c]);
+        assert_eq!(
+            ranked_ids(&Filter {
+                kinds: vec!["text".into()],
+                ..Filter::default()
+            }),
+            vec![b]
+        );
+        assert_eq!(
+            ranked_ids(&Filter {
+                in_folder: Some("b.txt".into()),
+                ..Filter::default()
+            }),
+            vec![b]
+        );
+        assert_eq!(
+            ranked_ids(&Filter {
+                after_ns: Some(150),
+                ..Filter::default()
+            }),
+            vec![b, c]
+        );
+        assert_eq!(
+            ranked_ids(&Filter {
+                before_ns: Some(250),
+                ..Filter::default()
+            }),
+            vec![a, b]
+        );
+
+        store
+            .skip_file(
+                corpus.path(),
+                &corpus.path().join("gone.txt"),
+                Kind::Text,
+                &FileFacts {
+                    size: 10,
+                    mtime: 400,
+                    placeholder: false,
+                },
+                SkipReason::CloudPlaceholder,
+            )
+            .unwrap();
+        assert_eq!(
+            store.filtered_file_ids(&Filter::default()).unwrap(),
+            vec![c, b, a],
+            "newest first, and a skipped file is not a result"
+        );
+        assert_eq!(
+            store.filtered_file_ids(&pdfs).unwrap(),
+            vec![c, a],
+            "the filter-only listing honours the same clauses as every arm"
+        );
+    }
+
+    /// The evidence count fusion weighs by, and the display row a tileless
+    /// file renders as.
+    #[test]
+    fn evidence_lengths_and_display_rows_follow_the_tiles() {
+        let (_dir, store) = tmp_store();
+        let corpus = tempfile::tempdir().unwrap();
+        indexed_file(&store, "/corpus/doc.txt", &["doc.txt\nalpha beta", "gamma"]);
+        let photo = corpus.path().join("photo.png");
+        std::fs::write(&photo, b"not really a png").unwrap();
+        store
+            .index_file(
+                corpus.path(),
+                &photo,
+                Kind::Image,
+                &facts(10),
+                Some("p"),
+                &[],
+            )
+            .unwrap();
+
+        let doc = store.file_id(Path::new("/corpus/doc.txt")).unwrap();
+        let photo_id = store.file_id(&photo).unwrap();
+
+        let lengths = store.tile_text_lengths(&[doc, photo_id]).unwrap();
+        let expected = "doc.txt\nalpha beta".chars().count() + "gamma".chars().count();
+        assert_eq!(
+            lengths.get(&doc),
+            Some(&(expected as u64)),
+            "every tile's characters, summed"
+        );
+        assert_eq!(
+            lengths.get(&photo_id),
+            None,
+            "a tileless file has no evidence, not zero"
+        );
+
+        let displays = store.file_displays(&[doc, photo_id]).unwrap();
+        let doc_row = &displays[&doc];
+        assert_eq!(doc_row.path, "/corpus/doc.txt");
+        assert_eq!(doc_row.kind, "text");
+        assert_eq!(
+            doc_row
+                .first_tile
+                .as_ref()
+                .map(|(_, _, text)| text.as_str()),
+            Some("doc.txt\nalpha beta")
+        );
+        assert!(
+            displays[&photo_id].first_tile.is_none(),
+            "nothing to show, and that is not an error"
+        );
+    }
+
+    /// The two vector arms rank files, with the text arm collapsing chunks to
+    /// the chunk the hit is shown from — which need not be the file's first.
+    #[test]
+    fn vector_arms_rank_files_and_collapse_tiles_to_the_best_chunk() {
+        let (_dir, store) = tmp_store();
+        let corpus = tempfile::tempdir().unwrap();
+        let a = indexed_image(&store, corpus.path(), "a.png");
+        let b = indexed_image(&store, corpus.path(), "b.png");
+        store
+            .put_image_embedding(a, &embedding([1.0, 0.0, 0.0, 0.0]))
+            .unwrap();
+        store
+            .put_image_embedding(b, &embedding([0.0, 1.0, 0.0, 0.0]))
+            .unwrap();
+        assert_eq!(
+            store
+                .ranked_image_file_ids(&embedding([0.9, 0.1, 0.0, 0.0]), DIM)
+                .unwrap(),
+            vec![a, b]
+        );
+
+        indexed_file(&store, "/corpus/x.txt", &["x.txt\nx0", "x1"]);
+        indexed_file(&store, "/corpus/y.txt", &["y.txt\ny0", "y1"]);
+        let x = store.file_id(Path::new("/corpus/x.txt")).unwrap();
+        let y = store.file_id(Path::new("/corpus/y.txt")).unwrap();
+        let x_tiles = text_tile_ids(&store, "/corpus/x.txt");
+        let y_tiles = text_tile_ids(&store, "/corpus/y.txt");
+        store
+            .put_text_embedding(x_tiles[0], &text_embedding([0.0, 1.0]))
+            .unwrap();
+        // The file's best chunk is its second: the collapse must name that
+        // tile, not the file's first.
+        store
+            .put_text_embedding(x_tiles[1], &text_embedding([1.0, 0.0]))
+            .unwrap();
+        store
+            .put_text_embedding(y_tiles[0], &text_embedding([0.7, 0.7]))
+            .unwrap();
+        store
+            .put_text_embedding(y_tiles[1], &text_embedding([0.0, 1.0]))
+            .unwrap();
+        assert_eq!(
+            store
+                .ranked_text_file_tiles(&text_embedding([1.0, 0.0]), TEXT_EMBEDDING_DIM)
+                .unwrap(),
+            vec![(x, x_tiles[1]), (y, y_tiles[0])]
+        );
     }
 }

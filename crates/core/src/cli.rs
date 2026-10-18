@@ -5,16 +5,18 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
+use crate::fusion::{parse_query, search as fused_search};
 use crate::index::{
     docx::DocxPipeline, image::ImagePipeline, index_folder, index_folder_with_text,
     pdf::PdfPipeline, text::TextPipeline, Pipeline,
 };
 use crate::models::Models;
 use crate::ocr::{self, OcrChoice, OcrEngine};
-use crate::search::{search, snippet_around};
+use crate::search::snippet_around;
 use crate::store::{Arm, Store, IMAGE_EMBEDDING_DIM, TEXT_EMBEDDING_DIM};
-use crate::vectors::minilm::MiniLm;
-use crate::vectors::siglip::SiglipEmbedder;
+use crate::vectors::minilm::{self, MiniLm};
+use crate::vectors::siglip::{self, SiglipEmbedder};
+use crate::vectors::{QueryEmbedder, TextEmbedder};
 
 /// Where the models live: the override if given, otherwise a `models` folder
 /// beside the index. One designated directory to back up, and one to delete.
@@ -63,28 +65,31 @@ struct Cli {
 enum Command {
     /// Index every supported file under a folder (text, PDF, Word and images).
     Index { folder: PathBuf },
-    /// Search the index. Multiple terms all must appear in the same file.
+    /// Search the index: the keyword, image and meaning arms, fused into one
+    /// ranking. Terms and filters in the same bar — `tessera search invoice
+    /// type:pdf "in:My Documents" after:2024-01-01`.
     Search {
-        /// Search terms. Quote them as you would for a search engine:
-        /// `tessera search "invoice airline"`.
-        query: Vec<String>,
-        /// Describe what you are looking for instead of naming words in it:
-        /// `tessera search --describe "a chart about flight delays"`.
+        /// Search terms and filters. Quote phrases as you would for a search
+        /// engine: `tessera search "invoice airline"`. A token that is not a
+        /// filter is a term (so `rfc:9110` searches for what was typed).
         ///
-        /// This searches by what an image *looks like*, which is the only way to
-        /// find a photo of a thing whose words you do not know. It is a
-        /// different arm from keyword search, not a better one — on screenshots
-        /// the text arm wins by a wide margin (0.964 vs 0.268 top-1 on 56 real
-        /// files), so reach for this when keywords have nothing to go on.
+        /// Filters: `type:image`, `type:pdf`, `type:doc` (Word and text),
+        /// `in:<folder>`, `before:<YYYY-MM-DD>`, `after:<YYYY-MM-DD>`.
+        query: Vec<String>,
+        /// Cut the query down to the image arm alone: what an image *looks
+        /// like*, rather than the words on or in it. This is a diagnostic —
+        /// the default search already runs this arm, weighted — and it is the
+        /// only way to find a photo of a thing whose words you do not know.
+        ///
+        /// On screenshots the text arm wins by a wide margin (0.964 vs 0.268
+        /// top-1 on 56 real files), so reach for this when keywords have
+        /// nothing to go on.
         #[arg(long, value_name = "DESCRIPTION")]
         describe: Option<String>,
-        /// Find documents by meaning instead of by the words they contain:
-        /// `tessera search --describe-text "the contract with the non-compete"`.
-        ///
-        /// This is the text arm — MiniLM over every chunk the index holds. It is
-        /// the counterpart to `--describe`, which searches images by what they
-        /// look like. The separate surfaces are temporary: fusion will run every
-        /// arm from one query.
+        /// Cut the query down to the meaning arm alone: MiniLM over every
+        /// chunk the index holds. A diagnostic, like `--describe`: the default
+        /// search fuses this arm with the others, and this flag is how the arm
+        /// gets tuned and measured on its own.
         #[arg(long, value_name = "MEANING", conflicts_with = "describe")]
         describe_text: Option<String>,
         /// How many results to show. Defaults to 10.
@@ -135,16 +140,6 @@ pub fn default_data_dir() -> Result<PathBuf> {
     Ok(base.join("Tessera"))
 }
 
-/// Split raw CLI arguments into search terms. Each argument is tokenized, so
-/// one quoted `"invoice airline"` becomes the two terms the user meant rather
-/// than one phrase that matches nothing.
-pub fn split_terms(args: &[String]) -> Vec<String> {
-    args.iter()
-        .flat_map(|a| a.split_whitespace())
-        .map(str::to_string)
-        .collect()
-}
-
 /// Every pipeline the engine has, in the order they are offered a file.
 ///
 /// Images need an OCR engine, which is chosen rather than constructed here:
@@ -173,6 +168,18 @@ fn pipelines(ocr: &OcrChoice, models: &Models) -> Result<Vec<Box<dyn Pipeline>>>
     ])
 }
 
+/// Whether every file of a set is at least present on disk.
+///
+/// Used only on the failure path of an embedder constructor, to choose between
+/// silence and a warning. Presence, not verification: re-hashing a gigabyte to
+/// phrase a warning is how the warning becomes worse than the problem.
+fn set_present(models: &Models, set: &str) -> bool {
+    models
+        .manifest()
+        .set(set)
+        .is_some_and(|set| set.files.iter().all(|file| models.path_of(file).exists()))
+}
+
 /// The image arm, or `None` when its models are not installed.
 ///
 /// Optional on purpose. Loading a vision tower costs 213 MB and ~1 s of start-up,
@@ -180,17 +187,22 @@ fn pipelines(ocr: &OcrChoice, models: &Models) -> Result<Vec<Box<dyn Pipeline>>>
 /// the arm is attached only when the pinned set is present and verified. Its
 /// absence is announced once, because silently indexing without vectors looks
 /// exactly like description search working and returning nothing.
+///
+/// Built first, asked about afterwards: constructing the embedder verifies the
+/// set, so asking `is_installed` up front would hash the same files twice on
+/// every load — and the siglip set is about a gigabyte. A set that is not
+/// installed is silence; a set whose files are all there but which will not
+/// load or does not match its pins is worth saying out loud.
 pub fn image_embedder(models: &Models) -> Option<std::sync::Arc<SiglipEmbedder>> {
-    if !SiglipEmbedder::is_installed(models) {
-        return None;
-    }
     match SiglipEmbedder::new(models, default_threads()) {
         Ok(embedder) => Some(std::sync::Arc::new(embedder)),
         Err(err) => {
-            eprintln!(
-                "the siglip models are installed but the embedder would not load, so images will \
-                 be indexed without description search: {err:#}"
-            );
+            if set_present(models, siglip::MODEL_SET) {
+                eprintln!(
+                    "the siglip models are present but the embedder would not load them, so the \
+                     image arm is off: {err:#}"
+                );
+            }
             None
         }
     }
@@ -200,18 +212,18 @@ pub fn image_embedder(models: &Models) -> Option<std::sync::Arc<SiglipEmbedder>>
 ///
 /// `None` is not an error: an index without MiniLM is still a keyword index,
 /// and a folder of documents should not fail because an optional model is
-/// missing. The caller says so once rather than once per file.
+/// missing. The caller says so once rather than once per file. Built first for
+/// [`image_embedder`]'s reason: the constructor already verifies the set.
 pub fn text_embedder(models: &Models) -> Option<MiniLm> {
-    if !MiniLm::is_installed(models) {
-        return None;
-    }
     match MiniLm::new(models, default_threads()) {
         Ok(embedder) => Some(embedder),
         Err(err) => {
-            eprintln!(
-                "the minilm models are installed but the embedder would not load, so documents \
-                 will be indexed without meaning search: {err:#}"
-            );
+            if set_present(models, minilm::MODEL_SET) {
+                eprintln!(
+                    "the minilm models are present but the embedder would not load them, so the \
+                     meaning arm is off: {err:#}"
+                );
+            }
             None
         }
     }
@@ -427,22 +439,56 @@ pub fn run() -> Result<()> {
                 }
                 return Ok(());
             }
-            let terms = split_terms(&query);
-            let hits = search(
-                &store,
-                &terms.iter().map(String::as_str).collect::<Vec<_>>(),
-            )?;
-            if hits.is_empty() {
-                println!("no results");
-                return Ok(());
+            // The default: the one search box. Every arm this machine has runs
+            // over the query, and the fusion weighs their votes by what the
+            // index knows about each file (docs/adr/0003). The two flags above
+            // stay as diagnostics — they cut the query down to a single arm.
+            let parsed = parse_query(&query)?;
+            if parsed.terms.is_empty() && parsed.filter.is_empty() {
+                anyhow::bail!("nothing to search for — give a word, or a filter like type:pdf");
             }
-            for hit in hits.into_iter().take(limit) {
-                println!("{}", hit.path);
+            let models = Models::open(&models_dir(&data_dir, cli.models_dir.as_deref()))?;
+            let image = image_embedder(&models);
+            let text = text_embedder(&models);
+            // Measured after the embedders are built: this number is the
+            // search, not the model loading a process pays once.
+            let started = std::time::Instant::now();
+            let outcome = fused_search(
+                &data_dir,
+                &parsed,
+                image
+                    .as_deref()
+                    .map(|embedder| embedder as &dyn QueryEmbedder),
+                text.as_ref().map(|embedder| embedder as &dyn TextEmbedder),
+                limit,
+            )?;
+            let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+            if outcome.hits.is_empty() {
+                println!("no results");
+            }
+            for hit in &outcome.hits {
+                let arms = if hit.arms.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", hit.arms.names().join(", "))
+                };
+                println!("{}{arms}", hit.path);
                 match hit.page {
                     Some(page) => println!("  page {page}: {}", hit.snippet),
                     None => println!("  {}", hit.snippet),
                 }
             }
+            for note in &outcome.notes {
+                eprintln!("note: {note}");
+            }
+            // The timing line goes to the terminal, not the pipe: what stdout
+            // carries is results.
+            let arms: Vec<String> = outcome
+                .timings
+                .iter()
+                .map(|timing| format!("{} {:.0} ms", timing.arm.name(), timing.millis))
+                .collect();
+            eprintln!("searched in {elapsed:.0} ms ({})", arms.join(", "));
             Ok(())
         }
         Command::Stats => {
@@ -572,21 +618,6 @@ mod tests {
             mtime: 0,
             placeholder: false,
         }
-    }
-
-    #[test]
-    fn a_quoted_multiword_argument_becomes_two_terms() {
-        let args = vec!["invoice airline".to_string()];
-        assert_eq!(split_terms(&args), vec!["invoice", "airline"]);
-    }
-
-    #[test]
-    fn arguments_and_whitespace_both_split() {
-        let args = vec!["invoice".to_string(), "  from\tthe\tairline ".to_string()];
-        assert_eq!(
-            split_terms(&args),
-            vec!["invoice", "from", "the", "airline"]
-        );
     }
 
     #[test]

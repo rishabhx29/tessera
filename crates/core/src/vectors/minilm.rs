@@ -82,8 +82,13 @@ impl MiniLm {
     /// Load the pinned int8 model and its tokenizer, or fail with the command
     /// that fixes it.
     pub fn new(models: &Models, threads: usize) -> Result<Self> {
-        let model_path = models.verified_path(MODEL_SET, "minilm.int8.onnx")?;
-        let tokenizer_path = models.verified_path(MODEL_SET, "minilm-tokenizer.json")?;
+        // One verification pass for both files: each per-file check re-hashes
+        // the whole set.
+        let paths =
+            models.verified_paths(MODEL_SET, &["minilm.int8.onnx", "minilm-tokenizer.json"])?;
+        let [model_path, tokenizer_path] = paths
+            .try_into()
+            .expect("verified_paths returned one path per requested file");
 
         let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path).map_err(|err| {
             anyhow!(
@@ -121,11 +126,10 @@ impl MiniLm {
 
     /// Whether the arm's files are installed and verified. The cheap question,
     /// asked before a run so "why is meaning search empty" has an answer.
+    ///
+    /// One set verification, not two: each per-file check re-hashes the set.
     pub fn is_installed(models: &Models) -> bool {
-        models.verified_path(MODEL_SET, "minilm.int8.onnx").is_ok()
-            && models
-                .verified_path(MODEL_SET, "minilm-tokenizer.json")
-                .is_ok()
+        models.is_set_ready(MODEL_SET)
     }
 
     /// The version token recorded in `meta` when this embedder fills the arm.

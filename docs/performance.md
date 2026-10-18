@@ -653,7 +653,7 @@ the number means anything.
 
 - image saveâ†’searchable: ~260â€“350 ms projected (target <1500 ms) â€” components measured
 - doc saveâ†’searchable: ~1000 ms measured (target <300 ms) â€” **still over**; doc extract is pypdf-bound. Accepted for v0.1 (docs are a minority of the corpus and indexing is background); revisit if dogfooding disagrees. (The extraction term is re-measured with the Rust pipelines at the end of this file; this line stands until save→searchable is.)
-- fused query: ~50 ms projected at personal scale (target <100 ms); 159 ms measured sequential
+- fused query: ~50 ms projected at personal scale (target <100 ms); 159 ms measured sequential — superseded by the fused measurement at the end of this file
 - cross-modal sanity: 0.90 top-1 controlled (chance = 5%)
 
 Methodology notes: single-machine, single-run numbers with p50/p95 over
@@ -1477,3 +1477,87 @@ the 256-token cap is not exercised. The corpus is two open corpora rather than
 a personal Documents folder, and 6,425 chunks is a small index — the scan half
 of the query has not been measured beyond it, and no retrieval-quality metric
 for meaning search over documents is claimed here.
+
+## Hybrid fusion — measured (ticket 10)
+
+Three arms now answer one query by default: the lexical list (FTS5/BM25), the
+image list (SigLIP) and the text list (MiniLM) merge by rank position, each
+arm's vote scaled by how much text the file carries (ADR-0003's amendment:
+Full 1.0 / 0.05 / 1.0, Little 0.5 / 0.5 / 0.5, None 0.0 / 1.0 / 0.0).
+`tessera search` runs the fused path; `--describe` and `--describe-text` stay
+as arm-isolating diagnostics rather than modes.
+
+**Provenance: measured, reproducible from this repository.**
+`crates/core/tests/fusion_search.rs`, `fused_search_latency_is_measured`
+(ignored; run with the pinned `siglip` and `minilm` sets installed),
+`--release`, against the docs index the ticket-09 section describes (6,425
+chunk vectors, no image vectors): 40 searches — eight distinct queries rotated
+five times — after one warm-up pass per query, 4 intra-op threads per model
+(the measurement convention; the CLI uses min(cores, 8)), the run the only
+work on the machine.
+
+| Stage | p50 | p95 |
+| --- | ---: | ---: |
+| **Fused search, all three arms** | **141.3 ms** | **157.0 ms** |
+| lexical arm | 48.2 ms | 117.0 ms |
+| image arm (SigLIP query encode, nothing to rank) | 72.8 ms | 82.3 ms |
+| text arm (MiniLM query encode + full collapse) | 101.5 ms | 119.6 ms |
+
+A re-run discipline worth stating: two more idle-machine runs of the same 40
+samples read total p50 136.2 ms and 133.2 ms, each arm's p50 moving by at most
+about 6 ms; one run taken right after a release build read 155.3 ms p50 /
+236.0 ms p95. The table is one run of the four; read the totals as a band of
+roughly ±10 ms on this machine, not a constant.
+
+Reading:
+
+- **The product target is not met, and nothing here pretends it is.**
+  `docs/product-definition.md` asks for query end-to-end < 100 ms at 50k
+  items. This index is 6,425 chunks, not 50k, and the fused query is already
+  141 ms p50. Two costs dominate and both are model work, not I/O accidents:
+  SigLIP's query encoding (~73 ms, paid whether or not there are image vectors
+  to rank) and the text arm's full scan + tile→file collapse (~102 ms, ~21 ms
+  of it the MiniLM query embed the ticket-09 section measures). The arms run
+  on threads, so the wall is roughly the slowest arm plus ~40 ms of shared
+  work: a store connection per thread, the evidence pass over the union of the
+  arm lists, the fusion itself, and rendering the final hits. `tessera search`
+  prints the same decomposition on stderr (`searched in 141 ms (keyword 48 ms,
+  image 73 ms, meaning 102 ms)`).
+- **Arm rows are wall times measured while the other arms run.** The machine
+  has 8 hardware threads and each ONNX session is built with 4, so the two
+  encoders contend. The text arm measured alone is the ticket-09 row — a full
+  meaning query at 43–45 ms; ~102 ms is what it costs sharing the machine
+  with the image arm. Read the per-arm rows as a breakdown of one fused query,
+  not as standalone costs.
+- **Fusing cost two fixes to the collapse, both measured here.** The first
+  measured cut of the same test read 167.2 ms p50 (p95 212.3): the tile→file
+  collapse fetched every ranked chunk's text — a JOIN plus the text column per
+  chunk — in 200-id batches. Identity-only rows (`SELECT id, file_id`) and
+  1000-id batches brought the total to 141.3 / 136.2 ms and the text arm from
+  126.9 ms to ~100 ms. The sweep that chose the shipped constant now
+  re-derives its numbers through the production `fuse` rather than a copy of
+  it (`tests/image_fusion.rs`) and reproduces the image-arm section's curve:
+  top-1 0.964 held through weight 0.05, 0.857 at 0.10, 0.375 at equal weight.
+- **One box, on a mixed folder — the exit demo.** The demo test
+  (`a_real_folder_answers_one_query_with_every_arm`, ignored) indexed a 13-file
+  folder: three RFC PDFs, one DOCX (an airline refund line), two text files,
+  six real screenshots and one rendered-text invoice PNG (a synthetic control,
+  labelled as one). `invoice airline` came back docx first
+  `[keyword, meaning]`, then the invoice PNG `[keyword, image, meaning]` — one
+  hit wearing all three arms — then text, screenshot and an RFC page by
+  meaning: the ticket's "screenshot AND PDF page AND docx from one query".
+  The phrasing the ticket wrote down, `the invoice from the airline`, returns
+  the same files through the semantic arms alone — no single file contains all
+  four words, and the lexical arm ANDs its terms — recorded here because a
+  reader will type that sentence. `type:image` returned a filter-only listing
+  of exactly the seven images, with no arm labels because no arm ran; the
+  re-run over the untouched corpus indexed nothing and took 0.2 s.
+
+**Caveats.** One machine; 40 samples over eight queries, so the quantiles are
+over repeats of a small query set, not a query distribution; the index holds
+no image vectors, so the image arm's *ranking* half contributes nothing here
+(its encoder does); the demo is 13 files, which shows the merge but says
+nothing about retrieval quality at scale; the Little and None rows of the
+weight table are unmeasured defaults; and 50k-item scale is untouched — both
+scan terms grow linearly with the corpus (the two sections above say what
+that costs).

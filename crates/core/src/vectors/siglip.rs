@@ -150,9 +150,15 @@ impl SiglipEmbedder {
     /// fixes it.
     pub fn with_precision(models: &Models, threads: usize, precision: Precision) -> Result<Self> {
         let (vision_file, text_file) = precision.files();
-        let vision_path = models.verified_path(MODEL_SET, vision_file)?;
-        let text_path = models.verified_path(MODEL_SET, text_file)?;
-        let tokenizer_path = models.verified_path(MODEL_SET, "siglip-tokenizer.json")?;
+        // One verification pass for all three files: each `verified_path`
+        // call re-hashes the whole set, and the set is a gigabyte.
+        let paths = models.verified_paths(
+            MODEL_SET,
+            &[vision_file, text_file, "siglip-tokenizer.json"],
+        )?;
+        let [vision_path, text_path, tokenizer_path] = paths
+            .try_into()
+            .expect("verified_paths returned one path per requested file");
 
         let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path).map_err(|err| {
             anyhow::anyhow!(
@@ -190,16 +196,12 @@ impl SiglipEmbedder {
     /// Whether the arm's models are installed and verified. The cheap question,
     /// asked before a long run so "every screenshot came back with no results"
     /// is explained up front.
+    ///
+    /// One set verification, not three: each per-file check hashes every file
+    /// in the set, and the siglip set — both precisions included — is about a
+    /// gigabyte.
     pub fn is_installed(models: &Models) -> bool {
-        models
-            .verified_path(MODEL_SET, "siglip-vision.int8.onnx")
-            .is_ok()
-            && models
-                .verified_path(MODEL_SET, "siglip-text.int8.onnx")
-                .is_ok()
-            && models
-                .verified_path(MODEL_SET, "siglip-tokenizer.json")
-                .is_ok()
+        models.is_set_ready(MODEL_SET)
     }
 
     /// Embed an image file.
@@ -266,6 +268,16 @@ impl SiglipEmbedder {
         ids.truncate(TEXT_TOKENS);
         ids.resize(TEXT_TOKENS, 0);
         Ok(ids)
+    }
+}
+
+impl crate::vectors::QueryEmbedder for SiglipEmbedder {
+    fn dim(&self) -> usize {
+        crate::store::IMAGE_EMBEDDING_DIM
+    }
+
+    fn embed_query(&self, text: &str) -> Result<Embedding> {
+        SiglipEmbedder::embed_query(self, text, crate::store::IMAGE_EMBEDDING_DIM)
     }
 }
 
