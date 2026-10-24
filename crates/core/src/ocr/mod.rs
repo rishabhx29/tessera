@@ -23,6 +23,7 @@
 //! than a speculative one now.
 
 pub mod onnx;
+mod ort_dll;
 #[cfg(target_os = "macos")]
 pub mod vision;
 #[cfg(windows)]

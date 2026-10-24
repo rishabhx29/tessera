@@ -1568,41 +1568,45 @@ that costs).
 synthesised corpus of 400 small `.txt` files (one tile each, so 400 MiniLM chunks
 when the sweep runs). Everything is measured from outside the process: the
 watcher's own stdout for the phase boundaries, and Windows process counters for
-RAM and CPU. The script lives in `.scratch/orchestration/measure-watch.ps1`
-(working state, not committed); it writes only to a temp directory.
+RAM and CPU. The script is committed at `scripts/measure-watch.ps1`, so the
+numbers can be reproduced; it writes only to a temp directory.
 
 | What | Measured |
 |---|---|
-| 400-file backlog, 4 workers, 400 chunks embedded | 5.65 s (71 files/s) |
-| Save → row recorded, idle watcher | 1.31 s |
-| Save → a query returning the file | 2.91 s (1.59 s of it the query process loading the model sets) |
-| Idle after the drain: working set / private | 43.9 MB / 25.7 MB |
-| Idle CPU over 5 s, queue empty | 0.016 s |
-| CPU over 5 s with 401 files queued, `--schedule paused` | 0.000 s |
-| The same paused run: working set | 14.9 MB |
+| 400-file backlog, 4 workers, 400 chunks embedded | 5.52 s (73 files/s) |
+| Save → row recorded, idle watcher | 0.93 s |
+| Save → a query returning the file | 2.58 s (1.65 s of it the query process loading the model sets) |
+| Idle after the drain: working set / private | 43.3 MB / 23.3 MB |
+| Idle CPU over 5 s, queue empty | under 0.02 s (one sample; clock noise) |
+| CPU over 5 s with 401 files queued, `--schedule paused` | under 0.02 s |
+| The same paused run: working set | 14.8 MB |
 
-**What the numbers say.** The drain is no longer paced by the loop: 71 files a
+**What the numbers say.** The drain is no longer paced by the loop: 73 files a
 second, and the largest single part of that is the serial text sweep (400
-embeddings), so the queue itself is faster than the headline. The loop's tick is
-100 ms, so a file saved onto an empty queue waits at most one tick for its event
-to be read.
+embeddings), so the queue itself is faster than the headline. The loop parks on
+the nearest timer it keeps — the 60 s rescan, the 30 s power poll, a retry
+deadline — capped at one second, so an idle watcher wakes about once a second
+instead of ten times. A delivered event wakes the loop immediately regardless,
+so a file saved onto an empty queue is read as soon as notify delivers it: the
+0.93 s is the drain's model load, not a poll interval.
 
-The 1.31 s from save to row is mostly the drain's own model load. The watcher
+The 0.93 s from save to row is mostly the drain's own model load. The watcher
 drops the sessions when the queue empties — that is what makes the idle figure
-43.9 MB rather than ~250 MB larger — so the first save after an idle period pays
+43.3 MB rather than ~250 MB larger — so the first save after an idle period pays
 their construction again. That is the trade the product definition asks for, and
 it is the number to watch if the ceiling ever tightens.
 
 The paused row is the one that says the queue is *held*, not busy: 401 files owed
-and not one millisecond of CPU in five seconds. A pause that spun would have
-shown ~5 s.
+and under 20 ms of CPU in five seconds. A pause that spun would have shown ~5 s.
 
 **Caveats.** One machine and one corpus of 400 one-line text files: screenshots
 or PDFs pay OCR and page extraction on top, which this mix does not, and the
 drain figure would move with the mix. The save→row latency is one observation per
-run, not a distribution over hundreds of saves. The 2.91 s includes a second
+run, not a distribution over hundreds of saves. The 2.58 s includes a second
 process starting cold, which is what a person typing a query pays, but the row
-was searchable at 1.31 s. Both idle figures are a single five-second sample after
-one drain. The paused 0.000 s is a clock-resolution result as much as a behaviour
-one: it means "under a millisecond of CPU in five seconds", which is what "not
-spinning" looks like from outside.
+was searchable at 0.93 s. The two CPU figures are each a single five-second
+sample, and repeat runs differ between 0.000 s and 0.016 s — at this scale that
+difference is clock resolution, not behaviour; both mean "well under a
+millisecond of CPU per second", which is what "not spinning" looks like from
+outside. The drain figure likewise varies a few percent run to run (a concurrent
+build put one run at 7.4 s), so 5.5 s is the figure for a quiet machine.

@@ -137,10 +137,76 @@ fn environment() -> Result<&'static ort::environment::Environment> {
     // a `OnceLock` shared across threads has to hold something that is.
     static ENVIRONMENT: OnceLock<std::result::Result<ort::environment::Environment, String>> =
         OnceLock::new();
-    match ENVIRONMENT.get_or_init(|| ort::init().build().map_err(|err| format!("{err}"))) {
+    let built = ENVIRONMENT.get_or_init(|| {
+        let loaded = loaded_runtime_version();
+        // `ort` does not return an error when the loaded runtime is older than
+        // the API level this build asks for: `setup_api` panics with "Failed to
+        // initialize ORT API" when `GetApi(23)` comes back null, naming neither
+        // the version nor the file. Catch the panic so the refusal can name the
+        // runtime that actually answered.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ort::init().build())) {
+            Ok(Ok(environment)) => Ok(environment),
+            Ok(Err(err)) => Err(refusal_message(
+                &format!("{err}"),
+                loaded.as_deref(),
+                cfg!(windows),
+            )),
+            Err(_) => Err(refusal_message(
+                "failed to initialize the ORT API",
+                loaded.as_deref(),
+                cfg!(windows),
+            )),
+        }
+    });
+    match built {
         Ok(environment) => Ok(environment),
-        Err(message) => bail!("starting ONNX Runtime: {message}"),
+        Err(message) => bail!("{message}"),
     }
+}
+
+/// The error `environment` reports when the runtime will not start.
+///
+/// `ort`'s own failure is a bare panic — "Failed to initialize ORT API" — which
+/// says neither that the API level is the problem nor which runtime answered.
+/// The actionable half is the version: this build asks for ORT API 23
+/// (onnxruntime 1.23), and an older runtime refuses it. On Windows the older
+/// runtime is usually not the one that was shipped: `onnxruntime.dll` is
+/// resolved through the DLL search order, so a build whose 1.23 dll is not
+/// beside the executable silently binds to the 1.17.1 copy Windows keeps in
+/// `System32`. Naming what was loaded and the fix turns a mysterious panic into
+/// a packaging bug someone can act on.
+///
+/// A pure function of the probe's answer, so both branches are exercised on any
+/// host rather than only where the failure occurs.
+fn refusal_message(detail: &str, loaded: Option<&str>, windows: bool) -> String {
+    let mut message = format!(
+        "starting ONNX Runtime: {detail}. This build asks for ORT API 23 (onnxruntime 1.23); \
+         an older runtime does not answer it."
+    );
+    match loaded {
+        Some(version) => message.push_str(&format!(
+            " The onnxruntime.dll loaded into this process reports version {version}."
+        )),
+        None => message.push_str(" The loaded onnxruntime.dll did not report its version."),
+    }
+    if windows {
+        message.push_str(
+            " Windows resolves onnxruntime.dll through the DLL search order, so a build whose \
+             own 1.23 dll is not beside the executable binds to the 1.17.1 copy in System32, \
+             which is too old: put the 1.23 onnxruntime.dll next to the executable.",
+        );
+    }
+    message
+}
+
+/// The version string of the ONNX Runtime this process actually loaded, or `None`
+/// when it cannot be read.
+///
+/// The platform fact — and the reason it is a separate adapter — lives in
+/// `ocr::ort_dll`: Windows resolves `onnxruntime.dll` through the DLL search
+/// order and can bind an older copy than the one this build ships.
+fn loaded_runtime_version() -> Option<String> {
+    super::ort_dll::loaded_runtime_version()
 }
 
 impl OnnxOcr {
@@ -605,4 +671,56 @@ fn argmax(row: &[f32]) -> (usize, f32) {
         }
     }
     (best, if score.is_finite() { score } else { 0.0 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The refusal is the one error a user cannot debug from ort's message, so
+    // what it names is the whole point. These pin the two facts that make it
+    // actionable — the version that answered, and where the wrong dll comes
+    // from — without needing a broken runtime to reproduce it.
+
+    #[test]
+    fn a_refusal_names_the_loaded_runtime() {
+        let message = refusal_message("failed to initialize the ORT API", Some("1.17.1"), true);
+        assert!(
+            message.contains("1.17.1"),
+            "the version that actually answered must be in the message: {message}"
+        );
+        assert!(
+            message.contains("onnxruntime.dll"),
+            "the message must name the file to replace: {message}"
+        );
+    }
+
+    #[test]
+    fn a_windows_refusal_points_at_the_system32_fallback() {
+        let with_version = refusal_message("boom", Some("1.17.1"), true);
+        for expected in ["System32", "1.23", "beside the executable"] {
+            assert!(
+                with_version.contains(expected),
+                "{expected:?} must appear so the fix is obvious: {with_version}"
+            );
+        }
+        // The probe failing to read a version must not lose the hint either:
+        // "no version" on Windows is exactly the missing-bundled-dll case.
+        let without_version = refusal_message("boom", None, true);
+        assert!(without_version.contains("System32"), "{without_version}");
+        assert!(
+            without_version.contains("did not report"),
+            "{without_version}"
+        );
+    }
+
+    #[test]
+    fn a_non_windows_refusal_does_not_talk_about_system32() {
+        let message = refusal_message("boom", Some("1.17.1"), false);
+        assert!(message.contains("1.17.1"), "{message}");
+        assert!(
+            !message.contains("System32"),
+            "System32 is a Windows search-path fact: {message}"
+        );
+    }
 }

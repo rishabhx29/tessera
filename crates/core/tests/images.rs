@@ -290,13 +290,17 @@ fn the_image_pipeline_never_imports_a_platform_api() {
     // `watch/power.rs` and `watch/priority.rs` are the watcher's two platform
     // adapters for the same reason: the battery state and the process priority
     // are per-OS facts with no portable API, and the point of the seam is that
-    // *only* the adapter may name one.
+    // *only* the adapter may name one. `ocr/ort_dll.rs` is the same shape: which
+    // `onnxruntime.dll` the loader bound — and so which version a failing ONNX
+    // call was talking to — is a Windows search-order fact, kept out of the
+    // engine-facing `ocr/onnx` for exactly this reason.
     //
     // One entry per adapter, and the list is the test: adding a platform means
     // adding its exemption here, so a new adapter cannot silently widen the
     // seam without someone noticing that this constant changed.
-    const EXEMPT: [&str; 5] = [
+    const EXEMPT: [&str; 6] = [
         "index/skip.rs",
+        "ocr/ort_dll.rs",
         "ocr/windows.rs",
         "ocr/vision.rs",
         "watch/power.rs",

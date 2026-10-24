@@ -66,6 +66,11 @@ design (ADR-0007), not a platform that fails to build.
 - **Drain** — one stretch of work between two idle points. The models load when
   the backlog is non-empty and are released when it empties: per drain, never
   per file, because a machine at idle must not hold ~250 MB of weights.
+- **Attempt** — one pass over a file that ended without extracting it
+  (`skipped`, `failed`, `awaiting_ocr`); its count drives the watcher's **retry
+  backoff** (five minutes, doubling to an hour). A changed file is new work, not
+  a retry, and an extraction clears the count. "Eventually retried" is a promise
+  the backoff keeps; "retried on every rescan" is the bug it fixes.
 - **Schedule** — when the watcher may take work: `idle-only` (the default; the
   queue pauses on battery and resumes on AC), `always`, or `paused`. What pauses
   is the queue, never a worker holding a file.

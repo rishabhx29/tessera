@@ -26,7 +26,7 @@ use crate::vectors::Embedding;
 
 /// The schema version this engine understands. Bumping it means writing a
 /// migration; opening a future-version store must fail loudly.
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// The width of a SigLIP-base embedding. Pinned by the model's own output shape,
 /// so it is a constant rather than something read from a file that might be a
@@ -91,6 +91,15 @@ pub struct FileState {
     /// content behind it: it is work still waiting to happen, so it is never
     /// "unchanged" no matter what its metadata says.
     pub extracted: bool,
+    /// Seconds since the epoch when the current outcome for this path was
+    /// recorded — the row's `indexed_at`. For a row that was not extracted it
+    /// is the *attempt* time, which is what the retry deadline counts from.
+    pub last_attempt: i64,
+    /// Consecutive attempts that ended in a status other than `indexed`, since
+    /// the last successful extraction. Zero for an indexed row. The retry
+    /// backoff is exponential in this, so a file that cannot be read is tried
+    /// once and then ever more rarely — not on every rescan, forever.
+    pub attempts: u32,
 }
 
 /// What the last index run did with a file.
@@ -177,17 +186,28 @@ struct FileRow<'a> {
     sha1: Option<&'a str>,
     status: FileStatus,
     reason: Option<&'a str>,
+    /// The attempt count this row starts with: 0 for a row that was extracted,
+    /// 1 for a first attempt that was not. On conflict the count is derived
+    /// instead — see the upsert below.
+    attempts: u32,
 }
 
 fn upsert_file(conn: &Connection, row: FileRow<'_>) -> Result<()> {
+    // The retry counter is the one column the caller does not pass on an
+    // existing row: "this attempt did not extract" is an increment, and a
+    // caller that passed a number could reset a backoff by accident. An
+    // extraction clears it, because the next non-indexed outcome is the first
+    // attempt again.
     conn.execute(
-        "INSERT INTO files(path, root, kind, size, mtime, sha1, status, skip_reason, indexed_at, thumb)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL)
+        "INSERT INTO files(path, root, kind, size, mtime, sha1, status, skip_reason, indexed_at, thumb, attempts)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, ?10)
          ON CONFLICT(path) DO UPDATE SET
            root = excluded.root, kind = excluded.kind, size = excluded.size,
            mtime = excluded.mtime, sha1 = excluded.sha1,
            status = excluded.status, skip_reason = excluded.skip_reason,
-           indexed_at = excluded.indexed_at",
+           indexed_at = excluded.indexed_at,
+           attempts = CASE WHEN excluded.status = 'indexed'
+                           THEN 0 ELSE files.attempts + 1 END",
         rusqlite::params![
             row.path.to_string_lossy(),
             row.root.to_string_lossy(),
@@ -197,7 +217,8 @@ fn upsert_file(conn: &Connection, row: FileRow<'_>) -> Result<()> {
             row.sha1,
             row.status.as_str(),
             row.reason,
-            now_secs()
+            now_secs(),
+            row.attempts
         ],
     )?;
     Ok(())
@@ -530,6 +551,14 @@ impl Store {
                      COMMIT;",
                 )
                 .context("migrating schema to v5")?,
+            6 => self
+                .conn
+                .execute_batch(
+                    "BEGIN;
+                     ALTER TABLE files ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+                     COMMIT;",
+                )
+                .context("migrating schema to v6")?,
             other => anyhow::bail!("no migration for schema version {other}"),
         }
         self.conn
@@ -546,7 +575,8 @@ impl Store {
     pub fn file_state(&self, path: &Path) -> Result<Option<FileState>> {
         self.conn
             .query_row(
-                "SELECT size, mtime, sha1, status, kind FROM files WHERE path = ?1",
+                "SELECT size, mtime, sha1, status, kind, indexed_at, attempts
+                 FROM files WHERE path = ?1",
                 rusqlite::params![path.to_string_lossy()],
                 |row| {
                     let status: String = row.get(3)?;
@@ -556,6 +586,8 @@ impl Store {
                         sha1: row.get(2)?,
                         extracted: FileStatus::parse(&status) == Some(FileStatus::Indexed),
                         kind: row.get(4)?,
+                        last_attempt: row.get(5)?,
+                        attempts: row.get::<_, i64>(6)? as u32,
                     })
                 },
             )
@@ -695,6 +727,7 @@ impl Store {
                 sha1,
                 status: FileStatus::Indexed,
                 reason: None,
+                attempts: 0,
             },
         )?;
         let file_id: i64 = tx.query_row(
@@ -744,6 +777,7 @@ impl Store {
                 sha1: None,
                 status: FileStatus::Skipped,
                 reason: Some(reason.as_str()),
+                attempts: 1,
             },
         )
     }
@@ -769,6 +803,7 @@ impl Store {
                 sha1: None,
                 status: FileStatus::Failed,
                 reason: Some(reason),
+                attempts: 1,
             },
         )
     }
@@ -795,6 +830,7 @@ impl Store {
                 sha1: None,
                 status: FileStatus::AwaitingOcr,
                 reason: Some("no_text_layer"),
+                attempts: 1,
             },
         )
     }
@@ -803,7 +839,8 @@ impl Store {
     /// clear any skip reason: whatever kept it out of the index is gone.
     pub fn mark_unchanged(&self, path: &Path, facts: &FileFacts) -> Result<()> {
         self.conn.execute(
-            "UPDATE files SET size = ?2, mtime = ?3, status = ?4, skip_reason = NULL, indexed_at = ?5
+            "UPDATE files SET size = ?2, mtime = ?3, status = ?4, skip_reason = NULL,
+                    indexed_at = ?5, attempts = 0
              WHERE path = ?1",
             rusqlite::params![
                 path.to_string_lossy(),
@@ -876,7 +913,7 @@ impl Store {
         tx.execute(
             "UPDATE files SET
                path = ?2, size = ?3, mtime = ?4, sha1 = ?5,
-               status = 'indexed', skip_reason = NULL
+               status = 'indexed', skip_reason = NULL, attempts = 0
              WHERE id = ?1",
             rusqlite::params![
                 file_id,
@@ -2262,6 +2299,10 @@ mod tests {
         assert_eq!(state.size, 10);
         assert_eq!(state.sha1.as_deref(), Some("abc123"));
         assert!(state.extracted);
+        assert_eq!(
+            state.attempts, 0,
+            "a row from before v6 has no failed attempts to back off from"
+        );
         assert_eq!(store.tile_texts(1).unwrap(), vec!["invoice"]);
         assert_eq!(
             store

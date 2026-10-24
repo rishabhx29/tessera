@@ -552,15 +552,29 @@ pub fn run() -> Result<()> {
             };
             let summary = crate::watch::run(&data_dir, models, ocr, options, &shutdown)?;
             println!(
-                "stopped: {indexed} indexed, {moved} moved, {skipped} skipped, {failed} failed, \
-                 {awaiting} awaiting OCR, {removed} removed, {embedded} chunk(s) embedded",
+                "stopped: {indexed} indexed, {unchanged} unchanged, {moved} moved, \
+                 {skipped} skipped, {failed} failed, {awaiting} awaiting OCR, {removed} removed, \
+                 {embedded} chunk(s) embedded",
                 indexed = summary.indexed,
+                unchanged = summary.unchanged,
                 moved = summary.moved,
                 skipped = summary.skipped,
                 failed = summary.failed,
                 awaiting = summary.awaiting_ocr,
                 removed = summary.removed,
                 embedded = summary.text_embedded,
+            );
+            // The counters that mean "this run did not do what you think it
+            // did" are always printed, zeros included: a watcher that could not
+            // record files, could not walk folders, or could not update the
+            // index must not end on a line that reads like a clean run.
+            println!(
+                "         {walk_errors} walk error(s), {errors} file(s) could not be recorded, \
+                 {coordinator} index update(s) failed, {deferred} waiting to retry",
+                walk_errors = summary.walk_errors,
+                errors = summary.errors,
+                coordinator = summary.coordinator_errors,
+                deferred = summary.deferred,
             );
             Ok(())
         }

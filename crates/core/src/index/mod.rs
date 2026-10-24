@@ -228,7 +228,9 @@ pub fn decide(
     hash: impl FnOnce() -> Result<String>,
 ) -> Result<Change> {
     // A row that was never extracted (skipped, or failed last time) is pending
-    // work whatever its metadata says.
+    // work whatever its metadata says — *when it is called*. The watcher gates
+    // whether an unchanged non-extracted row is worth queueing at all
+    // (`needs_work`), so this cannot become a retry every rescan.
     let Some(stored) = stored.filter(|s| s.extracted) else {
         return Ok(Change::Extract);
     };
@@ -250,15 +252,63 @@ pub fn decide(
 /// [`decide`] answers "must these bytes be read?" and may fall through to a
 /// hash. This answers the cheaper question the watcher asks on every event and
 /// every 60-second rescan — "is there any chance this needs work?" — without
-/// ever reading a byte: a path with no row, a row that was never extracted, or
-/// metadata that moved. A false positive costs one hash inside `process_one`
-/// (which then verifies it unchanged); a false negative would leave a file
-/// stale, so the answer leans towards "yes".
-pub(crate) fn needs_work(stored: Option<&FileState>, facts: &FileFacts) -> bool {
-    match stored {
-        None => true,
-        Some(state) => !state.extracted || state.size != facts.size || state.mtime != facts.mtime,
+/// ever reading a byte: a path with no row, a row whose metadata moved, or a
+/// row that was never extracted and whose retry is due. A false positive costs
+/// one hash inside `process_one` (which then verifies it unchanged); a false
+/// negative would leave a file stale, so the answer leans towards "yes".
+///
+/// The retry gate is what keeps a permanently unreadable file from becoming a
+/// perpetual loop. Without it, every rescan re-queues every `failed`,
+/// `skipped` and `awaiting_ocr` row: a four-file corpus with one broken PDF did
+/// that every 60 s for the life of the process (`docs/performance.md`, watch
+/// mode). A row is pending only when the file changed since the recorded
+/// attempt — a save is new evidence — or when its backoff has passed.
+///
+/// `now` is seconds since the epoch, the unit the store records `indexed_at`
+/// in. Callers that must stay testable take it from their own clock rather than
+/// reading it here.
+pub(crate) fn needs_work(stored: Option<&FileState>, facts: &FileFacts, now: i64) -> bool {
+    let Some(state) = stored else {
+        return true;
+    };
+    if state.size != facts.size || state.mtime != facts.mtime {
+        // The file moved: whatever the row says, these are different bytes to
+        // look at, and extracting them is new work rather than a retry.
+        return true;
     }
+    if state.extracted {
+        return false;
+    }
+    now >= state
+        .last_attempt
+        .saturating_add(retry_delay(state.attempts))
+}
+
+/// The first wait after an attempt that did not extract.
+///
+/// Five minutes, not the rescan interval: retries are *found* by the rescan
+/// walk, so a delay equal to it would retry on the very next walk and the
+/// rescan-rework loop would only be stretched, not broken. Five minutes is
+/// long enough that a transient failure (a file being written, a locked
+/// folder) is over, and short enough that a file which becomes readable is
+/// searchable within the same working session.
+pub(crate) const RETRY_BASE_SECS: i64 = 5 * 60;
+
+/// Where the doubling stops. A file that has failed for hours is not going to
+/// be fixed by another attempt in a minute; an hour keeps "eventually retried"
+/// true (24 chances a day) without the 1,440 chances the old rule gave it.
+pub(crate) const RETRY_CAP_SECS: i64 = 60 * 60;
+
+/// How long after its last attempt a row that still needs work may be tried
+/// again.
+///
+/// `attempts` counts consecutive attempts that did not extract, so the
+/// sequence is 5 min, 10, 20, 40, then hourly. The shifted value is bounded
+/// before the shift as well as after: `1 << 62` is not a duration, and a
+/// corrupt counter must not become a panic.
+pub(crate) fn retry_delay(attempts: u32) -> i64 {
+    let doublings = attempts.saturating_sub(1).min(16);
+    (RETRY_BASE_SECS << doublings).min(RETRY_CAP_SECS)
 }
 
 /// Make a file's name part of its searchable text: prepended to the first
@@ -559,6 +609,8 @@ mod tests {
             sha1: sha1.map(str::to_string),
             extracted,
             kind: "text".to_string(),
+            last_attempt: 1_000,
+            attempts: 0,
         }
     }
 
@@ -748,6 +800,114 @@ mod tests {
         })
         .unwrap();
         assert_eq!(change, Change::Extract);
+    }
+
+    // -- The retry gate -------------------------------------------------
+    //
+    // `needs_work` is what the watcher asks on every event and every rescan.
+    // A row that was never extracted is work owed, but "owed" is not "now":
+    // retrying it on every walk is the loop the rescan-rework reproduction
+    // measured.
+
+    #[test]
+    fn a_never_extracted_row_is_retried_only_after_its_backoff() {
+        let mut stored = state(10, 100, None, false);
+        stored.last_attempt = 1_000;
+        stored.attempts = 1;
+        let unchanged = facts(10, 100);
+
+        assert!(
+            !needs_work(Some(&stored), &unchanged, 1_000),
+            "the attempt that just failed must not be repeated immediately"
+        );
+        assert!(
+            !needs_work(Some(&stored), &unchanged, 1_000 + RETRY_BASE_SECS - 1),
+            "one second before the deadline is still not due"
+        );
+        assert!(
+            needs_work(Some(&stored), &unchanged, 1_000 + RETRY_BASE_SECS),
+            "the deadline is when the row becomes pending work again"
+        );
+    }
+
+    #[test]
+    fn a_changed_file_is_work_now_whatever_its_retry_deadline_says() {
+        let mut stored = state(10, 100, None, false);
+        stored.last_attempt = 1_000;
+        stored.attempts = 4;
+        assert!(
+            needs_work(Some(&stored), &facts(11, 100), 1_000),
+            "a save is new evidence, not a retry"
+        );
+        assert!(
+            needs_work(Some(&stored), &facts(10, 101), 1_000),
+            "a moved mtime is new evidence too"
+        );
+    }
+
+    #[test]
+    fn an_indexed_row_that_did_not_change_is_never_pending() {
+        let stored = state(10, 100, Some("abc"), true);
+        assert!(!needs_work(Some(&stored), &facts(10, 100), i64::MAX));
+    }
+
+    #[test]
+    fn the_retry_backoff_doubles_and_stops_at_an_hour() {
+        assert_eq!(
+            retry_delay(0),
+            RETRY_BASE_SECS,
+            "a legacy row's first retry"
+        );
+        assert_eq!(retry_delay(1), RETRY_BASE_SECS);
+        assert_eq!(retry_delay(2), 2 * RETRY_BASE_SECS);
+        assert_eq!(retry_delay(3), 4 * RETRY_BASE_SECS);
+        assert_eq!(retry_delay(4), 8 * RETRY_BASE_SECS);
+        assert_eq!(retry_delay(5), RETRY_CAP_SECS);
+        assert_eq!(
+            retry_delay(1_000),
+            RETRY_CAP_SECS,
+            "a corrupt counter is an hour, not an overflow"
+        );
+    }
+
+    #[test]
+    fn a_repeated_failure_counts_attempts_and_an_extraction_clears_them() {
+        // The counter is what makes the backoff exponential; it is written by
+        // the store, so a caller cannot reset a backoff by passing a number.
+        let data = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        write(corpus.path(), "good.txt", "the invoice from the airline");
+        std::fs::write(corpus.path().join("bad.txt"), [0xFF, 0xFE, 0x00, 0xD8]).unwrap();
+        let store = Store::open(data.path()).unwrap();
+        let pipelines: Vec<Box<dyn Pipeline>> = vec![Box::new(TextPipeline)];
+        let bad = corpus.path().join("bad.txt");
+
+        index_folder(&store, &pipelines, corpus.path()).unwrap();
+        assert_eq!(
+            store.file_state(&bad).unwrap().unwrap().attempts,
+            1,
+            "a first failed attempt is one attempt"
+        );
+        // `tessera index` is an explicit request: it retries regardless of the
+        // watcher's backoff, and that is what makes the count climb.
+        index_folder(&store, &pipelines, corpus.path()).unwrap();
+        assert_eq!(store.file_state(&bad).unwrap().unwrap().attempts, 2);
+        assert_eq!(
+            store
+                .file_state(&corpus.path().join("good.txt"))
+                .unwrap()
+                .unwrap()
+                .attempts,
+            0,
+            "an extracted row has nothing to back off from"
+        );
+
+        // The file becomes readable: extraction clears the count.
+        write(corpus.path(), "bad.txt", "now readable");
+        index_folder(&store, &pipelines, corpus.path()).unwrap();
+        let state = store.file_state(&bad).unwrap().unwrap();
+        assert!(state.extracted);
+        assert_eq!(state.attempts, 0);
     }
 
     // -- The skip rules, through the index loop ------------------------

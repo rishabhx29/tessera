@@ -92,14 +92,42 @@ releases begin.
 - Ctrl-C stops the watcher after the file in flight. Restarting re-stats every
   file and reports it unchanged rather than re-extracting it, which is the same
   resume path a crash takes.
+- A file that will not extract is retried on a backoff — five minutes, doubling
+  to an hour — or as soon as its bytes change, instead of on every 60 s rescan.
+  A permanently unreadable file no longer re-opens on every walk, while "never
+  extracted" still means "eventually retried"; `tessera index` is an explicit
+  request and still retries every time.
+- Store schema v6 (`files.attempts`), the consecutive non-indexed attempt count
+  the retry backoff is computed from, with a tested v5 → v6 migration.
+- `scripts/measure-watch.ps1` commits the harness that produced the watch-mode
+  numbers in `docs/performance.md`, so they can be reproduced rather than
+  trusted.
 
 ### Changed
 
 - `tessera index` reports indexed / unchanged / moved / skipped / failed /
   removed counts.
+- `tessera watch` parks on the nearest timer it keeps — a rescan, the power
+  poll, a retry — capped at one second, instead of waking ten times a second on
+  a fixed 100 ms tick. A delivered event still wakes it immediately, so a save
+  is read as soon as notify delivers it.
+- A coordinator store error no longer ends the run: it is reported, a rescan is
+  owed, and the call is retried on a growing backoff, so a transient lock
+  (another `tessera index`, a WAL checkpoint) does not kill a watcher meant to
+  run for days. Twenty consecutive failures still stop it, because that is not
+  transient.
+- The `tessera watch` stop summary prints unchanged files, walk errors, files
+  that could not be recorded, failed index updates and files waiting for their
+  retry, so a run that did less than it looks like cannot end on a clean line.
 
 ### Fixed
 
+- An ONNX Runtime that will not start now names the runtime it loaded and the
+  fix. A build whose pinned 1.23 `onnxruntime.dll` is not beside the executable
+  binds to the older copy Windows keeps in `System32`, which does not answer the
+  pinned API level, and `ort` reported it as a bare panic — "Failed to initialize
+  ORT API" — with no version and no file. The refusal now reports the loaded
+  version and points at the fallback.
 - ONNX bindings are pinned to API level 23, the level of the runtime this build
   links against. `ort`'s default feature set asks for API 31, and a 1.23 runtime
   refuses: *"The requested API version [31] is not available, only API versions

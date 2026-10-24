@@ -147,6 +147,23 @@ with a comment: the alphabet (`['blank'] + lines + [' ']`, the trailing space
 being the one `lines()` hides), greedy CTC decoding, the score gate, the 32-pixel
 alignment the detector graph demands, and batching recognition by total width.
 
+### The runtime dll is part of the build (packaging contract)
+
+`ort`'s API level is pinned to 23 (the 1.23 line) in `Cargo.toml`, and on Windows
+that pin is only as correct as the `onnxruntime.dll` the loader picks. Windows
+searches the executable's own directory before `System32`, and `System32` ships
+an `onnxruntime.dll` **1.17.1**, which does not answer API 23. A build whose 1.23
+dll is not beside the executable therefore binds to the System32 copy and every
+ONNX call dies.
+
+The engine cannot fix that from the inside; it can only name it. `OnnxOcr`'s
+init failure probes the loaded runtime — `OrtGetApiBase.GetVersionString` on the
+module already mapped into the process — and reports the version alongside the
+System32 hint, so the failure is a packaging bug someone can act on rather than
+ort's bare panic. The packaging task is to bundle the 1.23 dll beside
+`tessera.exe` and assert its presence in the packaging test; until that lands,
+the failure names itself.
+
 ## Data model (single SQLite file, WAL mode)
 
 ```sql
@@ -161,7 +178,10 @@ files(
   sha1 TEXT,                 -- content hash: change detection + move detection
   status TEXT,               -- indexed | skipped | failed | awaiting_ocr
   skip_reason TEXT,          -- 'too_large' | 'cloud_placeholder' | 'no_text_layer' | ...
-  indexed_at INTEGER,
+  indexed_at INTEGER,        -- last outcome time; for a non-indexed row it is the
+                             -- last *attempt*, which the retry deadline counts from
+  attempts INTEGER,          -- consecutive non-indexed attempts; the retry backoff
+                             -- is exponential in this, and an extraction clears it
   thumb TEXT                 -- thumbnail path in the cache dir
 );
 
@@ -205,6 +225,13 @@ Rules that exist because someone already got burned:
   timestamp moved *backwards* (a restored archive) or the size held still
   (`port=8080` → `port=9090`). Re-indexing a 20,000-file corpus must not read
   20,000 files.
+- **A failed attempt is not retried forever, and not on every walk.** A row that
+  was never extracted (`skipped`, `failed`, `awaiting_ocr`) is work owed, but the
+  watcher admits it only when the file changed or its backoff — five minutes,
+  doubling to an hour, driven by `attempts` — has passed. `tessera index` is an
+  explicit request and still retries every time; only the watcher's admission is
+  gated. Without the gate a four-file corpus with one unreadable PDF re-extracted
+  it on every 60 s rescan for the life of the process.
 - **A row's `root` scopes deletion.** After a walk, rows under that root whose
   file is gone from disk are dropped, so a deletion propagates — and indexing
   one folder can never forget another. Existence is checked directly: a folder

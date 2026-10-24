@@ -77,9 +77,16 @@ const POWER_POLL: Duration = Duration::from_secs(30);
 /// net for network shares, for events lost while paused, and for an overflow.
 const RESCAN: Duration = Duration::from_secs(60);
 
-/// How long the coordinator waits for an event before doing housekeeping. Also
-/// the ceiling on how long a fresh file waits for the loop to notice it.
-const TICK: Duration = Duration::from_millis(100);
+/// The longest the idle coordinator sleeps when no timer is nearer.
+///
+/// This is a *shutdown* ceiling, not a save-latency one: a delivered event wakes
+/// `EventFeed::next` immediately, so a file saved onto an idle queue is read as
+/// soon as notify delivers it (measured at 10 ms mid-drain, `docs/performance.md`).
+/// What the ceiling bounds is the missed-event path and how long a Ctrl-C can go
+/// unnoticed, which is why it exists at all. A second is ten times coarser than
+/// the old fixed 100 ms tick and still far above the 30 s the nearest real timer
+/// (the power poll) needs; the loop parks on whichever comes first.
+const IDLE_CAP: Duration = Duration::from_secs(1);
 
 /// While a drain is running the coordinator sleeps on the *result* channel
 /// instead, so a batch of files is not paced by the event tick. Five
@@ -94,6 +101,23 @@ const PROGRESS: Duration = Duration::from_secs(5);
 /// rest of a large sweep, large enough that the per-page store round trip does
 /// not dominate.
 const SWEEP_PAGE: usize = 32;
+
+/// The first wait after a coordinator store call failed. A busy database is
+/// usually busy for a moment (another index run finishing, a WAL checkpoint), so
+/// the first retry is soon; the delay doubles from here.
+const COORDINATOR_BACKOFF: Duration = Duration::from_secs(1);
+
+/// Where the coordinator's retry delay stops growing. Past this, a store that
+/// keeps refusing is a problem to report, not to wait out.
+const COORDINATOR_BACKOFF_CAP: Duration = Duration::from_secs(60);
+
+/// Consecutive failed coordinator calls before the watcher gives up.
+///
+/// With the delay above this is roughly fifteen minutes of a store that cannot
+/// be written: long enough to ride out another process's long transaction,
+/// short enough that a permanently broken index is reported instead of a
+/// process that looks alive and records nothing.
+const MAX_COORDINATOR_FAILURES: u32 = 20;
 
 /// What `tessera watch` was asked to do.
 #[derive(Debug, Clone)]
@@ -111,6 +135,9 @@ pub struct Options {
     pub threads: usize,
     pub rescan: Duration,
     pub power_poll: Duration,
+    /// The longest the idle loop sleeps before looking again. Not a poll
+    /// interval: the loop parks on the nearest timer and only this ceiling —
+    /// the shutdown latency bound — caps it.
     pub tick: Duration,
     pub progress: Duration,
 }
@@ -127,7 +154,7 @@ impl Default for Options {
                 .clamp(1, 4),
             rescan: RESCAN,
             power_poll: POWER_POLL,
-            tick: TICK,
+            tick: IDLE_CAP,
             progress: PROGRESS,
         }
     }
@@ -150,6 +177,15 @@ pub struct WatchSummary {
     /// Files a worker could not record at all (a store error, not a file the
     /// pipeline refused). Separate from `failed`, which is recorded per file.
     pub errors: usize,
+    /// Coordinator store calls that failed and were retried. A run with any of
+    /// these recorded fewer files than it was asked to, so the stop line says
+    /// so instead of looking clean.
+    pub coordinator_errors: usize,
+    /// Files a walk found that still need work but whose retry deadline has not
+    /// passed. Counted, not queued: "waiting to retry" is a fact about the
+    /// corpus, and leaving it out of the banner would make a folder of
+    /// unreadable files look empty.
+    pub deferred: usize,
 }
 
 impl WatchSummary {
@@ -204,7 +240,14 @@ pub trait EventFeed {
 /// A monotonic clock, so the rescan and power intervals are testable without
 /// sleeping through them.
 pub trait Clock: Send + Sync {
+    /// Time since the process started: what every interval in the loop counts.
     fn now(&self) -> Duration;
+
+    /// Seconds since the Unix epoch: the unit the store records a row's last
+    /// attempt in, so retry deadlines and the store's `indexed_at` are
+    /// comparable. A test clock moves both together, which is what lets a
+    /// retry be due without sleeping for it.
+    fn wall(&self) -> i64;
 }
 
 /// The real clock: time since the process started.
@@ -229,6 +272,13 @@ impl Default for Monotonic {
 impl Clock for Monotonic {
     fn now(&self) -> Duration {
         self.start.elapsed()
+    }
+
+    fn wall(&self) -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)
     }
 }
 
@@ -400,13 +450,18 @@ impl Sweep {
 /// can be tested without a store, a thread and a filesystem.
 ///
 /// `drain_open` is work too: the drain-end sweep is real work the loop must not
-/// page at ten steps a second.
+/// page at ten steps a second. `next_timer` is how long until the nearest
+/// deadline the loop keeps for itself (a rescan, the power poll, a retry); when
+/// nothing is owed, the loop sleeps exactly that long, capped at `tick` so a
+/// stop request is noticed. Sleeping for the nearest timer instead of a fixed
+/// tick is the difference between one wakeup every 30 s and ten a second.
 fn park(
     tick: Duration,
     in_flight: bool,
     drain_open: bool,
     queued: bool,
     dispatchable: bool,
+    next_timer: Duration,
 ) -> Duration {
     if in_flight || drain_open {
         return Duration::ZERO;
@@ -414,7 +469,14 @@ fn park(
     if queued && dispatchable {
         return Duration::ZERO;
     }
-    tick
+    next_timer.min(tick)
+}
+
+/// How long the coordinator waits after `failures` consecutive store errors.
+/// One second, doubling to [`COORDINATOR_BACKOFF_CAP`].
+fn coordinator_backoff(failures: u32) -> Duration {
+    let doublings = failures.saturating_sub(1).min(16);
+    (COORDINATOR_BACKOFF * (1 << doublings)).min(COORDINATOR_BACKOFF_CAP)
 }
 
 /// The coordinator.
@@ -454,6 +516,13 @@ struct Watcher<'a> {
     rescan_wanted: bool,
     dirty: bool,
     paused_said: bool,
+
+    /// Consecutive coordinator store failures, and the instant the coordinator
+    /// may touch the store again. A failed call is retried after a growing
+    /// delay, so a transient lock does not become either a dead watcher or a
+    /// busy loop against a database that is refusing writes.
+    coordinator_failures: u32,
+    retry_coordinator_at: Option<Duration>,
 
     /// Counts since the current drain began, for the "caught up" line.
     drain_counts: IndexSummary,
@@ -498,6 +567,8 @@ impl<'a> Watcher<'a> {
             rescan_wanted: false,
             dirty: true,
             paused_said: false,
+            coordinator_failures: 0,
+            retry_coordinator_at: None,
             drain_counts: IndexSummary::default(),
             stats: WatchSummary::default(),
         })
@@ -509,6 +580,15 @@ impl<'a> Watcher<'a> {
 
     /// The whole loop body: handle what arrived, then decide what to do.
     /// `false` means the run is over.
+    ///
+    /// A coordinator store call that fails is not the end of the run. The store
+    /// is shared with `tessera index`, a backup tool and the WAL itself, so a
+    /// write can be refused for five seconds and then work again; ending a
+    /// watcher meant to run for days on the first such refusal is the wrong
+    /// trade (and the model-load and worker paths already back off rather than
+    /// die). The failure is reported, a rescan is owed, and the cycle is
+    /// retried after a growing delay — until the same store has failed
+    /// [`MAX_COORDINATOR_FAILURES`] times in a row, which is not transient.
     fn poll_once(&mut self) -> Result<bool> {
         if self.stopped() {
             return Ok(false);
@@ -518,8 +598,37 @@ impl<'a> Watcher<'a> {
                 .line("every worker thread stopped; the watch loop is ending");
             return Ok(false);
         }
+        if let Some(at) = self.retry_coordinator_at {
+            let now = self.clock.now();
+            if now < at {
+                // Nothing the coordinator could do this pass: a store call
+                // failed and its retry deadline has not passed. Wait it out on
+                // the event feed — a delivered event is read and dropped, which
+                // is safe because the failure already owes a rescan — instead of
+                // hammering a store that is refusing writes.
+                let wait = (at - now).min(self.idle_wait());
+                let _ = self.events.next(wait);
+                return Ok(true);
+            }
+            self.retry_coordinator_at = None;
+        }
+        match self.cycle() {
+            Ok(()) => self.coordinator_failures = 0,
+            Err(err) => self.coordinator_failed(err)?,
+        }
+        Ok(true)
+    }
+
+    /// One pass of the loop's own work. Fallible only through the store.
+    fn cycle(&mut self) -> Result<()> {
         self.absorb_event(self.park())?;
         self.poll_power();
+        // Before dispatch and settle, not after: a rescan is where a *retry*
+        // becomes due, and work queued after `settle` would let one iteration
+        // end a drain and print "caught up" while the retry it just queued is
+        // still owed. Walking first means the drain ends only when the queue
+        // the walk produced is empty too.
+        self.rescan_if_due()?;
         self.dispatch();
         let wait_for_results = if self.in_flight.is_empty() {
             None
@@ -528,9 +637,30 @@ impl<'a> Watcher<'a> {
         };
         self.collect(wait_for_results)?;
         self.settle()?;
-        self.rescan_if_due()?;
         self.progress_if_due();
-        Ok(true)
+        Ok(())
+    }
+
+    fn coordinator_failed(&mut self, err: anyhow::Error) -> Result<()> {
+        self.coordinator_failures += 1;
+        self.stats.coordinator_errors += 1;
+        if self.coordinator_failures >= MAX_COORDINATOR_FAILURES {
+            return Err(err.context(format!(
+                "the index could not be updated {MAX_COORDINATOR_FAILURES} times in a row; \
+                 stopping rather than pretending to watch"
+            )));
+        }
+        let delay = coordinator_backoff(self.coordinator_failures);
+        self.reporter.line(&format!(
+            "the index could not be updated ({err:#}); retrying in {:.1} s",
+            delay.as_secs_f64()
+        ));
+        self.retry_coordinator_at = Some(self.clock.now() + delay);
+        // Whatever the failed call would have noticed is still owed: a walk
+        // finds additions, and the deletion sweep follows the walk.
+        self.dirty = true;
+        self.rescan_wanted = true;
+        Ok(())
     }
 
     /// How long the coordinator may block before it has to look again.
@@ -540,9 +670,8 @@ impl<'a> Watcher<'a> {
     /// file can be dispatched right now. Sleeping a full tick for any of those
     /// would pace a four-worker drain at forty files a second.
     ///
-    /// The tick means there is genuinely nothing to do until something changes
-    /// — an empty queue, or a queue that may not move because the schedule says
-    /// paused or the models failed to load. A held queue must sleep, not spin:
+    /// Otherwise the loop sleeps until the nearest deadline it keeps for itself
+    /// — never longer than [`Options::tick`]. A held queue must sleep, not spin:
     /// a paused watcher burning a core is the exact opposite of the idle
     /// priority this mode exists to promise.
     fn park(&self) -> Duration {
@@ -552,7 +681,33 @@ impl<'a> Watcher<'a> {
             self.drain.is_some(),
             !self.backlog.is_empty(),
             self.policy.admits() && !self.retry_drain_at.is_some_and(|at| self.clock.now() < at),
+            self.next_timer(),
         )
+    }
+
+    /// The longest wait a pass may sleep for without a file event: the nearest
+    /// of the timers the loop honours. `tick` caps it in [`park`].
+    fn idle_wait(&self) -> Duration {
+        self.next_timer().min(self.options.tick)
+    }
+
+    /// Time until the nearest deadline the coordinator keeps for itself.
+    fn next_timer(&self) -> Duration {
+        let now = self.clock.now();
+        // `None` means "has never run", so it is due now rather than later.
+        let since = |at: Option<Duration>, every: Duration| match at {
+            Some(at) => (at + every).saturating_sub(now),
+            None => Duration::ZERO,
+        };
+        let mut nearest = since(Some(self.last_rescan), self.options.rescan)
+            .min(since(self.last_power, self.options.power_poll));
+        for at in [self.retry_drain_at, self.retry_coordinator_at]
+            .into_iter()
+            .flatten()
+        {
+            nearest = nearest.min(at.saturating_sub(now));
+        }
+        nearest
     }
 
     // -- intake ---------------------------------------------------------
@@ -562,8 +717,13 @@ impl<'a> Watcher<'a> {
         for root in &roots {
             self.scan_root(root, true)?;
         }
+        let deferred = if self.stats.deferred == 0 {
+            String::new()
+        } else {
+            format!(", {} waiting to retry (not due yet)", self.stats.deferred)
+        };
         self.reporter.line(&format!(
-            "watching {} folder(s); {} file(s) need indexing, {} already up to date; \
+            "watching {} folder(s); {} file(s) need indexing, {} already up to date{deferred}; \
              process priority: {}",
             roots.len(),
             self.backlog.len(),
@@ -596,7 +756,11 @@ impl<'a> Watcher<'a> {
                 self.dirty = true;
                 continue;
             };
-            if !index::needs_work(self.store.file_state(&path)?.as_ref(), &facts) {
+            if !index::needs_work(
+                self.store.file_state(&path)?.as_ref(),
+                &facts,
+                self.clock.wall(),
+            ) {
                 continue;
             }
             let Some(root) = self.root_for(&path) else {
@@ -635,7 +799,10 @@ impl<'a> Watcher<'a> {
 
     /// Stat-only walk of one root. Files whose metadata says they are already
     /// indexed are counted, not queued — that is what makes a restart cheap.
+    /// A file that still needs work but whose retry is not due is counted as
+    /// deferred, so "nothing to do" never hides a folder that is not indexed.
     fn scan_root(&mut self, root: &Path, count_unchanged: bool) -> Result<usize> {
+        let now = self.clock.wall();
         let mut queued = 0;
         for entry in WalkDir::new(root).follow_links(false) {
             let entry = match entry {
@@ -656,9 +823,14 @@ impl<'a> Watcher<'a> {
                 self.stats.walk_errors += 1;
                 continue;
             };
-            if !index::needs_work(self.store.file_state(path)?.as_ref(), &facts) {
+            let state = self.store.file_state(path)?;
+            if !index::needs_work(state.as_ref(), &facts, now) {
                 if count_unchanged {
-                    self.stats.unchanged += 1;
+                    if state.is_some_and(|state| state.extracted) {
+                        self.stats.unchanged += 1;
+                    } else {
+                        self.stats.deferred += 1;
+                    }
                 }
                 continue;
             }
@@ -860,7 +1032,11 @@ impl<'a> Watcher<'a> {
             self.dirty = true;
             return Ok(());
         };
-        if !index::needs_work(self.store.file_state(path)?.as_ref(), &facts) {
+        if !index::needs_work(
+            self.store.file_state(path)?.as_ref(),
+            &facts,
+            self.clock.wall(),
+        ) {
             return Ok(());
         }
         let Some(root) = self.root_for(path) else {

@@ -62,7 +62,7 @@ walkdir = "2.5.0"
 tempfile = "3.27.0"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Foundation", "Foundation_Collections", "Graphics", "Graphics_Imaging", "Globalization", "Media_Ocr", "Storage", "Storage_Streams", "Win32_Foundation", "Win32_System_Power", "Win32_System_Threading"] }
+windows = { version = "0.62", features = ["Foundation", "Foundation_Collections", "Graphics", "Graphics_Imaging", "Globalization", "Media_Ocr", "Storage", "Storage_Streams", "Win32_Foundation", "Win32_System_LibraryLoader", "Win32_System_Power", "Win32_System_Threading"] }
 
 # The watcher's priority test reads the *child* process's class, which needs the
 # same Win32 calls from the test crate. Same version and features as the library,

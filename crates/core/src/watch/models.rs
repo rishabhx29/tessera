@@ -90,6 +90,15 @@ impl EngineModels {
     /// user who *named* `onnx` gets the once-verified path instead, so the
     /// 23 MB set is not re-hashed per batch; a name that does not resolve is an
     /// error, exactly as it is for `tessera index`.
+    ///
+    /// TODO(linux): on a machine with no platform engine, `default_engine` falls
+    /// through to `onnx::OnnxOcr::new`, which re-verifies (re-hashes) the 23 MB
+    /// set on *every* drain — exactly the per-batch cost the named-`onnx` arm
+    /// below avoids. It cannot be seen on Windows or macOS, where the platform
+    /// engine wins, so this stayed invisible until the review. The Linux port
+    /// must route this arm through `OnnxOcr::verify_paths` + `OnnxOcr::from_paths`
+    /// the way the named arm does; the fix belongs with the platform-engine
+    /// selection it has to mirror, and there is no host here to test it on.
     fn ocr_engine(&self) -> Result<Box<dyn OcrEngine>> {
         match &self.ocr {
             OcrChoice::Native => Ok(ocr::default_engine(&self.models)),
