@@ -82,15 +82,46 @@ impl MiniLm {
     /// Load the pinned int8 model and its tokenizer, or fail with the command
     /// that fixes it.
     pub fn new(models: &Models, threads: usize) -> Result<Self> {
-        // One verification pass for both files: each per-file check re-hashes
-        // the whole set.
+        let (model_path, tokenizer_path, version) = Self::verify_paths(models)?;
+        Self::from_paths(&model_path, &tokenizer_path, &version, threads)
+    }
+
+    /// The verified model and tokenizer paths, plus the version token the
+    /// manifest pins for them.
+    ///
+    /// One verification pass for both files, and the version is read from the
+    /// same set: a caller that rebuilds the embedder per batch (the watcher)
+    /// verifies once and reuses all three.
+    pub fn verify_paths(
+        models: &Models,
+    ) -> Result<(std::path::PathBuf, std::path::PathBuf, String)> {
         let paths =
             models.verified_paths(MODEL_SET, &["minilm.int8.onnx", "minilm-tokenizer.json"])?;
         let [model_path, tokenizer_path] = paths
             .try_into()
             .expect("verified_paths returned one path per requested file");
+        let set = models.manifest().set(MODEL_SET).ok_or_else(|| {
+            anyhow!(
+                "the model manifest has no {MODEL_SET:?} set, so the text arm cannot record which \
+                 model built its vectors"
+            )
+        })?;
+        Ok((model_path, tokenizer_path, set_version(set)))
+    }
 
-        let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path).map_err(|err| {
+    /// Build the embedder from paths that have **already** been verified.
+    ///
+    /// The watcher verifies a pinned set once for the life of the process and
+    /// then rebuilds sessions per drain from these paths. Hashing 1 GB per
+    /// drain would cost more than the batch; loading a session is the part that
+    /// must be per drain so the RAM goes away when the queue drains.
+    pub fn from_paths(
+        model_path: &Path,
+        tokenizer_path: &Path,
+        version: &str,
+        threads: usize,
+    ) -> Result<Self> {
+        let tokenizer = tokenizers::Tokenizer::from_file(tokenizer_path).map_err(|err| {
             anyhow!(
                 "reading the MiniLM tokenizer at {}: {err}. Fix it with: tessera models install \
                  --set {MODEL_SET}",
@@ -99,19 +130,12 @@ impl MiniLm {
         })?;
 
         let environment = super::environment()?;
-        let session = build_session(environment, &model_path, threads)?;
+        let session = build_session(environment, model_path, threads)?;
 
         let input_ids = input_name(&session, 0);
         let attention_mask = input_name(&session, 1);
         let token_type_ids = input_name(&session, 2);
         let hidden_index = output_index(&session, HIDDEN_OUTPUT)?;
-
-        let set = models.manifest().set(MODEL_SET).ok_or_else(|| {
-            anyhow!(
-                "the model manifest has no {MODEL_SET:?} set, so the text arm cannot record which \
-                 model built its vectors"
-            )
-        })?;
 
         Ok(Self {
             session: Mutex::new(session),
@@ -120,7 +144,7 @@ impl MiniLm {
             attention_mask,
             token_type_ids,
             hidden_index,
-            version: set_version(set),
+            version: version.to_string(),
         })
     }
 

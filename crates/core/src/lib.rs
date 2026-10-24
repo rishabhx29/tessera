@@ -21,6 +21,7 @@ pub mod ocr;
 pub mod search;
 pub mod store;
 pub mod vectors;
+pub mod watch;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

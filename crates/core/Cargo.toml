@@ -13,11 +13,29 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
+# Ctrl-C is the watcher's only shutdown signal. The crate installs the handler
+# on the main thread and sets an atomic the worker loop polls, so a stop is a
+# flag rather than an unwind through a half-written file.
+ctrlc = "3.4"
 dirs = "7.0.0"
 dunce = "1.0.5"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "tiff"] }
 ndarray = "0.17"
-ort = "2.0.0-rc.14"
+# Filesystem events for `tessera watch`. notify's recommended backend is
+# ReadDirectoryChangesW on Windows and inotify/FSEvents elsewhere, so the
+# watcher code is platform-independent and the backend is the crate's choice.
+notify = "8.2"
+# The API level is pinned to the runtime, not left at the crate's default.
+#
+# ort's default feature set asks `OrtGetApiBase` for API 31, and a runtime older
+# than that refuses: "The requested API version [31] is not available, only API
+# versions [1, 23] are supported in this build. Current ORT Version is: 1.23.2"
+# — which is every ONNX call in this crate, on every session, deterministically.
+# The pinned runtime is 1.23 (the version the OCR and embedding numbers in
+# docs/performance.md were measured with), so the bindings are 1.23 too, and all
+# six ort features that are not the API level are the ones the default set gave
+# us. Bumping the runtime means bumping this number; the two are one decision.
+ort = { version = "2.0.0-rc.14", default-features = false, features = ["std", "ndarray", "tracing", "download-binaries", "tls-native", "copy-dylibs", "api-23"] }
 # PDF text extraction, per page, pure Rust: `extract_text_by_pages` returns one
 # string per page, which is where the "page 4" in a result comes from. No
 # poppler, no native library - the parse is the same on every platform.
@@ -44,7 +62,13 @@ walkdir = "2.5.0"
 tempfile = "3.27.0"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = ["Foundation", "Foundation_Collections", "Graphics", "Graphics_Imaging", "Globalization", "Media_Ocr", "Storage", "Storage_Streams"] }
+windows = { version = "0.62", features = ["Foundation", "Foundation_Collections", "Graphics", "Graphics_Imaging", "Globalization", "Media_Ocr", "Storage", "Storage_Streams", "Win32_Foundation", "Win32_System_Power", "Win32_System_Threading"] }
+
+# The watcher's priority test reads the *child* process's class, which needs the
+# same Win32 calls from the test crate. Same version and features as the library,
+# so this adds no build: cargo unifies them.
+[target.'cfg(windows)'.dev-dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 # The macOS native engine (ADR-0007). Target-scoped, so a Windows or Linux build
 # never pulls it: objc2 only builds on Apple targets, and a dependency that

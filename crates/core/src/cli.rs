@@ -112,6 +112,18 @@ enum Command {
     },
     /// Index counts by status.
     Stats,
+    /// Keep indexed folders fresh while the machine is in use: a file saved now
+    /// is searchable in seconds, at idle priority, and the queue pauses on
+    /// battery by default. Runs until Ctrl-C.
+    Watch {
+        /// Folders to watch. Defaults to every folder the index already knows.
+        folders: Vec<PathBuf>,
+        /// When indexing may run: `idle-only` (the default) pauses the queue on
+        /// battery and resumes on AC, `always` ignores the power state, and
+        /// `paused` starts paused until you change it.
+        #[arg(long, default_value_t = crate::watch::Schedule::default(), value_name = "POLICY")]
+        schedule: crate::watch::Schedule,
+    },
     /// Download and verify models. This is the only command that touches the
     /// network, and it never runs on its own.
     Models {
@@ -495,6 +507,61 @@ pub fn run() -> Result<()> {
             for line in stats_report(&store)? {
                 println!("{line}");
             }
+            Ok(())
+        }
+        Command::Watch { folders, schedule } => {
+            // The first Ctrl-C asks the loop to stop after the file in flight;
+            // a second one is the user saying they mean it.
+            let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let flag = shutdown.clone();
+            ctrlc::set_handler(move || {
+                if flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    eprintln!("second interrupt: stopping now");
+                    std::process::exit(130);
+                }
+                eprintln!("stopping after the current file (Ctrl-C again to stop immediately)");
+            })
+            .context("installing the Ctrl-C handler")?;
+
+            // No folders means "the corpus you already have": watching what the
+            // store owns is the natural meaning of a background indexer with no
+            // arguments, and it cannot watch a folder nobody indexed.
+            let roots = if folders.is_empty() {
+                store.roots()?
+            } else {
+                folders
+                    .iter()
+                    .map(|folder| dunce::canonicalize(folder).context("resolving the folder"))
+                    .collect::<Result<Vec<_>>>()?
+            };
+            if roots.is_empty() {
+                anyhow::bail!(
+                    "nothing to watch: index a folder first, or name one: tessera watch <folder>"
+                );
+            }
+            let models = Models::open(&models_dir(&data_dir, cli.models_dir.as_deref()))?;
+            let ocr = cli
+                .ocr_engine
+                .as_deref()
+                .map(|name| OcrChoice::Named(name.to_string()))
+                .unwrap_or(OcrChoice::Native);
+            let options = crate::watch::Options {
+                roots,
+                schedule,
+                ..Default::default()
+            };
+            let summary = crate::watch::run(&data_dir, models, ocr, options, &shutdown)?;
+            println!(
+                "stopped: {indexed} indexed, {moved} moved, {skipped} skipped, {failed} failed, \
+                 {awaiting} awaiting OCR, {removed} removed, {embedded} chunk(s) embedded",
+                indexed = summary.indexed,
+                moved = summary.moved,
+                skipped = summary.skipped,
+                failed = summary.failed,
+                awaiting = summary.awaiting_ocr,
+                removed = summary.removed,
+                embedded = summary.text_embedded,
+            );
             Ok(())
         }
         Command::Models { action } => {

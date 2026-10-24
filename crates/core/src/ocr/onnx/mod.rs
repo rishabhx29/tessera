@@ -44,8 +44,10 @@ use crate::models::Models;
 /// is one question with one answer.
 pub const MODEL_SET: &str = "ppocr";
 
-const DET_FILE: &str = "ppocrv6-det-tiny.onnx";
-const REC_FILE: &str = "ppocrv6-rec-small.onnx";
+/// The two files of the set, named where a caller can verify them once and
+/// build the engine from the paths later.
+pub const DET_FILE: &str = "ppocrv6-det-tiny.onnx";
+pub const REC_FILE: &str = "ppocrv6-rec-small.onnx";
 
 /// Detection runs on an image scaled down so its longest side is at most this.
 ///
@@ -147,12 +149,7 @@ impl OnnxOcr {
     /// Fails rather than falling back to something weaker: an engine that
     /// half-loads produces text-shaped noise, and the pipeline would index it.
     pub fn new(models: &Models) -> Result<Self> {
-        // One verification pass for both files: each per-file check re-hashes
-        // the whole set.
-        let paths = models.verified_paths(MODEL_SET, &[DET_FILE, REC_FILE])?;
-        let [det_path, rec_path] = paths
-            .try_into()
-            .expect("verified_paths returned one path per requested file");
+        let (det_path, rec_path) = Self::verify_paths(models)?;
 
         // A sensible default for a CPU-bound recogniser; ONNX Runtime would
         // otherwise spawn a thread per core and fight the index queue for them.
@@ -161,12 +158,35 @@ impl OnnxOcr {
             .unwrap_or(4)
             .clamp(1, 8);
 
+        Self::from_paths(&det_path, &rec_path, threads)
+    }
+
+    /// The two verified model paths, in detection/recognition order.
+    ///
+    /// One verification pass for both files: each per-file check re-hashes the
+    /// whole set, and a caller that builds an engine per batch (the watcher)
+    /// should not pay that per batch.
+    pub fn verify_paths(models: &Models) -> Result<(PathBuf, PathBuf)> {
+        let paths = models.verified_paths(MODEL_SET, &[DET_FILE, REC_FILE])?;
+        let [det_path, rec_path] = paths
+            .try_into()
+            .expect("verified_paths returned one path per requested file");
+        Ok((det_path, rec_path))
+    }
+
+    /// Build the engine from paths that have **already** been verified.
+    ///
+    /// The watcher verifies the pinned set once per process and rebuilds
+    /// sessions per drain from these paths; verification is the expensive,
+    /// repeatable half and session construction is the half that must end when
+    /// the queue drains.
+    pub fn from_paths(det_path: &Path, rec_path: &Path, threads: usize) -> Result<Self> {
         let environment = environment()?;
         // One session up front so the first image does not pay session
         // construction, and so a broken model file is reported at startup rather
         // than on the hundredth screenshot.
-        let det = build_session(environment, &det_path, threads)?;
-        let rec = build_session(environment, &rec_path, threads)?;
+        let det = build_session(environment, det_path, threads)?;
+        let rec = build_session(environment, rec_path, threads)?;
 
         let det_input = det.inputs()[0].name().to_string();
         let rec_input = rec.inputs()[0].name().to_string();
@@ -196,8 +216,8 @@ impl OnnxOcr {
 
         Ok(Self {
             inner: Arc::new(Inner {
-                det_path,
-                rec_path,
+                det_path: det_path.to_path_buf(),
+                rec_path: rec_path.to_path_buf(),
                 det_input,
                 rec_input,
                 det: Mutex::new(VecDeque::from([det])),

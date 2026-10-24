@@ -24,7 +24,7 @@
 //!   the longest text in the batch instead would silently change what the model
 //!   sees.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context as _, Result};
@@ -149,6 +149,23 @@ impl SiglipEmbedder {
     /// Load the two towers and the tokenizer, or fail with the command that
     /// fixes it.
     pub fn with_precision(models: &Models, threads: usize, precision: Precision) -> Result<Self> {
+        let (vision_path, text_path, tokenizer_path) = Self::verify_paths_with(models, precision)?;
+        Self::from_paths(&vision_path, &text_path, &tokenizer_path, threads)
+    }
+
+    /// The three verified paths of the pinned int8 set.
+    ///
+    /// Verification is the expensive half — about a gigabyte of SHA-256 — so a
+    /// caller that builds an embedder per batch (the watcher) does it once here
+    /// and hands the paths to [`SiglipEmbedder::from_paths`].
+    pub fn verify_paths(models: &Models) -> Result<(PathBuf, PathBuf, PathBuf)> {
+        Self::verify_paths_with(models, Precision::Int8)
+    }
+
+    fn verify_paths_with(
+        models: &Models,
+        precision: Precision,
+    ) -> Result<(PathBuf, PathBuf, PathBuf)> {
         let (vision_file, text_file) = precision.files();
         // One verification pass for all three files: each `verified_path`
         // call re-hashes the whole set, and the set is a gigabyte.
@@ -159,8 +176,23 @@ impl SiglipEmbedder {
         let [vision_path, text_path, tokenizer_path] = paths
             .try_into()
             .expect("verified_paths returned one path per requested file");
+        Ok((vision_path, text_path, tokenizer_path))
+    }
 
-        let tokenizer = tokenizers::Tokenizer::from_file(&tokenizer_path).map_err(|err| {
+    /// Load the two towers and the tokenizer from paths that have **already**
+    /// been verified.
+    ///
+    /// The watcher verifies the pinned set once per process and rebuilds
+    /// sessions per drain from these paths: a constructor that re-hashes
+    /// 1 GB of weights per batch would cost more than the batch, and a session
+    /// that is never dropped is the ~250 MB a machine at idle must not hold.
+    pub fn from_paths(
+        vision_path: &Path,
+        text_path: &Path,
+        tokenizer_path: &Path,
+        threads: usize,
+    ) -> Result<Self> {
+        let tokenizer = tokenizers::Tokenizer::from_file(tokenizer_path).map_err(|err| {
             anyhow::anyhow!(
                 "reading the SigLIP tokenizer at {}: {err}. Fix it with: tessera models install \
                  --set {MODEL_SET}",
@@ -169,8 +201,8 @@ impl SiglipEmbedder {
         })?;
 
         let environment = super::environment()?;
-        let vision = build_session(environment, &vision_path, threads)?;
-        let text = build_session(environment, &text_path, threads)?;
+        let vision = build_session(environment, vision_path, threads)?;
+        let text = build_session(environment, text_path, threads)?;
 
         // Read the input names from the graphs. The ONNX export decides them,
         // and a hardcoded name that the export happened to change would fail at

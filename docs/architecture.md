@@ -247,6 +247,30 @@ watcher event / initial scan (newest-first)
 Queue policy: newest-first, up to 4 workers, models loaded per batch and
 unloaded after; the whole pipeline pauses on battery / per the user's schedule.
 
+## Watch mode
+
+`tessera watch` is the same per-file pass `tessera index` runs
+(`index::process_one`), fed by a different source of truth. One coordinator owns
+the queue, the registrations, the power poll and the per-drain duties; up to four
+workers each own a `Store` connection and do the extraction. The backlog is a
+max-heap on mtime, so a file saved mid-backlog outranks the backlog, and one live
+entry per path keeps a save's several events from becoming several extractions.
+
+notify is the trigger, never the record. Every event re-stats the path, a notify
+overflow (which drops events by design) is treated as a full rescan, and each
+root is re-walked every 60 s regardless — a missed event costs at most one
+interval, which is what makes the mode work on network shares too.
+
+Three platform facts sit behind traits, because each is a per-OS answer with no
+portable API and none of them can be conjured up in a test: the event feed, the
+power source and the process priority. On Windows the process runs in
+`IDLE_PRIORITY_CLASS` with its workers at the lowest thread priority, and the
+power state is `GetSystemPowerStatus` polled twice a minute. **On other platforms
+the priority is unchanged and the power state is `Unknown`**, which the default
+schedule treats as "not on battery": refusing to index because the platform
+cannot report a battery would be a worse failure than running when it might be
+on one.
+
 ## Search flow
 
 ```

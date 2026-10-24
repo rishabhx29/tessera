@@ -287,11 +287,21 @@ fn the_image_pipeline_never_imports_a_platform_api() {
     // The documented exemptions: `ocr/<platform>` *is* the adapter, and
     // `index/skip.rs` asks the filesystem what a file is — `std::os::windows`
     // is how you ask on Windows, and that has nothing to do with reading text.
+    // `watch/power.rs` and `watch/priority.rs` are the watcher's two platform
+    // adapters for the same reason: the battery state and the process priority
+    // are per-OS facts with no portable API, and the point of the seam is that
+    // *only* the adapter may name one.
     //
     // One entry per adapter, and the list is the test: adding a platform means
     // adding its exemption here, so a new adapter cannot silently widen the
     // seam without someone noticing that this constant changed.
-    const EXEMPT: [&str; 3] = ["index/skip.rs", "ocr/windows.rs", "ocr/vision.rs"];
+    const EXEMPT: [&str; 5] = [
+        "index/skip.rs",
+        "ocr/windows.rs",
+        "ocr/vision.rs",
+        "watch/power.rs",
+        "watch/priority.rs",
+    ];
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut checked = 0;

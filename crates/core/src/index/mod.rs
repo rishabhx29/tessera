@@ -77,6 +77,29 @@ impl Kind {
     }
 }
 
+/// The kind of a path, from the engine's format table, without building a
+/// pipeline.
+///
+/// Queue admission needs to know whether a path is worth enqueuing before any
+/// model is loaded — a watcher sees events for every file in a folder, and
+/// queueing a `.zip` only to skip it later is work for nothing. This is the
+/// same table [`Pipeline::accepts`] implements (text, PDF, DOCX, then image);
+/// a test holds the two together for every extension, so the helper cannot
+/// drift into admitting a format no pipeline owns.
+pub fn kind_for(path: &Path) -> Option<Kind> {
+    if let Some(kind) = text::TextPipeline.accepts(path) {
+        return Some(kind);
+    }
+    if let Some(kind) = pdf::PdfPipeline.accepts(path) {
+        return Some(kind);
+    }
+    if let Some(kind) = docx::DocxPipeline.accepts(path) {
+        return Some(kind);
+    }
+    let extension = path.extension()?.to_str()?;
+    image::claims_extension(extension).then_some(Kind::Image)
+}
+
 /// A format pipeline: accepts some files, turns each into tiles.
 ///
 /// One method decides both *whether* a pipeline owns a file and *what kind* it
@@ -84,7 +107,7 @@ impl Kind {
 /// accepts a file and then stamps it with the wrong kind would mislabel its
 /// row, and a file whose kind is guessed from the extension after the fact is a
 /// guess.
-pub trait Pipeline {
+pub trait Pipeline: Send + Sync {
     /// The kind this pipeline produces for `path`, or `None` if it does not
     /// own this file.
     fn accepts(&self, path: &Path) -> Option<Kind>;
@@ -153,6 +176,27 @@ pub struct IndexSummary {
     pub text_unembedded: usize,
 }
 
+impl IndexSummary {
+    /// Fold another run's counters into this one.
+    ///
+    /// The watcher gets one summary per file from a worker and needs a total;
+    /// summing field by field at the call site is how a new counter gets
+    /// forgotten in one of the two places.
+    pub(crate) fn absorb(&mut self, other: &IndexSummary) {
+        self.indexed += other.indexed;
+        self.unchanged += other.unchanged;
+        self.moved += other.moved;
+        self.skipped += other.skipped;
+        self.failed += other.failed;
+        self.awaiting_ocr += other.awaiting_ocr;
+        self.removed += other.removed;
+        self.walk_errors += other.walk_errors;
+        self.unembedded += other.unembedded;
+        self.text_embedded += other.text_embedded;
+        self.text_unembedded += other.text_unembedded;
+    }
+}
+
 /// Whether a file has to be re-extracted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Change {
@@ -201,6 +245,22 @@ pub fn decide(
     })
 }
 
+/// Whether a file is worth queueing at all, from metadata alone.
+///
+/// [`decide`] answers "must these bytes be read?" and may fall through to a
+/// hash. This answers the cheaper question the watcher asks on every event and
+/// every 60-second rescan — "is there any chance this needs work?" — without
+/// ever reading a byte: a path with no row, a row that was never extracted, or
+/// metadata that moved. A false positive costs one hash inside `process_one`
+/// (which then verifies it unchanged); a false negative would leave a file
+/// stale, so the answer leans towards "yes".
+pub(crate) fn needs_work(stored: Option<&FileState>, facts: &FileFacts) -> bool {
+    match stored {
+        None => true,
+        Some(state) => !state.extracted || state.size != facts.size || state.mtime != facts.mtime,
+    }
+}
+
 /// Make a file's name part of its searchable text: prepended to the first
 /// tile, or a lone tile when the file extracted no text. A name is one of the
 /// three things people search for (product-definition 3.1).
@@ -231,6 +291,136 @@ pub fn retitled(text: &str, new_name: &str) -> String {
         Some((_, body)) => format!("{new_name}\n{body}"),
         None => new_name.to_string(),
     }
+}
+
+/// Process one file: the whole per-file pass, shared by the folder walk and the
+/// watcher.
+///
+/// The decisions are in this order and the order is the contract:
+/// skip rules first (metadata only, so a placeholder is never opened), then the
+/// cheap change decision, then the move question for an unknown path, then
+/// extraction, then the image embedding. Counters are updated exactly here, so
+/// `tessera index` and `tessera watch` cannot disagree about what a skipped or
+/// unchanged file is.
+///
+/// `facts` are the metadata snapshot taken when the file was admitted to the
+/// walk or the queue. A writer that changes the file after that snapshot is
+/// caught by the next event or by the watcher's safety rescan, which re-stats
+/// and either re-extracts (bytes differ) or repairs the metadata (same bytes).
+pub(crate) fn process_one(
+    store: &Store,
+    folder: &Path,
+    path: &Path,
+    pipeline: &dyn Pipeline,
+    kind: Kind,
+    facts: &FileFacts,
+    summary: &mut IndexSummary,
+) -> Result<()> {
+    // Metadata only. Nothing below this line may open a file that
+    // `skip_reason` rejects.
+    if let Some(reason) = self::skip::skip_reason(facts) {
+        store.skip_file(folder, path, kind, facts, reason)?;
+        summary.skipped += 1;
+        return Ok(());
+    }
+    let stored = store.file_state(path)?;
+    let mut hash = LazyHash::new(path);
+    if decide(stored.as_ref(), facts, || Ok(hash.get()?.to_string()))? == Change::Unchanged {
+        store.mark_unchanged(path, facts)?;
+        summary.unchanged += 1;
+        return Ok(());
+    }
+    // New or changed bytes. The hash above may already have read the file;
+    // `LazyHash` makes sure that is the only time it does.
+    if stored.is_none() {
+        // An unknown path whose bytes match a row under the same folder is
+        // that file, moved. Reclaiming the row keeps one file indexed
+        // once, under the name it has now; the store decides whether the
+        // old path is really gone, so two live copies stay two files.
+        if let Some((id, _)) = store.moved_candidate(folder, hash.get()?, path)? {
+            store.move_file(id, path, facts, hash.get()?)?;
+            summary.moved += 1;
+            return Ok(());
+        }
+    }
+    // The text arm and the semantic arm are separate capabilities that happen to
+    // share a file, so they are recorded separately. Embedding is attempted
+    // even when OCR failed: a machine with no OCR language pack can still
+    // find its photographs by description, and losing the whole image
+    // because the *text* half failed would be throwing away a working half.
+    let row_written = match pipeline.process(path) {
+        Ok(Extraction::Tiles(tiles)) => {
+            let sha = Some(hash.get()?);
+            store.index_file(folder, path, kind, facts, sha, &with_filename(path, tiles))?;
+            summary.indexed += 1;
+            true
+        }
+        Ok(Extraction::AwaitingOcr) => {
+            store.await_ocr(folder, path, kind, facts)?;
+            summary.awaiting_ocr += 1;
+            true
+        }
+        Err(err) => {
+            // `{err:#}` walks the whole context chain. `to_string()` prints
+            // only the outermost context, which for the OCR adapters is
+            // "decoding <path>" — a reason that names the file and nothing
+            // else. The recorded reason is the only thing the user has to go
+            // on (SECURITY.md: skips are recorded, never swallowed), so the
+            // cause has to be in it.
+            store.fail_file(folder, path, kind, facts, &format!("{err:#}"))?;
+            summary.failed += 1;
+            true
+        }
+    };
+
+    // After the row exists, so a vector can be attached to it either way.
+    if row_written {
+        match pipeline.embed(path) {
+            Ok(Some(embedding)) => match store.file_id(path) {
+                Ok(file_id) => store.put_image_embedding(file_id, &embedding)?,
+                Err(err) => eprintln!(
+                    "recorded {} but could not find its row to attach an embedding: {err:#}",
+                    path.display()
+                ),
+            },
+            // No embedder, or nothing to say about this file.
+            Ok(None) => {}
+            Err(err) => {
+                eprintln!(
+                    "could not embed {} for description search: {err:#}",
+                    path.display()
+                );
+                summary.unembedded += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The text arm's whole write path: every tile with no MiniLM vector gets one.
+///
+/// A sweep over the store rather than work inside the per-file pass, because
+/// the repair path and the fresh-install path are the same code. Returns
+/// `(embedded, unembedded)`; the caller decides whether that is enough to claim
+/// the arm's version.
+pub(crate) fn sweep_text(store: &Store, text: &dyn TextEmbedder) -> Result<(usize, usize)> {
+    let mut embedded = 0;
+    let mut unembedded = 0;
+    for (tile_id, tile_text) in store.tiles_without_text_vectors()? {
+        match text.embed_text(&tile_text) {
+            Ok(embedding) => {
+                store.put_text_embedding(tile_id, &embedding)?;
+                embedded += 1;
+            }
+            Err(err) => {
+                // One unembeddable tile must not end the sweep or the run.
+                // It stays in the work list for the next pass.
+                eprintln!("could not embed tile {tile_id} for meaning search: {err:#}");
+                unembedded += 1;
+            }
+        }
+    }
+    Ok((embedded, unembedded))
 }
 
 /// Index every file under `folder` that any pipeline accepts.
@@ -312,8 +502,6 @@ pub(crate) fn index_folder_with(
         else {
             continue;
         };
-        // Metadata only. Nothing below this line may open a file that
-        // `skip_reason` rejects.
         let facts = match probe.facts(path) {
             Ok(facts) => facts,
             Err(_) => {
@@ -321,82 +509,15 @@ pub(crate) fn index_folder_with(
                 continue;
             }
         };
-        if let Some(reason) = self::skip::skip_reason(&facts) {
-            store.skip_file(folder, path, kind, &facts, reason)?;
-            summary.skipped += 1;
-            continue;
-        }
-        let stored = store.file_state(path)?;
-        let mut hash = LazyHash::new(path);
-        if decide(stored.as_ref(), &facts, || Ok(hash.get()?.to_string()))? == Change::Unchanged {
-            store.mark_unchanged(path, &facts)?;
-            summary.unchanged += 1;
-            continue;
-        }
-        // New or changed bytes. The hash above may already have read the file;
-        // `LazyHash` makes sure that is the only time it does.
-        if stored.is_none() {
-            // An unknown path whose bytes match a row under the same folder is
-            // that file, moved. Reclaiming the row keeps one file indexed
-            // once, under the name it has now; the store decides whether the
-            // old path is really gone, so two live copies stay two files.
-            if let Some((id, _)) = store.moved_candidate(folder, hash.get()?, path)? {
-                store.move_file(id, path, &facts, hash.get()?)?;
-                summary.moved += 1;
-                continue;
-            }
-        }
-        // The text arm and the semantic arm are separate capabilities that happen to
-        // share a file, so they are recorded separately. Embedding is attempted
-        // even when OCR failed: a machine with no OCR language pack can still
-        // find its photographs by description, and losing the whole image
-        // because the *text* half failed would be throwing away a working half.
-        let row_written = match pipeline.process(path) {
-            Ok(Extraction::Tiles(tiles)) => {
-                let sha = Some(hash.get()?);
-                store.index_file(folder, path, kind, &facts, sha, &with_filename(path, tiles))?;
-                summary.indexed += 1;
-                true
-            }
-            Ok(Extraction::AwaitingOcr) => {
-                store.await_ocr(folder, path, kind, &facts)?;
-                summary.awaiting_ocr += 1;
-                true
-            }
-            Err(err) => {
-                // `{err:#}` walks the whole context chain. `to_string()` prints
-                // only the outermost context, which for the OCR adapters is
-                // "decoding <path>" — a reason that names the file and nothing
-                // else. The recorded reason is the only thing the user has to go
-                // on (SECURITY.md: skips are recorded, never swallowed), so the
-                // cause has to be in it.
-                store.fail_file(folder, path, kind, &facts, &format!("{err:#}"))?;
-                summary.failed += 1;
-                true
-            }
-        };
-
-        // After the row exists, so a vector can be attached to it either way.
-        if row_written {
-            match pipeline.embed(path) {
-                Ok(Some(embedding)) => match store.file_id(path) {
-                    Ok(file_id) => store.put_image_embedding(file_id, &embedding)?,
-                    Err(err) => eprintln!(
-                        "recorded {} but could not find its row to attach an embedding: {err:#}",
-                        path.display()
-                    ),
-                },
-                // No embedder, or nothing to say about this file.
-                Ok(None) => {}
-                Err(err) => {
-                    eprintln!(
-                        "could not embed {} for description search: {err:#}",
-                        path.display()
-                    );
-                    summary.unembedded += 1;
-                }
-            }
-        }
+        process_one(
+            store,
+            folder,
+            path,
+            pipeline.as_ref(),
+            kind,
+            &facts,
+            &mut summary,
+        )?;
     }
     summary.removed = store.remove_missing(folder)?;
 
@@ -404,20 +525,9 @@ pub(crate) fn index_folder_with(
     // cannot leave a vector behind, and it reads the tiles the store already
     // holds, so re-embedding never re-reads a file.
     if let Some(text) = text {
-        for (tile_id, tile_text) in store.tiles_without_text_vectors()? {
-            match text.embed_text(&tile_text) {
-                Ok(embedding) => {
-                    store.put_text_embedding(tile_id, &embedding)?;
-                    summary.text_embedded += 1;
-                }
-                Err(err) => {
-                    // One unembeddable tile must not end the sweep or the run.
-                    // It stays in the work list for the next pass.
-                    eprintln!("could not embed tile {tile_id} for meaning search: {err:#}");
-                    summary.text_unembedded += 1;
-                }
-            }
-        }
+        let (embedded, unembedded) = sweep_text(store, text)?;
+        summary.text_embedded += embedded;
+        summary.text_unembedded += unembedded;
         // Only claim the arm is built by this model when every tile in the
         // index has a vector from it. A partial run is outstanding work, which
         // is exactly what the missing pin means.
@@ -450,6 +560,35 @@ mod tests {
             extracted,
             kind: "text".to_string(),
         }
+    }
+
+    /// `kind_for` is the watcher's admission table and the workers find a
+    /// pipeline by asking the same table: if the two disagree, the watcher
+    /// queues a file no worker accepts and that file never gets a row. Every
+    /// extension either side knows is checked, plus the case-folding and the
+    /// plain-junk cases a real folder contains.
+    #[test]
+    fn queue_admission_agrees_with_the_pipeline_table() {
+        let pipelines: Vec<Box<dyn Pipeline>> = vec![
+            Box::new(TextPipeline),
+            Box::new(pdf::PdfPipeline),
+            Box::new(docx::DocxPipeline),
+            Box::new(image::ImagePipeline::new(Box::new(
+                crate::ocr::Unavailable("test"),
+            ))),
+        ];
+        for name in [
+            "a.txt", "a.md", "a.csv", "a.log", "a.pdf", "a.docx", "a.png", "a.jpg", "a.jpeg",
+            "a.webp", "a.bmp", "a.gif", "a.tiff", "a.zip", "a.tar.gz", "README", "a.PDF", "a.Txt",
+        ] {
+            let path = Path::new(name);
+            let by_table = pipelines.iter().find_map(|pipeline| pipeline.accepts(path));
+            assert_eq!(kind_for(path), by_table, "admission disagrees on {name}");
+        }
+        // And the table is not empty: a test where every answer was `None`
+        // would pass while the watcher queued nothing at all.
+        assert_eq!(kind_for(Path::new("a.txt")), Some(Kind::Text));
+        assert_eq!(kind_for(Path::new("a.png")), Some(Kind::Image));
     }
 
     #[test]

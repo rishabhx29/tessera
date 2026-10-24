@@ -452,6 +452,11 @@ impl Store {
             Connection::open(&db_path).with_context(|| format!("opening {}", db_path.display()))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        // Up to four watch workers plus the main thread write through separate
+        // connections. WAL lets one writer proceed while readers run, and the
+        // timeout turns the instant `SQLITE_BUSY` a second writer would get
+        // into a short wait instead of a dropped file.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         let store = Self { conn };
         store.migrate()?;
         Ok(store)
@@ -628,6 +633,25 @@ impl Store {
             .rows_matching_sha1(root, sha1, keep)?
             .into_iter()
             .find(|(_, old)| is_gone(Path::new(old))))
+    }
+
+    /// The indexed folders, in path order, for a watcher started with no
+    /// explicit arguments: the corpus it should keep fresh is what the store
+    /// already says it owns.
+    ///
+    /// Rows written before roots existed (`root = ''`) are not roots; there is
+    /// no folder name to watch, and guessing one from a path prefix would watch
+    /// a parent the user never chose.
+    pub fn roots(&self) -> Result<Vec<std::path::PathBuf>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT DISTINCT root FROM files WHERE root != '' ORDER BY root")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(std::path::PathBuf::from(row?));
+        }
+        Ok(out)
     }
 
     /// Drop rows for files under `root` that are no longer on disk, so a
@@ -1456,6 +1480,34 @@ impl Store {
              ORDER BY t.id",
         )?;
         let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// One bounded page of [`Store::tiles_without_text_vectors`], for the
+    /// watcher's drain-end sweep.
+    ///
+    /// The watcher runs its sweep on a machine that is also being used, so it
+    /// takes the work list in bites and gives a newly saved file a chance to
+    /// outrank the remaining backlog, rather than holding the coordinator for
+    /// as long as a whole index takes to embed. `after` is the last tile id the
+    /// sweep looked at: a tile that fails to embed stays in the work list for
+    /// the next drain instead of being retried forever inside this one.
+    pub fn tiles_without_text_vectors_after(
+        &self,
+        after: i64,
+        limit: usize,
+    ) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT t.id, t.text
+             FROM tiles t LEFT JOIN txt_vec v ON v.tile_id = t.id
+             WHERE v.tile_id IS NULL AND t.id > ?1
+             ORDER BY t.id
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![after, limit as i64], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()

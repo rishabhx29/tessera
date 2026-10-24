@@ -200,7 +200,7 @@ pub fn default_engine(models: &Models) -> Box<dyn OcrEngine> {
 
 /// The platform's own engine, if this machine has one that works.
 #[cfg(windows)]
-fn platform_engine() -> Option<Box<dyn OcrEngine>> {
+pub(crate) fn platform_engine() -> Option<Box<dyn OcrEngine>> {
     windows::WindowsOcr::new()
         .ok()
         .map(|engine| Box::new(engine) as Box<dyn OcrEngine>)
@@ -208,7 +208,7 @@ fn platform_engine() -> Option<Box<dyn OcrEngine>> {
 
 /// macOS's own engine, behind the same seam as every other adapter.
 #[cfg(target_os = "macos")]
-fn platform_engine() -> Option<Box<dyn OcrEngine>> {
+pub(crate) fn platform_engine() -> Option<Box<dyn OcrEngine>> {
     vision::VisionOcr::new()
         .ok()
         .map(|engine| Box::new(engine) as Box<dyn OcrEngine>)
@@ -219,7 +219,7 @@ fn platform_engine() -> Option<Box<dyn OcrEngine>> {
 /// platform. Linux is a supported target, not a broken build: ADR-0007 puts it
 /// on the cross-platform engine by design.
 #[cfg(not(any(windows, target_os = "macos")))]
-fn platform_engine() -> Option<Box<dyn OcrEngine>> {
+pub(crate) fn platform_engine() -> Option<Box<dyn OcrEngine>> {
     None
 }
 

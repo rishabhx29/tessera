@@ -32,16 +32,15 @@ file's reason that dropped the cause chain, and an atomicity guarantee asserted
 in prose with no test behind it — and both fixes are pinned by tests that were
 verified to fail against the old behaviour.
 
-**The frontier is ticket 10.** Tickets 06–09 are also resolved: the macOS
+**The frontier is ticket 12.** Tickets 06–11 are also resolved: the macOS
 Vision adapter (below), the SigLIP image arm for description search, the PDF
-and DOCX pipelines (page-aware tiles), and the MiniLM text arm — every tile now
-carries a 384-d vector when the `minilm` set is installed, filled by a
-post-walk sweep and queried with `tessera search --describe-text`. What remains
-in weeks 2–3: **ticket 10** (weighted RRF fusion of the three arms), **11**
-(the folder watcher) and **12** (the mixed-format milestone gate). The
-description-search objective set in the product definition is still unmet; its
-measured state and the one deliberate, unshipped lever are recorded under
-"Where this leaves the feature" in `docs/performance.md`.
+and DOCX pipelines (page-aware tiles), the MiniLM text arm, ticket 10 (weighted
+RRF fusion of the three arms), and ticket 11 (`tessera watch`: Windows idle
+priority, newest-first queue, battery pause, up to 4 workers, and transactional
+crash-resume). What remains in weeks 2–3: **ticket 12** (the mixed-format
+milestone gate). The description-search objective set in the product definition
+is still unmet; its measured state and the one deliberate, unshipped lever are
+recorded under "Where this leaves the feature" in `docs/performance.md`.
 
 Ticket 06 (the macOS Vision adapter) landed behind the same seam, cfg-gated to
 macOS and proven to work on a `macos-14` runner. **It has no latency number and
@@ -58,6 +57,18 @@ design (ADR-0007), not a platform that fails to build.
 - **Corpus** — the set of folders the user has chosen to index.
 - **Root** — one indexed folder. The corpus is the set of roots; each file row
   records the root it came from, which is what scopes deletion propagation.
+- **Watch mode** — `tessera watch [folder]...`: background indexing that keeps
+  the corpus fresh while the machine is in use. Watches the named folders, or
+  every root the store already owns. Its event feed, power source and process
+  priority are platform adapters behind traits; the loop itself is portable.
+- **Backlog** — the watcher's queue of files owed work: newest-first on mtime,
+  one live entry per path (a re-enqueued path moves rather than duplicates).
+- **Drain** — one stretch of work between two idle points. The models load when
+  the backlog is non-empty and are released when it empties: per drain, never
+  per file, because a machine at idle must not hold ~250 MB of weights.
+- **Schedule** — when the watcher may take work: `idle-only` (the default; the
+  queue pauses on battery and resumes on AC), `always`, or `paused`. What pauses
+  is the queue, never a worker holding a file.
 - **Arm**'s **version** — the model that produced an arm's vectors. Recorded in
   `meta` beside the vectors; a mismatch means the arm is outstanding work, never
   that old vectors may be blended with new ones.
