@@ -19,6 +19,27 @@ use tessera_core::ocr::OcrChoice;
 use tessera_core::store::Store;
 use tessera_core::vectors::{QueryEmbedder, TextEmbedder};
 
+/// The query arms' embedders, loaded once and shared by every query.
+///
+/// Both constructors verify their model set by hashing it (~1.47 GB) and build
+/// the ONNX sessions, so this is the expensive half of a cold search. The trait
+/// objects are `Send + Sync`, which is what makes sharing them across the
+/// shell's command threads safe.
+#[derive(Clone)]
+struct SearchEmbedders {
+    image: Option<Arc<dyn QueryEmbedder>>,
+    text: Option<Arc<dyn TextEmbedder>>,
+}
+
+impl std::fmt::Debug for SearchEmbedders {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SearchEmbedders")
+            .field("image", &self.image.is_some())
+            .field("text", &self.text.is_some())
+            .finish()
+    }
+}
+
 /// One highlighted run of a snippet: `hit` runs are drawn with the match style.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Segment {
@@ -45,7 +66,13 @@ pub struct SearchPayload {
     pub rows: Vec<Row>,
     /// User-facing notes: no index, no models, an arm with nothing to rank.
     pub notes: Vec<String>,
+    /// The whole command, from entry: model load on a cold query plus search.
+    /// This is the number the window shows, because it is the wait the user
+    /// just sat through.
     pub millis: u64,
+    /// The fused search alone, after the embedders are ready. Kept separate so
+    /// a slow first query can be told apart from a slow search.
+    pub engine_millis: u64,
     pub arms: Vec<String>,
 }
 
@@ -104,6 +131,16 @@ pub struct AppService {
     /// a timer. The answer only changes when an install finishes, so it is
     /// cached here and dropped there.
     verified_models: Arc<Mutex<Option<Vec<ModelSetRow>>>>,
+    /// The query embedders, loaded and verified once per process.
+    ///
+    /// They used to be rebuilt on every search, which re-hashed every model
+    /// file and re-created both ONNX sessions per keystroke. The answer only
+    /// changes on an install, so it shares the status cache's lifetime.
+    search_embedders: Arc<Mutex<Option<SearchEmbedders>>>,
+    /// How many times the embedders were constructed. Test-only: it is the
+    /// observable that proves a second query reuses them.
+    #[cfg(test)]
+    search_loads: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl AppService {
@@ -112,6 +149,9 @@ impl AppService {
             data_dir: data_dir.into(),
             models_dir: models_dir.into(),
             verified_models: Arc::new(Mutex::new(None)),
+            search_embedders: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            search_loads: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -130,7 +170,12 @@ impl AppService {
     }
 
     /// Run the one search box: every installed arm, fused.
+    ///
+    /// `millis` times the whole command from this line, including the one-time
+    /// model load; `engine_millis` is the fused search alone. The window shows
+    /// both, so the first query after launch does not claim to have been fast.
     pub fn search(&self, query: &str, limit: usize) -> Result<SearchPayload, String> {
+        let started = std::time::Instant::now();
         if !self.index_exists() {
             return Err("no index yet: add a folder to start indexing".into());
         }
@@ -139,31 +184,29 @@ impl AppService {
             return Ok(SearchPayload {
                 rows: Vec::new(),
                 notes: vec!["Type a word, or a filter such as type:pdf.".into()],
-                millis: 0,
+                millis: started.elapsed().as_millis() as u64,
+                engine_millis: 0,
                 arms: Vec::new(),
             });
         }
-        let models = Models::open(&self.models_dir).map_err(|err| format!("{err:#}"))?;
-        let image = image_embedder(&models);
-        let text = text_embedder(&models);
+        let embedders = self.search_embedders()?;
         let mut notes = Vec::new();
-        if image.is_none() {
+        if embedders.image.is_none() {
             notes.push("Image descriptions are off: the siglip models are not installed.".into());
         }
-        if text.is_none() {
+        if embedders.text.is_none() {
             notes.push("Meaning search is off: the minilm models are not installed.".into());
         }
-        let started = std::time::Instant::now();
+        let engine_started = std::time::Instant::now();
         let outcome = fused_search(
             &self.data_dir,
             &parsed,
-            image
-                .as_deref()
-                .map(|embedder| embedder as &dyn QueryEmbedder),
-            text.as_ref().map(|embedder| embedder as &dyn TextEmbedder),
+            embedders.image.as_deref(),
+            embedders.text.as_deref(),
             limit.clamp(1, 100),
         )
         .map_err(|err| format!("{err:#}"))?;
+        let engine_millis = engine_started.elapsed().as_millis() as u64;
         notes.extend(outcome.notes.iter().cloned());
         let terms: Vec<String> = parsed.terms.clone();
         let rows = outcome
@@ -180,8 +223,38 @@ impl AppService {
             rows,
             notes,
             millis: started.elapsed().as_millis() as u64,
+            engine_millis,
             arms,
         })
+    }
+
+    /// The query embedders, loaded and verified once per process.
+    ///
+    /// `Models::open` plus the two constructors hash every file in both sets
+    /// (about 1.47 GB) and build the ONNX sessions. Doing that per query made
+    /// two searches in one process take 46.2 s and 51.0 s in debug while the
+    /// payload reported 1.5 s. The lock is held across the load, so two cold
+    /// queries do not both pay for it; the clone is released before the search
+    /// and the sessions are safe to share.
+    fn search_embedders(&self) -> Result<SearchEmbedders, String> {
+        let mut cache = self
+            .search_embedders
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(embedders) = cache.as_ref() {
+            return Ok(embedders.clone());
+        }
+        let models = Models::open(&self.models_dir).map_err(|err| format!("{err:#}"))?;
+        let embedders = SearchEmbedders {
+            image: image_embedder(&models).map(|embedder| -> Arc<dyn QueryEmbedder> { embedder }),
+            text: text_embedder(&models)
+                .map(|embedder| -> Arc<dyn TextEmbedder> { Arc::new(embedder) }),
+        };
+        #[cfg(test)]
+        self.search_loads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        *cache = Some(embedders.clone());
+        Ok(embedders)
     }
 
     /// The preview pane: the matched tile's text, highlighted, and the image
@@ -332,6 +405,21 @@ impl AppService {
             .is_some()
     }
 
+    /// How many times search built the embedders in this process.
+    #[cfg(test)]
+    fn search_loads(&self) -> usize {
+        self.search_loads.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Whether the query embedders are cached.
+    #[cfg(test)]
+    fn search_embedders_are_cached(&self) -> bool {
+        self.search_embedders
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+    }
+
     /// Add a folder by indexing it. One-shot, so the shell can run it on a
     /// worker thread and report the summary; the watcher is started separately.
     pub fn index_folder(&self, path: &str) -> Result<String, String> {
@@ -394,12 +482,22 @@ impl AppService {
         let models = Models::open(&self.models_dir).map_err(|err| format!("{err:#}"))?;
         let wanted: Vec<&str> = sets.iter().map(String::as_str).collect();
         let report = models.ensure(&wanted).map_err(|err| format!("{err:#}"))?;
-        // The install changed the very files the cached answer describes.
+        // The install changed the very files both caches describe: the status
+        // answer, and the loaded query embedders built from them.
+        self.forget_models();
+        Ok(report.lines())
+    }
+
+    /// Drop every answer that was computed from the model files.
+    fn forget_models(&self) {
         *self
             .verified_models
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-        Ok(report.lines())
+        *self
+            .search_embedders
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
     }
 
     /// The image arm's own vector count, used by the empty-state copy to say
@@ -649,5 +747,44 @@ mod tests {
         let second = service.status().unwrap();
         assert_eq!(first.models, second.models);
         assert!(service.models_are_cached());
+    }
+
+    #[test]
+    fn two_searches_reuse_one_model_load() {
+        // A search used to reconstruct both embedders, re-hashing ~1.47 GB of
+        // models and rebuilding the ONNX sessions. The second query in one
+        // process has to reuse them.
+        let temp = tempfile::tempdir().unwrap();
+        drop(Store::open(temp.path()).unwrap());
+        let service = AppService::new(temp.path(), temp.path().join("models"));
+        assert_eq!(service.search_loads(), 0);
+        let first = service.search("invoice", 10).unwrap();
+        assert_eq!(service.search_loads(), 1);
+        let second = service.search("invoice", 10).unwrap();
+        assert_eq!(
+            service.search_loads(),
+            1,
+            "the second query rebuilt the embedders instead of reusing them"
+        );
+        assert_eq!(first.rows, second.rows);
+        assert!(
+            second.millis >= second.engine_millis,
+            "the total must include the engine time"
+        );
+    }
+
+    #[test]
+    fn installing_models_drops_the_loaded_embedders_too() {
+        // The cache describes the files on disk. An install replaces them, so
+        // both the status answer and the loaded sessions are stale.
+        let temp = tempfile::tempdir().unwrap();
+        drop(Store::open(temp.path()).unwrap());
+        let service = AppService::new(temp.path(), temp.path().join("models"));
+        service.search("invoice", 10).unwrap();
+        assert!(service.search_embedders_are_cached());
+        service.install_models(&[]).unwrap();
+        assert!(!service.search_embedders_are_cached());
+        service.search("invoice", 10).unwrap();
+        assert_eq!(service.search_loads(), 2);
     }
 }

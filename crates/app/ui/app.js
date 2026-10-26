@@ -132,7 +132,10 @@ function renderSearchMeta(payload) {
     return;
   }
   const arms = payload.arms?.length ? ` · ${payload.arms.join(" + ")}` : "";
-  hint.textContent = `${payload.rows.length} in ${payload.millis} ms${arms}`;
+  const engine = Number.isFinite(payload.engine_millis)
+    ? ` · engine ${payload.engine_millis} ms`
+    : "";
+  hint.textContent = `${payload.rows.length} in ${payload.millis} ms total${engine}${arms}`;
 }
 
 function renderNotes(notes) {
