@@ -89,7 +89,12 @@ Honest caveats recorded: the int8 export has a high similarity floor (cosine
 0.55 against pure noise, 0.82 for a 1Â°-rotated copy) â€” discrimination is
 coarser than fp32; hybrid fusion absorbs this.
 
-## Final v0.1 configuration â€” measured projection
+## Final v0.1 configuration (superseded) — measured projection
+
+> Superseded on 2026-10-26 by the 5,000-file gate section at the end of this
+> file. The projection below was made from component measurements before the
+> engine existed. The query projection did not survive contact: the fused query
+> costs ~400 ms at 5,000 items, not ~50 ms.
 
 Decode (5â€“100 ms) + **Windows.Media.Ocr** (50 ms p50) + **SigLIP-base int8**
 (200 ms p50) â‡’ **saveâ†’searchable â‰ˆ 260â€“350 ms**, against a 1500 ms target.
@@ -649,7 +654,11 @@ the number means anything.
 - Query-side latency, as above.
 - The synthetic rendered-text control (spike class 0.90), still not run.
 
-## Week-1 gate: PASS
+## Week-1 gate: PASS (projection-era record)
+
+> Kept as the week-1 record. The measured v0.1 numbers, from a different corpus
+> and the real binaries, are in the 5,000-file gate section at the end of this
+> file; where the two disagree, the gate wins.
 
 - image saveâ†’searchable: ~260â€“350 ms projected (target <1500 ms) â€” components measured
 - doc saveâ†’searchable: ~1000 ms measured (target <300 ms) â€” **still over**; doc extract is pypdf-bound. Accepted for v0.1 (docs are a minority of the corpus and indexing is background); revisit if dogfooding disagrees. (The extraction term is re-measured with the Rust pipelines at the end of this file; this line stands until save→searchable is.)
@@ -1569,7 +1578,12 @@ synthesised corpus of 400 small `.txt` files (one tile each, so 400 MiniLM chunk
 when the sweep runs). Everything is measured from outside the process: the
 watcher's own stdout for the phase boundaries, and Windows process counters for
 RAM and CPU. The script is committed at `scripts/measure-watch.ps1`, so the
-numbers can be reproduced; it writes only to a temp directory.
+numbers can be reproduced; it writes only to a temp directory. It was re-run on
+2026-10-26 after the drain-detection bug in that script was fixed (a run under
+concurrent machine load, not a quiet one): 7.58 s drain at 400 files
+(53 files/s), save→row 0.98 s, save→searchable 2.73 s, idle 43.2 MB working set
+/ 26.5 MB private. Same shape, with the drain figure moving with host load —
+which is why the quiet-machine number below stays the headline.
 
 | What | Measured |
 |---|---|
@@ -1651,4 +1665,95 @@ the probe (a three-second outage) never lasted long enough to show it; only a
 backoff longer than 30 s did. It is fixed by waiting for the rest of the backoff,
 capped by the one-second shutdown tick, and a test now asserts that the loop
 never asks the event feed for a zero wait while a retry deadline is still ahead.
+
+## The 5,000-file milestone gate — measured (ticket 12)
+
+**What was run.** The week 2–3 exit criterion (product-definition §5): a 5,001-file
+mixed corpus indexed end to end by `tessera watch`, then the known-answer and
+latency queries against that index. Everything below comes from
+`target/release/tessera.exe` and Windows process counters; nothing is projected.
+
+**The corpus.** 5,001 files: 2,000 text (1,203 real), 701 PDF (6 real), 500 Word
+(2 real), 1,800 images (326 real). **Only 1,537 of 5,001 (31%) are real user
+files**; the rest are generated documents and screenshots. There is no 5,000-file
+real corpus on this machine, so this is the substitute, and the numbers should be
+read with that in mind: generated text is cleaner, shorter and more uniform than
+the real thing, and 1,474 of the images are rendered screenshots, which is the
+easy case for OCR. The real-image sets span wallpapers, UI screenshots, design
+references and test fixtures, 7 to 115 files each.
+
+**Method.** Fresh index directory; `tessera watch --schedule always`; the drain is
+the watcher's own banner line to its first `caught up` line (a 2 s poll bounds it,
+so it is if anything slightly generous). Throughput divides corpus files by drain
+seconds, so a file retried after a failure cannot inflate it. Peak memory samples
+`WorkingSet64` and `PrivateMemorySize64` every 2 s for the whole drain, which on a
+run this long is the peak, not a spot check. Latency is 5 queries × 8 repetitions
+after one warm-up, parsed from the engine's own `searched in N ms` line — measured
+after the embedders are built, so it is the search and not the model load a fresh
+process pays. The per-arm figures come from the same line;
+`scripts/measure-latency.ps1` reruns just that sweep against a finished index.
+Hardware: Intel Core Ultra 5 225H (14 cores), 15 GB RAM, Windows 11 build 26200,
+mains power, no build running.
+
+| What | Measured |
+|---|---|
+| Files | 5,001 |
+| Drain (`watch`, 4 workers, idle priority) | 685.8 s wall → **7.3 files/s** |
+| Indexed / moved / skipped / failed / awaiting OCR | 4,999 / 0 / 0 / **2 files** / 0 |
+| Chunks embedded | 17,154 |
+| Index size | 113.7 MB → **22.7 MB per 1,000 files** |
+| Peak working set / private, during the drain | **452 MB / 440 MB** |
+| Fused query, engine time | **397 ms p50 / 501 ms p95** (32 samples) |
+| — keyword arm | 49 ms / 145 ms |
+| — image arm (`--describe`) | 120 ms / 237 ms |
+| — meaning arm | **310 ms / 418 ms** |
+| Fused query, whole process (cold start with models) | 2,030 ms / 2,047 ms |
+| OCR, Windows | **32.9 ms p50** (21.2, 30.4, 32.9, 36.1, 39.6) |
+| OCR, ONNX fallback | **755.6 ms p50** (175.1, 564.2, 755.6, 1,034.2, 1,527.1) |
+| Known answers | 5 of 5 |
+
+**The two failures are corrupt files, not engine defects.** `real-pdf-0006.pdf` is
+0 bytes and `real-pdf-0003.pdf` is a 100 KiB truncation with no `%PDF` header;
+both are crawler artefacts in the fixture set, and both fail with `invalid file
+header`, which is the right answer. Each was retried once inside the run, which is
+why there are four failure events for two files and the outcome count is 5,003
+against a corpus of 5,001.
+
+**Against the targets** (product-definition §6):
+
+| Target | Result |
+|---|---|
+| Query end-to-end @ 50k items < 100 ms | **MISSED at 5,000**: 397 ms fused p50, of which the meaning arm is 310 ms |
+| Image saved → searchable < 1.5 s | Row committed in **0.98 s**; a query returning it 2.73 s, of which 1.73 s is the cold query process |
+| Document saved → searchable < 300 ms | **MISSED**: 0.98 s to the row, about 3× over |
+| Idle RAM < 250 MB | 43.2 MB working set after the models are released; not re-measured at 5k, and 452 MB is the drain peak, not idle |
+| Disk per 1,000 items ~25 MB | **22.7 MB** |
+| Week-1 stop rule: OCR over 1 s/image → rethink | Windows 33 ms p50; ONNX 756 ms p50 with 2 of 5 samples over 1 s. The OS path is the Windows default, so the stop rule is not triggered |
+
+**What the gate found that the tests had not.** Two Windows defects, both fixed
+and covered: OCR could not be called twice concurrently — the engine's workers
+collided inside `RecognizeAsync` — so the calls are now serialised; and a real
+1440×21,142 capture was refused outright for exceeding
+`OcrEngine::MaxImageDimension`, so such captures are now read in seam-safe bands
+(`f5fb429`). The second is why the tall screenshot in the known-answer set returns
+text instead of failing.
+
+**Caveats, stated so they are not discovered later.**
+
+- One machine, one run per configuration. Throughput varied 7.3 to 8.4 files/s
+  across runs of the same corpus; the slower number is quoted. Only one image in
+  the corpus takes the banded OCR path, so that fix costs seconds and does not
+  explain the spread. The two latency passes agree within 2 ms (the gate run's
+  own sample set gave 398 ms p50 / 504 ms p95).
+- p50/p95 are over 5 queries × 8 repeats: p95 is effectively the near-maximum of
+  32 samples, not an estimate of a query distribution.
+- 50,000 items is unmeasured. Both scan terms grow linearly with the corpus, so
+  50k will be worse than the numbers above, not better.
+- Save→searchable at 5k was measured by the harness but not persisted by it; the
+  row quoted is the 400-file `scripts/measure-watch.ps1` run below. The gate
+  harness now records both save figures in its JSON, so the next run will carry
+  them.
+- The 31%-real corpus is the largest honesty gap here: a genuinely personal
+  5,000-file folder is mostly PDFs, office documents and photos, and photos are
+  the hard OCR case, not rendered screenshots.
 

@@ -82,11 +82,20 @@ $idleCpu = [math]::Round($proc.TotalProcessorTime.TotalSeconds - $cpuBefore, 3)
 
 # Save a file the way an editor does, wait for its row, then confirm a real
 # query finds it: the acceptance criterion is the search, not the log line.
+#
+# The drain count is snapshotted *before* the save exists, and the drain is
+# waited for *before* the confirmation search. Only that ordering measures the
+# save's own drain: counting after the write already includes it, so the wait
+# would look for a third `caught up` that never arrives; counting after the
+# search loop can also return at once on a line that was already printed, which
+# times the save instead of a drain.
+$caughtBefore = Line-Count $stdout "caught up"
 $fresh = Join-Path $corpus "fresh.txt"
 $tSave = Now
 [IO.File]::WriteAllText($fresh, "the quarterly zebra unicorn invoice, saved while the watcher ran")
 $tFreshLine = Wait-Line $stdout "fresh.txt" 60
 $latencyToRow = $tFreshLine - $tSave
+$secondCaught = Wait-Line $stdout "caught up" 60 -AtLeast ($caughtBefore + 1)
 
 $found = $false
 $tSearch = Now
@@ -97,11 +106,6 @@ while (-not $found -and ((Now) - $tSave) -lt 30) {
 $tSearchable = Now
 $searchLatency = $tSearchable - $tSave
 $searchWall = $tSearchable - $tSearch
-# Wait for the *second* "caught up": the first one is the initial drain, already
-# in the file, so matching it would return at once and time the save, not a
-# drain. A drain that has not happened is no drain at all.
-$caughtBefore = Line-Count $stdout "caught up"
-$secondCaught = Wait-Line $stdout "caught up" 60 -AtLeast ($caughtBefore + 1)
 
 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
 
