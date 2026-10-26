@@ -628,12 +628,13 @@ measured top-1 of 0.05 â€” exactly chance. A filename is a timestamp
 so the number was measuring the test rather than the model. The query has to
 be the text OCR read from the image, which is what the spike did.
 
-### The synthetic control is still owed
+### The synthetic control: run, and what it does not say
 
 The ticket also asks for the rendered-text control, where the spike measured
-top-1 0.90. **Not run.** It needs a fixture set of rendered phrases, which is a
-build step this ticket has not stood up. The real-screenshot control above is
-the one that has been measured; it is not a substitute for the other.
+top-1 0.90. It now runs in this repository against committed fixtures, and it
+scores higher than the spike: see the control section at the end of this file
+for the method, the number, and why 20 synthetic images are a weaker claim than
+they look.
 
 ### Query-side latency
 
@@ -651,8 +652,11 @@ the number means anything.
   pad positions are attended as if they were content here. A sensitivity check
   over the corpus put the pad id inside noise, so this is recorded as a
   difference from the reference rather than as a known defect.
+- The synthetic rendered-text control (spike class 0.90) is no longer unrun: it
+  lives in this repository as `crates/core/tests/rendered_control.rs` with the
+  fixtures committed under `crates/core/tests/fixtures/rendered/`, and the
+  measured number is in the control section at the end of this file.
 - Query-side latency, as above.
-- The synthetic rendered-text control (spike class 0.90), still not run.
 
 ## Week-1 gate: PASS (projection-era record)
 
@@ -1756,4 +1760,33 @@ text instead of failing.
 - The 31%-real corpus is the largest honesty gap here: a genuinely personal
   5,000-file folder is mostly PDFs, office documents and photos, and photos are
   the hard OCR case, not rendered screenshots.
+
+## Image arm control — rendered text, measured (ticket 07)
+
+**What it is.** The week-1 spike measured top-1 0.90 on 20 rendered-text images,
+and that number was quoted here for weeks with nothing in the repository able to
+reproduce it. It is now a test: 20 synthetic PNGs, each a phrase rendered over a
+distinct colour and layout, committed under
+`crates/core/tests/fixtures/rendered/` (212 KB), embedded by the shipping SigLIP
+image tower and queried with its own phrase through the text tower.
+
+```text
+cargo test --release -p tessera-core --test rendered_control -- --ignored --nocapture
+```
+
+| What | Measured |
+|---|---|
+| top-1 | **20/20 = 1.00** |
+| mean rank | 1.00 of 20 |
+| chance | 0.05 |
+| runtime | 4.1 s, release, models installed |
+
+**What it says, and what it does not.** It says the int8 embedding space
+separates rendered phrases cleanly, which is the property the image arm's text
+half depends on. It says nothing about photographs, and 20/20 is an upper bound,
+not "the image arm is perfect": the fixtures were generated to be maximally
+unlike each other - different hue, different layout, one phrase each - so the
+task is easier than a real screenshot library. The real-screenshot control above
+(mean rank 9.93/40) is the honest scale, and the 5,000-file gate is the honest
+end to end.
 

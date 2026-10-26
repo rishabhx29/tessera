@@ -1,0 +1,85 @@
+{
+  "note": "Synthetic rendered-text control for the image arm. Query each image with its phrase.",
+  "images": [
+    {
+      "file": "01-a-red-bicycle-leaning-on-a-brick-wall.png",
+      "phrase": "a red bicycle leaning on a brick wall"
+    },
+    {
+      "file": "02-a-blue-teapot-on-a-wooden-table.png",
+      "phrase": "a blue teapot on a wooden table"
+    },
+    {
+      "file": "03-the-yellow-umbrella-by-the-door.png",
+      "phrase": "the yellow umbrella by the door"
+    },
+    {
+      "file": "04-three-green-apples-in-a-paper-bag.png",
+      "phrase": "three green apples in a paper bag"
+    },
+    {
+      "file": "05-a-silver-train-crossing-a-stone-bridge.png",
+      "phrase": "a silver train crossing a stone bridge"
+    },
+    {
+      "file": "06-a-purple-flower-in-a-glass-jar.png",
+      "phrase": "a purple flower in a glass jar"
+    },
+    {
+      "file": "07-an-orange-cat-asleep-on-a-radiator.png",
+      "phrase": "an orange cat asleep on a radiator"
+    },
+    {
+      "file": "08-a-black-camera-on-a-white-shelf.png",
+      "phrase": "a black camera on a white shelf"
+    },
+    {
+      "file": "09-two-wooden-chairs-under-a-window.png",
+      "phrase": "two wooden chairs under a window"
+    },
+    {
+      "file": "10-a-small-boat-on-a-calm-lake.png",
+      "phrase": "a small boat on a calm lake"
+    },
+    {
+      "file": "11-a-copper-kettle-beside-a-chipped-mug.png",
+      "phrase": "a copper kettle beside a chipped mug"
+    },
+    {
+      "file": "12-the-brown-dog-waiting-at-the-gate.png",
+      "phrase": "the brown dog waiting at the gate"
+    },
+    {
+      "file": "13-a-green-cactus-in-a-red-pot.png",
+      "phrase": "a green cactus in a red pot"
+    },
+    {
+      "file": "14-an-old-map-pinned-to-a-wall.png",
+      "phrase": "an old map pinned to a wall"
+    },
+    {
+      "file": "15-a-white-van-parked-outside-a-bakery.png",
+      "phrase": "a white van parked outside a bakery"
+    },
+    {
+      "file": "16-a-striped-scarf-hanging-on-a-hook.png",
+      "phrase": "a striped scarf hanging on a hook"
+    },
+    {
+      "file": "17-a-metal-key-next-to-a-folded-letter.png",
+      "phrase": "a metal key next to a folded letter"
+    },
+    {
+      "file": "18-a-bowl-of-lemons-on-a-tiled-counter.png",
+      "phrase": "a bowl of lemons on a tiled counter"
+    },
+    {
+      "file": "19-a-paper-lantern-above-a-dark-street.png",
+      "phrase": "a paper lantern above a dark street"
+    },
+    {
+      "file": "20-a-bluebird-perched-on-a-wire-fence.png",
+      "phrase": "a bluebird perched on a wire fence"
+    }
+  ]
+}
