@@ -95,9 +95,17 @@ def copy_many(items: list[Path], dest: Path, prefix: str) -> int:
         target = dest / f"{prefix}-{index:04d}{source.suffix.lower()}"
         try:
             shutil.copyfile(source, target)
-            written += 1
         except OSError as error:
+            # A failed copy can leave an empty or partial target. Removing it is
+            # what keeps a bad source from becoming a corpus file while the
+            # manifest still counts only the copies that succeeded.
+            try:
+                target.unlink(missing_ok=True)
+            except OSError:
+                pass
             print(f"skip {source}: {error}", file=sys.stderr)
+        else:
+            written += 1
     return written
 
 
@@ -129,9 +137,14 @@ def copy_real_images(roots: list[str], dest: Path, take: int) -> tuple[int, dict
         target = folder / f"{slug}-{written.get(slug, 0):04d}{source.suffix.lower()}"
         try:
             shutil.copyfile(source, target)
-            written[slug] = written.get(slug, 0) + 1
         except OSError as error:
+            try:
+                target.unlink(missing_ok=True)
+            except OSError:
+                pass
             print(f"skip {source}: {error}", file=sys.stderr)
+        else:
+            written[slug] = written.get(slug, 0) + 1
     return sum(written.values()), written
 
 
@@ -258,17 +271,42 @@ def main(argv: list[str]) -> int:
     generate_text(corpus / "text" / "generated", text_target - text_existing, rng)
 
     pdf_files = files_under(args.pdf_source, {".pdf"}, 5_000_000)
-    pdf_existing = copy_many(spread(pdf_files, min(len(pdf_files), 40)), corpus / "pdf" / "real", "real-pdf")
-    generate_pdfs(corpus / "pdf" / "generated", pdf_target - pdf_existing)
+    # The PDF known answer sits in generated report 7, so every run has to
+    # generate at least eight PDFs; real files may not take that room.
+    pdf_reserve = 8
+    pdf_existing = copy_many(
+        spread(pdf_files, min(len(pdf_files), 40, max(0, pdf_target - pdf_reserve))),
+        corpus / "pdf" / "real",
+        "real-pdf",
+    )
+    generate_pdfs(corpus / "pdf" / "generated", max(pdf_target - pdf_existing, pdf_reserve))
 
     docx_files = files_under(args.docx_source, {".docx"}, 5_000_000)
-    docx_existing = copy_many(spread(docx_files, min(len(docx_files), 20)), corpus / "docx" / "real", "real-docx")
-    generate_docx(corpus / "docx" / "generated", docx_target - docx_existing)
-
-    image_existing, image_sets = copy_real_images(
-        args.image_source, corpus / "images" / "real", image_target - 650
+    # The Word known answer is memo-0042.docx, so generate at least 43 memos even
+    # when a small --total would ask for fewer.
+    docx_existing = copy_many(
+        spread(docx_files, min(len(docx_files), 20, max(0, docx_target - 43))),
+        corpus / "docx" / "real",
+        "real-docx",
     )
-    generate_screenshots(corpus / "images" / "generated", image_target - image_existing)
+    generate_docx(corpus / "docx" / "generated", max(docx_target - docx_existing, 43))
+
+    # At full size leave 650 images of headroom for generated screenshots. Below
+    # that the subtraction goes negative, so a small run splits its image share
+    # instead and still copies real images. Eighteen generated screenshots are
+    # the floor that keeps screenshot-0017 (the OCR known answer) present.
+    image_generated_floor = 18
+    if image_target > 650:
+        image_real_budget = image_target - 650
+    else:
+        image_real_budget = max(0, image_target - image_generated_floor)
+    image_existing, image_sets = copy_real_images(
+        args.image_source, corpus / "images" / "real", image_real_budget
+    )
+    generate_screenshots(
+        corpus / "images" / "generated",
+        max(image_target - image_existing, image_generated_floor),
+    )
 
     counts = {
         "text": sum(1 for _ in (corpus / "text").rglob("*") if _.is_file()),

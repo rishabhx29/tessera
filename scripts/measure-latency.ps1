@@ -10,6 +10,8 @@
 #
 # The number it reports ("searched in N ms") is measured after the embedders
 # are built, so it is the search, not the model loading a fresh process pays.
+# A --describe run prints "described in N ms" instead and is reported as its own
+# sample set: it is the image-only diagnostic, not one of the fused runs.
 param(
     [Parameter(Mandatory = $true)][string]$Data,
     [string]$ModelsDir = "",
@@ -46,7 +48,9 @@ function Invoke-Search {
     $stopwatch.Stop()
     $err = if (Test-Path $errFile) { Get-Content $errFile -Raw } else { "" }
     $engineMs = $null; $keywordMs = $null; $imageMs = $null; $meaningMs = $null
+    $describeMs = $null
     if ($err -match 'searched in (\d+) ms') { $engineMs = [int]$Matches[1] }
+    if ($err -match 'described in (\d+) ms') { $describeMs = [int]$Matches[1] }
     if ($err -match 'keyword (\d+) ms') { $keywordMs = [int]$Matches[1] }
     if ($err -match 'image (\d+) ms') { $imageMs = [int]$Matches[1] }
     if ($err -match 'meaning (\d+) ms') { $meaningMs = [int]$Matches[1] }
@@ -54,6 +58,7 @@ function Invoke-Search {
     [pscustomobject]@{
         ExitCode = $process.ExitCode
         EngineMs = $engineMs
+        DescribeMs = $describeMs
         KeywordMs = $keywordMs
         ImageMs = $imageMs
         MeaningMs = $meaningMs
@@ -74,11 +79,13 @@ $queries = @(
 foreach ($query in $queries) { $null = Invoke-Search -Arguments $query }
 
 $engine = @(); $process = @(); $keyword = @(); $image = @(); $meaning = @()
+$describe = @()
 $runs = @()
 foreach ($pass in 1..$Repetitions) {
     foreach ($query in $queries) {
         $run = Invoke-Search -Arguments $query
         if ($null -ne $run.EngineMs) { $engine += [double]$run.EngineMs }
+        if ($null -ne $run.DescribeMs) { $describe += [double]$run.DescribeMs }
         if ($null -ne $run.KeywordMs) { $keyword += [double]$run.KeywordMs }
         if ($null -ne $run.ImageMs) { $image += [double]$run.ImageMs }
         if ($null -ne $run.MeaningMs) { $meaning += [double]$run.MeaningMs }
@@ -86,6 +93,7 @@ foreach ($pass in 1..$Repetitions) {
         $runs += [pscustomobject]@{
             Query = ($query -join " ")
             EngineMs = $run.EngineMs
+            DescribeMs = $run.DescribeMs
             KeywordMs = $run.KeywordMs
             ImageMs = $run.ImageMs
             MeaningMs = $run.MeaningMs
@@ -100,6 +108,8 @@ $result = [pscustomobject]@{
     Queries = ($queries | ForEach-Object { $_ -join " " })
     FusedP50Ms = Percentile $engine 50
     FusedP95Ms = Percentile $engine 95
+    DescribeP50Ms = Percentile $describe 50
+    DescribeP95Ms = Percentile $describe 95
     KeywordP50Ms = Percentile $keyword 50
     KeywordP95Ms = Percentile $keyword 95
     ImageP50Ms = Percentile $image 50
@@ -107,10 +117,11 @@ $result = [pscustomobject]@{
     MeaningP50Ms = Percentile $meaning 50
     MeaningP95Ms = Percentile $meaning 95
     Samples = $engine.Count
+    DescribeSamples = $describe.Count
     ProcessP50Ms = Percentile $process 50
     ProcessP95Ms = Percentile $process 95
     Runs = $runs
 }
 
 if ($OutJson) { $result | ConvertTo-Json -Depth 6 | Set-Content -Path $OutJson -Encoding UTF8 }
-$result | Select-Object Data, Repetitions, Samples, FusedP50Ms, FusedP95Ms, KeywordP50Ms, KeywordP95Ms, ImageP50Ms, ImageP95Ms, MeaningP50Ms, MeaningP95Ms, ProcessP50Ms, ProcessP95Ms | Format-List | Out-String
+$result | Select-Object Data, Repetitions, Samples, DescribeSamples, FusedP50Ms, FusedP95Ms, DescribeP50Ms, DescribeP95Ms, KeywordP50Ms, KeywordP95Ms, ImageP50Ms, ImageP95Ms, MeaningP50Ms, MeaningP95Ms, ProcessP50Ms, ProcessP95Ms | Format-List | Out-String

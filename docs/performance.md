@@ -1677,25 +1677,30 @@ mixed corpus indexed end to end by `tessera watch`, then the known-answer and
 latency queries against that index. Everything below comes from
 `target/release/tessera.exe` and Windows process counters; nothing is projected.
 
-**The corpus.** 5,001 files: 2,000 text (1,203 real), 701 PDF (6 real), 500 Word
-(2 real), 1,800 images (326 real). **Only 1,537 of 5,001 (31%) are real user
-files**; the rest are generated documents and screenshots. There is no 5,000-file
-real corpus on this machine, so this is the substitute, and the numbers should be
-read with that in mind: generated text is cleaner, shorter and more uniform than
-the real thing, and 1,474 of the images are rendered screenshots, which is the
-easy case for OCR. The real-image sets span wallpapers, UI screenshots, design
-references and test fixtures, 7 to 115 files each.
+**The corpus.** 5,001 files: 2,000 text (1,203 real), 701 PDF (7 `real-pdf-*`,
+one a 0-byte failed copy), 500 Word (2 real), 1,800 images (326 real). **Only
+1,538 of 5,001 (30.75%) are real user files**; the rest are generated documents
+and screenshots. There is no 5,000-file real corpus on this machine, so this is
+the substitute, and the numbers should be read with that in mind: generated text
+is cleaner, shorter and more uniform than the real thing, and 1,474 of the
+images are rendered screenshots, which is the easy case for OCR. The real-image
+sets span wallpapers, UI screenshots, design references and test fixtures, 7 to
+115 files each.
 
 **Method.** Fresh index directory; `tessera watch --schedule always`; the drain is
 the watcher's own banner line to its first `caught up` line (a 2 s poll bounds it,
 so it is if anything slightly generous). Throughput divides corpus files by drain
 seconds, so a file retried after a failure cannot inflate it. Peak memory samples
 `WorkingSet64` and `PrivateMemorySize64` every 2 s for the whole drain, which on a
-run this long is the peak, not a spot check. Latency is 5 queries × 8 repetitions
-after one warm-up, parsed from the engine's own `searched in N ms` line — measured
+run this long is the peak, not a spot check. Latency is a five-query sweep × 8
+repetitions (four fused queries plus one `--describe` diagnostic) after one
+warm-up, parsed from the engine's own `searched in N ms` line — measured
 after the embedders are built, so it is the search and not the model load a fresh
 process pays. The per-arm figures come from the same line;
 `scripts/measure-latency.ps1` reruns just that sweep against a finished index.
+`--describe` is a separate image-only path that prints `described in N ms`; its
+eight sweep runs are reported separately by the script and are not part of the
+32 fused samples below.
 Hardware: Intel Core Ultra 5 225H (14 cores), 15 GB RAM, Windows 11 build 26200,
 mains power, no build running.
 
@@ -1709,7 +1714,7 @@ mains power, no build running.
 | Peak working set / private, during the drain | **452 MB / 440 MB** |
 | Fused query, engine time | **397 ms p50 / 501 ms p95** (32 samples) |
 | — keyword arm | 49 ms / 145 ms |
-| — image arm (`--describe`) | 120 ms / 237 ms |
+| — image arm (fused runs) | 120 ms / 237 ms |
 | — meaning arm | **310 ms / 418 ms** |
 | Fused query, whole process (cold start with models) | 2,030 ms / 2,047 ms |
 | OCR, Windows | **32.9 ms p50** (21.2, 30.4, 32.9, 36.1, 39.6) |
@@ -1717,18 +1722,21 @@ mains power, no build running.
 | Known answers | 5 of 5 |
 
 **The two failures are corrupt files, not engine defects.** `real-pdf-0006.pdf` is
-0 bytes and `real-pdf-0003.pdf` is a 100 KiB truncation with no `%PDF` header;
-both are crawler artefacts in the fixture set, and both fail with `invalid file
-header`, which is the right answer. Each was retried once inside the run, which is
-why there are four failure events for two files and the outcome count is 5,003
-against a corpus of 5,001.
+0 bytes and `real-pdf-0003.pdf` is a 100 KiB truncation with no `%PDF` header.
+The 0-byte file is not a crawler artefact: `copy_many` caught a failed
+`shutil.copyfile` without removing the target it may already have created, so a
+failed copy became an empty corpus file while `copied_real.pdf` still recorded
+six successful ones. The script now removes a failed target; `real-pdf-0003` is a
+source artefact. Both fail with `invalid file header`, which is the right answer.
+Each was retried once inside the run, which is why there are four failure events
+for two files and the outcome count is 5,003 against a corpus of 5,001.
 
 **Against the targets** (product-definition §6):
 
 | Target | Result |
 |---|---|
 | Query end-to-end @ 50k items < 100 ms | **MISSED at 5,000**: 397 ms fused p50, of which the meaning arm is 310 ms |
-| Image saved → searchable < 1.5 s | Row committed in **0.98 s**; a query returning it 2.73 s, of which 1.73 s is the cold query process |
+| Image saved → searchable < 1.5 s | **MISSED on the query**: the row was committed in **0.98 s**, but a query returning it took **2.73 s** (400-file run; 1.73 s of that is the cold query process, not the save) |
 | Document saved → searchable < 300 ms | **MISSED**: 0.98 s to the row, about 3× over |
 | Idle RAM < 250 MB | 43.2 MB working set after the models are released; not re-measured at 5k, and 452 MB is the drain peak, not idle |
 | Disk per 1,000 items ~25 MB | **22.7 MB** |
@@ -1739,18 +1747,23 @@ and covered: OCR could not be called twice concurrently — the engine's workers
 collided inside `RecognizeAsync` — so the calls are now serialised; and a real
 1440×21,142 capture was refused outright for exceeding
 `OcrEngine::MaxImageDimension`, so such captures are now read in seam-safe bands
-(`f5fb429`). The second is why the tall screenshot in the known-answer set returns
-text instead of failing.
+(`f5fb429`). The known-answer OCR file is `screenshot-0017.png` (1100×760), which
+never takes the banded path; the one real tall capture,
+`docs-design-references-0000.png` (1440×21,142), is read by the bands but is not a
+known-answer query. The banding fix is real and unit-tested; this gate run does
+not prove it through a known answer.
 
 **Caveats, stated so they are not discovered later.**
 
 - One machine, one run per configuration. Throughput varied 7.3 to 8.4 files/s
   across runs of the same corpus; the slower number is quoted. Only one image in
   the corpus takes the banded OCR path, so that fix costs seconds and does not
-  explain the spread. The two latency passes agree within 2 ms (the gate run's
-  own sample set gave 398 ms p50 / 504 ms p95).
-- p50/p95 are over 5 queries × 8 repeats: p95 is effectively the near-maximum of
-  32 samples, not an estimate of a query distribution.
+  explain the spread. The two latency passes agree within 1 ms at p50 (397 vs
+  398 ms); at p95 they differ by 3 ms (501 vs 504 ms) — the gate run's own sample
+  set gave 398 ms p50 / 504 ms p95.
+- p50/p95 are over the four fused queries × 8 repeats (32 samples; the fifth
+  sweep query is the separate `--describe` diagnostic): p95 is effectively the
+  near-maximum of 32 samples, not an estimate of a query distribution.
 - 50,000 items is unmeasured. Both scan terms grow linearly with the corpus, so
   50k will be worse than the numbers above, not better.
 - Save→searchable at 5k was measured by the harness but not persisted by it; the
