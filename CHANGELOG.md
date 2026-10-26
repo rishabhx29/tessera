@@ -149,3 +149,13 @@ releases begin.
   cause — the HRESULT, the malformed header — was thrown away. The reason is
   the only diagnostic the user has (SECURITY.md: skips are recorded, never
   swallowed), so the cause now reaches it.
+- A full-page screenshot taller than the recogniser's limit is now read band by
+  band instead of failing. `Windows.Media.Ocr` refused a real 1440×21,142 capture
+  with *"Image dimensions are too large! Check MaxImageDimension"*, which put a
+  perfectly readable screenshot in the failed column with no text and no image
+  description. The adapter now splits anything over `OcrEngine::MaxImageDimension`
+  into horizontal bands, cutting at the quietest row in a half-band window so a
+  line is never severed, and recognises each band through the same serialised
+  call. Verified on the file that failed, which now yields its text; a test
+  pastes the OCR fixture into the bottom band of an over-limit canvas so a
+  reader that only sees the first band cannot pass.
