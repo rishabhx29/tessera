@@ -296,6 +296,8 @@ fn options(corpus: &Path, workers: usize) -> Options {
         power_poll: Duration::from_secs(3600),
         tick: Duration::from_millis(5),
         progress: Duration::from_secs(3600),
+        pause: None,
+        idle_priority: false,
     }
 }
 
@@ -1176,6 +1178,102 @@ fn a_sustained_store_outage_sleeps_instead_of_spinning_a_core() {
         outage_passes < 5_000,
         "the whole outage cost {outage_passes} coordinator passes; a sleeping \
          loop makes a few hundred"
+    );
+
+    shutdown.store(true, Ordering::SeqCst);
+    run.join().unwrap().unwrap();
+}
+
+#[test]
+fn the_desktop_pause_switch_holds_the_queue_without_loading_models() {
+    // The shell's pause is not the power schedule: the user asked for quiet
+    // while the machine is on AC. A paused watcher must hold the file, load no
+    // models, report why, and pick the queue back up when the switch clears.
+    let data = tempfile::tempdir().unwrap();
+    let corpus = tempfile::tempdir().unwrap();
+    std::fs::write(
+        corpus.path().join("held.txt"),
+        "an invoice held back by the pause switch",
+    )
+    .unwrap();
+
+    let gate = Gate::new();
+    let loads = Arc::new(AtomicUsize::new(0));
+    let recorder = Recorder::default();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let pause = Arc::new(AtomicBool::new(true));
+    let (_tx, rx) = mpsc::channel();
+
+    let run = {
+        let corpus = corpus.path().to_path_buf();
+        let gate = gate.clone();
+        let loads = loads.clone();
+        let recorder = recorder.clone();
+        let shutdown = shutdown.clone();
+        let pause = pause.clone();
+        std::thread::spawn(move || {
+            let mut feed = ManualFeed { rx };
+            let mut reporter = recorder;
+            let mut options = options(&corpus, 2);
+            options.pause = Some(pause);
+            run_with(
+                data.path(),
+                options,
+                Parts {
+                    models: Box::new(FakeModels::new(gate, loads)),
+                    power: Box::new(FixedPower(PowerState::Ac)),
+                    clock: Box::new(FrozenClock),
+                    events: &mut feed,
+                },
+                &shutdown,
+                &mut reporter,
+            )
+        })
+    };
+
+    assert!(
+        recorder.wait_for("paused: the desktop app asked the watcher to pause"),
+        "the pause was never reported: {:?}",
+        recorder.lines()
+    );
+    // Several passes of a 5 ms tick: a race that let one file through would
+    // have to also dodge the dispatch gate each time.
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        recorder.outcomes("indexed", "held.txt"),
+        0,
+        "a paused watcher indexed a file: {:?}",
+        recorder.lines()
+    );
+    assert_eq!(
+        loads.load(Ordering::SeqCst),
+        0,
+        "a paused watcher loaded the models (~250 MB) for work it was told to hold"
+    );
+
+    pause.store(false, Ordering::SeqCst);
+    assert!(
+        recorder.wait_for("resumed: the desktop app asked the watcher to resume"),
+        "the resume was never reported: {:?}",
+        recorder.lines()
+    );
+    assert!(
+        recorder.wait_for("held.txt"),
+        "the queued file never ran after the pause cleared: {:?}",
+        recorder.lines()
+    );
+    assert!(
+        recorder.wait_for("caught up"),
+        "the drain never completed after the pause cleared: {:?}",
+        recorder.lines()
+    );
+
+    // Pausing an idle watcher is allowed too, and says so again.
+    pause.store(true, Ordering::SeqCst);
+    assert!(
+        wait_until(|| recorder.count("paused: the desktop app") == 2),
+        "the second pause was not reported: {:?}",
+        recorder.lines()
     );
 
     shutdown.store(true, Ordering::SeqCst);

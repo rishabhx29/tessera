@@ -14,6 +14,8 @@ spike/results/
 node_modules/
 dist/
 src-tauri/target/
+# Tauri 2 regenerates these on every build.
+/crates/app/gen/
 
 # Environment
 .env

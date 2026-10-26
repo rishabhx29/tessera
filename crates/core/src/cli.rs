@@ -154,13 +154,18 @@ pub fn default_data_dir() -> Result<PathBuf> {
 
 /// Every pipeline the engine has, in the order they are offered a file.
 ///
+/// Public because it is the engine's format table, not a CLI detail: the
+/// desktop shell runs the same pipelines through the same store, and a second
+/// copy of this list would be a second answer to "which formats does Tessera
+/// index".
+///
 /// Images need an OCR engine, which is chosen rather than constructed here:
 /// the default is the platform's own engine, falling back to the cross-platform
 /// one, and `--ocr-engine` overrides both. Constructing an engine that this
 /// machine cannot run would make `tessera index` fail before it started, so the
 /// choice is resolved inside the pipeline and a missing engine shows up per file,
 /// in the diagnostics.
-fn pipelines(ocr: &OcrChoice, models: &Models) -> Result<Vec<Box<dyn Pipeline>>> {
+pub fn pipelines(ocr: &OcrChoice, models: &Models) -> Result<Vec<Box<dyn Pipeline>>> {
     // An engine the user *named* and did not get is a bug, not a preference, so
     // that stops the run. The platform default missing is not: the text formats
     // keep working and each image is recorded as failed with the reason.

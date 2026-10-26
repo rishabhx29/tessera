@@ -6,8 +6,29 @@ license.workspace = true
 description = "Tessera desktop shell (Tauri)"
 repository.workspace = true
 
+[lib]
+name = "tessera_app"
+path = "src/lib.rs"
+
 [[bin]]
 name = "tessera-app"
 path = "src/main.rs"
 
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The shell's window, tray and hotkey. `tray-icon` is opt-in in Tauri 2.
+tauri = { version = "2", features = ["tray-icon"] }
+# Native folder picker and the rebuild confirmation, both OS dialogs rather
+# than HTML ones: the webview should not be able to draw something that looks
+# like a system prompt.
+tauri-plugin-dialog = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-autostart = "2"
+tessera-core = { path = "../core" }
+
+[dev-dependencies]
+tempfile = "3.27.0"

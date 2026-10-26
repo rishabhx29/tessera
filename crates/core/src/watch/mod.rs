@@ -140,6 +140,16 @@ pub struct Options {
     /// the shutdown latency bound — caps it.
     pub tick: Duration,
     pub progress: Duration,
+    /// Pause the queue without stopping the watcher. The CLI has no switch for
+    /// this (its pause is the power schedule); the desktop shell does, and
+    /// putting it on the options keeps one answer to "may a file be dispatched"
+    /// instead of a second loop in the UI. `None` means never paused.
+    pub pause: Option<Arc<AtomicBool>>,
+    /// Lower the whole process to idle priority. True for `tessera watch`, where
+    /// the process is the watcher; false for the desktop shell, where the same
+    /// process owns the window and demoting it would make the UI yield to
+    /// everything else. Worker threads are lowered either way.
+    pub idle_priority: bool,
 }
 
 impl Default for Options {
@@ -156,7 +166,20 @@ impl Default for Options {
             power_poll: POWER_POLL,
             tick: IDLE_CAP,
             progress: PROGRESS,
+            pause: None,
+            idle_priority: true,
         }
+    }
+}
+
+impl Options {
+    /// Whether the desktop shell has asked the queue to hold. Distinct from the
+    /// power schedule on purpose: the user's switch and the machine's power
+    /// state are two different reasons for the same answer.
+    fn paused_by_app(&self) -> bool {
+        self.pause
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
     }
 }
 
@@ -290,15 +313,35 @@ pub fn run(
     data_dir: &Path,
     models: Models,
     ocr: OcrChoice,
+    options: Options,
+    shutdown: &Arc<AtomicBool>,
+) -> Result<WatchSummary> {
+    let mut reporter = Console;
+    run_with_reporter(data_dir, models, ocr, options, shutdown, &mut reporter)
+}
+
+/// Watch with the caller's reporter: the same loop as [`run`], with the lines
+/// that describe it going somewhere other than stdout.
+///
+/// The desktop shell needs the pause reason, the progress lines and the "caught
+/// up" line in its own state. Keeping one loop instead of a second one in the
+/// UI is what makes the two modes agree about what "indexed" means.
+pub fn run_with_reporter(
+    data_dir: &Path,
+    models: Models,
+    ocr: OcrChoice,
     mut options: Options,
     shutdown: &Arc<AtomicBool>,
+    reporter: &mut dyn Reporter,
 ) -> Result<WatchSummary> {
     options.roots = existing_roots(options.roots)?;
     options.workers = options.workers.clamp(1, 4);
 
     // Before any worker exists, so nothing is spawned at normal priority and
     // then demoted. Non-Windows is a documented no-op.
-    priority::idle_process_priority().context("putting the watcher at idle priority")?;
+    if options.idle_priority {
+        priority::idle_process_priority().context("putting the watcher at idle priority")?;
+    }
 
     let store = Store::open(data_dir)?;
     forget_stale_text_arm(&store, &models)?;
@@ -311,14 +354,13 @@ pub fn run(
     // Register before the initial scan: a file saved while the scan runs then
     // produces an event instead of being missed until the next rescan.
     let mut events = NotifyFeed::new(&options.roots)?;
-    let mut reporter = Console;
     let parts = Parts {
         models,
         power: Box::new(SystemPower),
         clock: Box::new(Monotonic::new()),
         events: &mut events,
     };
-    run_with(data_dir, options, parts, shutdown.as_ref(), &mut reporter)
+    run_with(data_dir, options, parts, shutdown.as_ref(), reporter)
 }
 
 /// Drop the text arm when the pin moved, before a sweep can mix two vector
@@ -530,6 +572,9 @@ struct Watcher<'a> {
     rescan_wanted: bool,
     dirty: bool,
     paused_said: bool,
+    /// The app-pause state the last pass saw, so the transition is reported
+    /// once and the models are released when the queue goes quiet.
+    app_paused_said: bool,
 
     /// Consecutive coordinator store failures, and the instant the coordinator
     /// may touch the store again. A failed call is retried after a growing
@@ -581,6 +626,7 @@ impl<'a> Watcher<'a> {
             rescan_wanted: false,
             dirty: true,
             paused_said: false,
+            app_paused_said: false,
             coordinator_failures: 0,
             retry_coordinator_at: None,
             drain_counts: IndexSummary::default(),
@@ -648,6 +694,7 @@ impl<'a> Watcher<'a> {
     /// One pass of the loop's own work. Fallible only through the store.
     fn cycle(&mut self) -> Result<()> {
         self.absorb_event(self.park())?;
+        self.sync_app_pause();
         self.poll_power();
         // Before dispatch and settle, not after: a rescan is where a *retry*
         // becomes due, and work queued after `settle` would let one iteration
@@ -710,9 +757,16 @@ impl<'a> Watcher<'a> {
             !self.in_flight.is_empty(),
             self.drain.is_some(),
             !self.backlog.is_empty(),
-            self.policy.admits() && !self.retry_drain_at.is_some_and(|at| self.clock.now() < at),
+            self.admits() && !self.retry_drain_at.is_some_and(|at| self.clock.now() < at),
             self.next_timer(),
         )
+    }
+
+    /// Whether a queued file may go to a worker right now. Two independent
+    /// reasons to say no: the power schedule, and the desktop shell's pause
+    /// switch. Both leave the file queued and the CPU asleep.
+    fn admits(&self) -> bool {
+        self.policy.admits() && !self.options.paused_by_app()
     }
 
     /// How long until the nearest timer the loop keeps for itself.
@@ -916,20 +970,53 @@ impl<'a> Watcher<'a> {
         self.sweep = None;
     }
 
+    /// Report the app's pause switch when it changes, and let the models go on
+    /// the way in. The flag is read once here and once in [`Watcher::admits`];
+    /// everything that gates dispatch goes through the second.
+    ///
+    /// A pause is exactly when idle RAM matters (product-definition §3.3), so
+    /// the ~250 MB of sessions is dropped immediately rather than held until
+    /// the next drain would have ended anyway.
+    fn sync_app_pause(&mut self) {
+        let paused = self.options.paused_by_app();
+        if paused == self.app_paused_said {
+            return;
+        }
+        self.app_paused_said = paused;
+        // The two pause sources share one "said it once" flag, so a resume here
+        // lets the schedule speak again if it is still holding the queue.
+        self.paused_said = paused;
+        if paused {
+            self.reporter
+                .line("paused: the desktop app asked the watcher to pause; files stay queued");
+            self.release_models();
+        } else {
+            self.reporter
+                .line("resumed: the desktop app asked the watcher to resume");
+        }
+    }
+
     // -- dispatch and results -------------------------------------------
 
     fn dispatch(&mut self) {
         if self.backlog.is_empty() {
             return;
         }
-        if !self.policy.admits() {
+        if !self.admits() {
             if !self.paused_said {
                 self.paused_said = true;
-                self.reporter.line(&format!(
-                    "paused: schedule is {}; {} file(s) stay queued",
-                    self.policy.schedule(),
-                    self.backlog.len()
-                ));
+                if self.options.paused_by_app() {
+                    self.reporter.line(&format!(
+                        "paused: the desktop app asked the watcher to pause; {} file(s) stay queued",
+                        self.backlog.len()
+                    ));
+                } else {
+                    self.reporter.line(&format!(
+                        "paused: schedule is {}; {} file(s) stay queued",
+                        self.policy.schedule(),
+                        self.backlog.len()
+                    ));
+                }
             }
             return;
         }

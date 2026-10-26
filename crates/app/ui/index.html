@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tessera</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app" data-view="search">
+      <aside class="rail" aria-label="Sections">
+        <div class="brand" aria-label="Tessera">
+          <span class="brand-mark" aria-hidden="true">T</span>
+          <span class="brand-name">Tessera</span>
+        </div>
+        <nav class="rail-nav">
+          <button class="rail-item" data-view="search" aria-current="page">
+            <span>Search</span><kbd>Ctrl 1</kbd>
+          </button>
+          <button class="rail-item" data-view="activity">
+            <span>Activity</span><span class="dot" id="activity-dot" hidden></span>
+          </button>
+          <button class="rail-item" data-view="settings">
+            <span>Settings</span><kbd>Ctrl 3</kbd>
+          </button>
+        </nav>
+        <div class="rail-foot">
+          <span class="engine-dot" id="engine-dot" title="Engine state"></span>
+          <span id="engine-label">checking…</span>
+        </div>
+      </aside>
+
+      <main class="main">
+        <section class="view view-search" id="view-search" aria-label="Search">
+          <form class="search-bar" id="search-form" role="search">
+            <svg viewBox="0 0 20 20" aria-hidden="true" class="search-icon">
+              <circle cx="9" cy="9" r="6"></circle>
+              <path d="M13.5 13.5 18 18"></path>
+            </svg>
+            <input
+              id="query"
+              type="search"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Search words, meaning, or what a picture shows"
+              aria-label="Search your files"
+              autofocus
+            />
+            <kbd class="search-hint" id="search-hint">Ctrl K</kbd>
+          </form>
+          <div class="notes" id="notes" role="status"></div>
+          <div class="results" id="results" role="listbox" aria-label="Results" tabindex="0"></div>
+          <div class="first-run" id="first-run" hidden>
+            <h1>Your files, findable by anything you remember.</h1>
+            <p>
+              Tessera reads the words inside screenshots, PDFs and documents, and
+              remembers what images look like. Nothing leaves this machine.
+            </p>
+            <button class="primary" id="first-run-add">Add a folder to index</button>
+          </div>
+          <div class="empty" id="empty" hidden>
+            <p id="empty-title">No matches</p>
+            <p class="dim" id="empty-hint">Try a different word, or a filter like <code>type:pdf</code>.</p>
+          </div>
+        </section>
+
+        <section class="view" id="view-activity" aria-label="Activity" hidden>
+          <header class="view-head">
+            <h1>Activity</h1>
+            <button class="ghost" id="refresh-activity">Refresh</button>
+          </header>
+          <div class="cards">
+            <article class="card" id="card-index">
+              <h2>Index</h2>
+              <dl class="facts" id="index-facts"></dl>
+              <ul class="folders" id="folders"></ul>
+            </article>
+            <article class="card" id="card-watch">
+              <h2>Watcher <span class="pill" id="watch-state">…</span></h2>
+              <p class="dim" id="watch-summary"></p>
+              <div class="row-actions">
+                <button id="watch-toggle" class="ghost">Pause indexing</button>
+              </div>
+              <pre class="log" id="watch-log" aria-live="polite"></pre>
+            </article>
+            <article class="card">
+              <h2>Failures <span class="count" id="failure-count">0</span></h2>
+              <p class="dim" id="failure-empty">Nothing has failed.</p>
+              <ul class="failures" id="failures"></ul>
+            </article>
+            <article class="card">
+              <h2>Skipped</h2>
+              <p class="dim" id="skip-empty">Nothing skipped.</p>
+              <dl class="facts" id="skip-facts"></dl>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-settings" aria-label="Settings" hidden>
+          <header class="view-head">
+            <h1>Settings</h1>
+            <button class="ghost" id="refresh-settings">Refresh</button>
+          </header>
+          <div class="cards">
+            <article class="card">
+              <h2>Folders</h2>
+              <ul class="folders" id="settings-folders"></ul>
+              <div class="row-actions">
+                <button class="primary" id="add-folder">Add folder</button>
+                <span class="dim" id="indexing-note" role="status"></span>
+              </div>
+            </article>
+            <article class="card">
+              <h2>Models</h2>
+              <p class="dim">
+                Downloaded once, verified against pinned checksums, then never
+                fetched again unless you ask.
+              </p>
+              <table class="models" id="models"></table>
+              <p class="note" id="models-note" role="status"></p>
+            </article>
+            <article class="card">
+              <h2>Startup</h2>
+              <label class="check">
+                <input type="checkbox" id="autostart" />
+                <span>Start Tessera when I sign in</span>
+              </label>
+              <p class="dim">The watcher runs at idle priority and pauses on battery.</p>
+            </article>
+            <article class="card danger">
+              <h2>Rebuild index</h2>
+              <p class="dim">
+                Deletes the index and reads every folder again. Searches are empty
+                until it finishes. Your files are never touched.
+              </p>
+              <button class="danger-button" id="rebuild">Rebuild index…</button>
+            </article>
+            <article class="card">
+              <h2>Data</h2>
+              <dl class="facts" id="data-facts"></dl>
+            </article>
+          </div>
+        </section>
+      </main>
+
+      <aside class="preview" id="preview" aria-label="Preview" hidden>
+        <header class="preview-head">
+          <div>
+            <h2 id="preview-name"></h2>
+            <p class="path" id="preview-path"></p>
+          </div>
+          <button class="ghost" id="preview-close" aria-label="Close preview">Esc</button>
+        </header>
+        <div class="preview-body" id="preview-body">
+          <div class="preview-text" id="preview-text"></div>
+        </div>
+        <footer class="preview-foot">
+          <span id="preview-meta" class="dim"></span>
+          <button class="ghost" id="reveal">Show in folder</button>
+        </footer>
+      </aside>
+    </div>
+    <div class="toast" id="toast" role="alert" hidden></div>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
