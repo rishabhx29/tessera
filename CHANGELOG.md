@@ -122,6 +122,16 @@ releases begin.
 
 ### Fixed
 
+- A sustained store outage no longer burns a core while the watcher waits it
+  out. The retry after a failed coordinator call slept for the *nearest timer*,
+  which the loop reports as zero once a timer has come due (the 30 s power poll,
+  the 60 s rescan) — and a zero wait is an immediate return, so every backoff
+  longer than the tick spun at millions of passes a second for the rest of it.
+  Measured with a table renamed away under a live watcher: 170.8 s of CPU over
+  the first 371 s before, 0.17 s of CPU in the next six minutes after, on the
+  same 1/2/4/…/60 s backoff. The wait is now the rest of the backoff capped by
+  the one-second shutdown tick, and a test asserts the loop never asks the event
+  feed for a zero wait while a retry deadline is still in the future.
 - An ONNX Runtime that will not start now names the runtime it loaded and the
   fix. A build whose pinned 1.23 `onnxruntime.dll` is not beside the executable
   binds to the older copy Windows keeps in `System32`, which does not answer the

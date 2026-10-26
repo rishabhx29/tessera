@@ -28,12 +28,12 @@ if (-not $Exe) {
 
 function Now { [Diagnostics.Stopwatch]::GetTimestamp() / [Diagnostics.Stopwatch]::Frequency }
 function Wait-Line {
-    param([string]$Path, [string]$Needle, [double]$Timeout = 180)
+    param([string]$Path, [string]$Needle, [double]$Timeout = 180, [int]$AtLeast = 1)
     $deadline = (Now) + $Timeout
     while ((Now) -lt $deadline) {
         if (Test-Path $Path) {
-            $hit = Select-String -Path $Path -Pattern ([regex]::Escape($Needle)) -ErrorAction SilentlyContinue
-            if ($hit) { return (Now) }
+            $hit = @(Select-String -Path $Path -Pattern ([regex]::Escape($Needle)) -ErrorAction SilentlyContinue)
+            if ($hit.Count -ge $AtLeast) { return (Now) }
         }
         Start-Sleep -Milliseconds 10
     }
@@ -97,7 +97,11 @@ while (-not $found -and ((Now) - $tSave) -lt 30) {
 $tSearchable = Now
 $searchLatency = $tSearchable - $tSave
 $searchWall = $tSearchable - $tSearch
-$secondCaught = Wait-Line $stdout "caught up" 60
+# Wait for the *second* "caught up": the first one is the initial drain, already
+# in the file, so matching it would return at once and time the save, not a
+# drain. A drain that has not happened is no drain at all.
+$caughtBefore = Line-Count $stdout "caught up"
+$secondCaught = Wait-Line $stdout "caught up" 60 -AtLeast ($caughtBefore + 1)
 
 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
 

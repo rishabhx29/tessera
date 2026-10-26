@@ -144,7 +144,18 @@ fn environment() -> Result<&'static ort::environment::Environment> {
         // initialize ORT API" when `GetApi(23)` comes back null, naming neither
         // the version nor the file. Catch the panic so the refusal can name the
         // runtime that actually answered.
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ort::init().build())) {
+        //
+        // The default hook prints the panic to stderr before the catch — a
+        // stack-shaped line with a registry path, which reads like a crash even
+        // though the refusal that follows explains it. Replace the hook for the
+        // duration of the probe and restore it afterwards. This relies on the
+        // panic unwinding (`panic = "abort"` would bypass `catch_unwind`), which
+        // is why the release profile must keep the default unwind strategy.
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let probed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ort::init().build()));
+        std::panic::set_hook(previous_hook);
+        match probed {
             Ok(Ok(environment)) => Ok(environment),
             Ok(Err(err)) => Err(refusal_message(
                 &format!("{err}"),

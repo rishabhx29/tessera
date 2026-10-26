@@ -27,6 +27,13 @@ impl Watch {
             .arg("--models-dir")
             .arg(models_dir)
             .arg("watch")
+            // `always`, not the default `idle-only`: this harness asserts that a
+            // drain finishes, and the default pauses on battery. A test whose
+            // result depends on the host's power source is not hermetic; the
+            // priority test above is the one place the default would matter, and
+            // it reads the class, not the schedule.
+            .arg("--schedule")
+            .arg("always")
             .arg(folder)
             .stdout(Stdio::piped())
             // Drained, not read: a full stderr pipe would block the child.

@@ -1610,3 +1610,45 @@ difference is clock resolution, not behaviour; both mean "well under a
 millisecond of CPU per second", which is what "not spinning" looks like from
 outside. The drain figure likewise varies a few percent run to run (a concurrent
 build put one run at 7.4 s), so 5.5 s is the figure for a quiet machine.
+
+### A store outage is waited out, not spun through
+
+`tessera watch` survives a store that refuses writes — a concurrent `tessera
+index`, a backup tool, a WAL checkpoint — by reporting the failure, owing a
+rescan and retrying on a backoff that doubles from 1 s to 60 s. The first version
+of that wait cost a core, and the number belongs here because the log looked
+idle while it happened: one line a minute, and 44% of a processor underneath it.
+
+**Provenance: measured, reproducible from outside the process.** A second SQLite
+connection renames the `files` table away from one live watcher (`--schedule
+always`, a three-file corpus in `%TEMP%`) and leaves it renamed;
+`Process.TotalProcessorTime` is sampled every 10 s. The probe is the QA round-3
+script, kept in local working state at
+`.scratch/tessera-v0.1/reviews/evidence/qa3-d2-resilience.ps1`; it writes only to
+a temp directory.
+
+| Into the sustained outage | CPU before the fix | CPU after |
+|---|---|---|
+| 10 s | 7.6 s | 9.0 s (of which ~4.1 s is the phase-1 recovery, not the wait) |
+| 371 s | 170.8 s | 9.2 s |
+| 668 s, a run that was not stopped | 296.6 s — 44% of one core | — |
+
+Between the 10 s and 370 s samples the fixed run spends **0.17 s of CPU in six
+minutes** — about 0.05% of a core, which is the rescan the backoff owes, not the
+wait. Over the whole 841 s outage it spent 0.33 s, and it then ended by itself at
+the twentieth consecutive failure (851 s in), naming the error, exactly as the
+cap says it should. The retry lines are identical before and after (1, 2, 4, 8,
+16, 32, then 60 s each, one per retry): the backoff was never the cost.
+
+The mechanism was the wait, and only once a timer came due inside it. The
+coordinator's loop sleeps until the nearest of its own timers — the 60 s rescan,
+the 30 s power poll, a retry deadline — and reports an already-due timer as zero,
+which for a working pass means "do not sleep, this pass has work to do". The
+outage wait reused that answer, but the pass that waits runs no timer at all, so
+from the moment the 30 s poll came due inside a backoff the "wait" was zero: a
+tight loop, at millions of passes a second, until the retry deadline. Phase 1 of
+the probe (a three-second outage) never lasted long enough to show it; only a
+backoff longer than 30 s did. It is fixed by waiting for the rest of the backoff,
+capped by the one-second shutdown tick, and a test now asserts that the loop
+never asks the event feed for a zero wait while a retry deadline is still ahead.
+

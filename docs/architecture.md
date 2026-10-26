@@ -288,6 +288,18 @@ overflow (which drops events by design) is treated as a full rescan, and each
 root is re-walked every 60 s regardless — a missed event costs at most one
 interval, which is what makes the mode work on network shares too.
 
+The coordinator's own store calls can fail while the store is shared with another
+`tessera index`, a backup tool or a WAL checkpoint. A failure is reported, a
+rescan is owed, and the call is retried on a backoff that doubles from one second
+to a minute; twenty consecutive failures stop the run, because that is not
+transient. While it waits, the coordinator sleeps on the event feed for the rest
+of the backoff, capped by the one-second shutdown tick — *not* for the "nearest
+timer" it uses when working. That answer reports an already due timer (the power
+poll, a rescan) as zero, and the waiting pass runs neither, so a zero there is an
+immediate return: a spin rather than a wait. An event delivered during the outage
+is read and dropped on purpose — nothing can be recorded, and the rescan every
+failure owes is what finds whatever it announced.
+
 Three platform facts sit behind traits, because each is a per-OS answer with no
 portable API and none of them can be conjured up in a test: the event feed, the
 power source and the process priority. On Windows the process runs in

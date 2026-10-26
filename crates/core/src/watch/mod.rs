@@ -479,6 +479,20 @@ fn coordinator_backoff(failures: u32) -> Duration {
     (COORDINATOR_BACKOFF * (1 << doublings)).min(COORDINATOR_BACKOFF_CAP)
 }
 
+/// How long the coordinator sleeps when a store call failed and its retry
+/// deadline has not passed: the rest of the backoff, capped at `tick` so a stop
+/// request is still noticed within it.
+///
+/// Deliberately *not* `next_timer`. That returns `ZERO` for a timer that is
+/// already due — the right answer for `park`, which means "do not sleep, this
+/// pass has work to do", and the wrong answer here: a pass that is waiting out
+/// an outage services no timer at all (the power poll, the rescan), so a zero
+/// wait is an immediate return and the loop spins for the whole backoff. A due
+/// timer must not be able to shorten this wait.
+fn outage_wait(tick: Duration, now: Duration, retry_at: Duration) -> Duration {
+    retry_at.saturating_sub(now).min(tick)
+}
+
 /// The coordinator.
 struct Watcher<'a> {
     options: Options,
@@ -602,11 +616,23 @@ impl<'a> Watcher<'a> {
             let now = self.clock.now();
             if now < at {
                 // Nothing the coordinator could do this pass: a store call
-                // failed and its retry deadline has not passed. Wait it out on
-                // the event feed — a delivered event is read and dropped, which
-                // is safe because the failure already owes a rescan — instead of
-                // hammering a store that is refusing writes.
-                let wait = (at - now).min(self.idle_wait());
+                // failed and its retry deadline has not passed. Sleep until that
+                // deadline — or until an event arrives — instead of hammering a
+                // store that is refusing writes.
+                //
+                // The wait is capped by `tick`, never by `next_timer`: a due
+                // timer is reported there as `ZERO` ("do not sleep, work now"),
+                // and this pass deliberately services none of them, so a zero
+                // here would be an immediate return and the loop would spin at
+                // full speed for the rest of the backoff. That is what turned a
+                // 60 s wait into ~30 s of a burnt core, once per retry.
+                let wait = outage_wait(self.options.tick, now, at);
+                // An event delivered during the outage is read and dropped on
+                // purpose: nothing can be recorded, so queueing it would only
+                // grow a list the store could not absorb. The failure already
+                // owes a rescan, and every failed pass re-arms it, so a save that
+                // lands while the store is refusing is found by the walk that
+                // follows recovery.
                 let _ = self.events.next(wait);
                 return Ok(true);
             }
@@ -674,6 +700,10 @@ impl<'a> Watcher<'a> {
     /// — never longer than [`Options::tick`]. A held queue must sleep, not spin:
     /// a paused watcher burning a core is the exact opposite of the idle
     /// priority this mode exists to promise.
+    ///
+    /// A timer reported as due (`ZERO`) is safe *here* because the pass that
+    /// parks also runs it, in the same iteration. [`outage_wait`] is the one
+    /// wait that cannot rely on that.
     fn park(&self) -> Duration {
         park(
             self.options.tick,
@@ -685,13 +715,12 @@ impl<'a> Watcher<'a> {
         )
     }
 
-    /// The longest wait a pass may sleep for without a file event: the nearest
-    /// of the timers the loop honours. `tick` caps it in [`park`].
-    fn idle_wait(&self) -> Duration {
-        self.next_timer().min(self.options.tick)
-    }
-
-    /// Time until the nearest deadline the coordinator keeps for itself.
+    /// How long until the nearest timer the loop keeps for itself.
+    ///
+    /// `ZERO` means "a timer is due *now*", not "the loop may be idle": the pass
+    /// that sees it services the timer in the same iteration. It is therefore a
+    /// sleep duration only for a pass that will run those timers — see
+    /// [`outage_wait`] for the pass that does not.
     fn next_timer(&self) -> Duration {
         let now = self.clock.now();
         // `None` means "has never run", so it is due now rather than later.
@@ -825,12 +854,18 @@ impl<'a> Watcher<'a> {
             };
             let state = self.store.file_state(path)?;
             if !index::needs_work(state.as_ref(), &facts, now) {
-                if count_unchanged {
-                    if state.is_some_and(|state| state.extracted) {
+                // `deferred` is counted by every walk, not only the first: the
+                // stop line reads it as "waiting to retry now", and a startup
+                // snapshot would be stale after a retry succeeded (or missed a
+                // file that started failing later). `unchanged` stays a
+                // first-scan figure — it is about what the run found, not what
+                // is true at the end.
+                if state.is_some_and(|state| state.extracted) {
+                    if count_unchanged {
                         self.stats.unchanged += 1;
-                    } else {
-                        self.stats.deferred += 1;
                     }
+                } else {
+                    self.stats.deferred += 1;
                 }
                 continue;
             }
@@ -1166,6 +1201,9 @@ impl<'a> Watcher<'a> {
         self.rescan_wanted = false;
         self.last_rescan = now;
         let roots = self.options.roots.clone();
+        // This walk is the live answer to "how many files are waiting to retry",
+        // so start it from zero rather than adding to the last snapshot.
+        self.stats.deferred = 0;
         for root in &roots {
             self.scan_root(root, false)?;
         }

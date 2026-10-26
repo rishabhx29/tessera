@@ -82,6 +82,41 @@ impl EventFeed for ManualFeed {
     }
 }
 
+/// A feed that remembers how long every wait asked for.
+///
+/// The loop's wait *is* its CPU cost: a pass that asks the feed for five
+/// milliseconds sleeps, and a pass that asks for nothing returns at once. That
+/// is how a test can tell a sleeping watcher from a spinning one without
+/// measuring a core, and it is the difference the sustained-outage test pins.
+struct RecordingFeed {
+    rx: Receiver<WatchEvent>,
+    waits: Arc<Mutex<Vec<Duration>>>,
+}
+
+impl RecordingFeed {
+    fn new(rx: Receiver<WatchEvent>) -> (Self, Arc<Mutex<Vec<Duration>>>) {
+        let waits = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                rx,
+                waits: waits.clone(),
+            },
+            waits,
+        )
+    }
+}
+
+impl EventFeed for RecordingFeed {
+    fn next(&mut self, timeout: Duration) -> Result<Option<WatchEvent>> {
+        self.waits.lock().unwrap().push(timeout);
+        match self.rx.recv_timeout(timeout) {
+            Ok(event) => Ok(Some(event)),
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Ok(None),
+        }
+    }
+}
+
 /// Blocks the files whose names contain "slow" until the test releases it: a
 /// stand-in for a 950 ms OCR of a deep backlog.
 struct Gate {
@@ -288,6 +323,35 @@ fn a_held_queue_parks_on_the_nearest_timer_instead_of_spinning_a_core() {
     // Something owed but not dispatchable — paused, or backing off a drain that
     // would not load. The queue stays; the CPU rests.
     assert_eq!(park(cap, false, false, true, false, timer), cap);
+}
+
+#[test]
+fn an_outage_wait_is_never_shortened_by_a_timer_that_is_already_due() {
+    // D2 regression: the wait that covers a store outage used the same
+    // "nearest timer" answer as `park`, where a *due* timer means "do not
+    // sleep, work now". The waiting pass services no timer, so that answer made
+    // the wait zero and the loop spun for the rest of the backoff. Here a due
+    // power poll (the loop's own timer, deliberately not run while waiting)
+    // must not be able to shorten the wait at all.
+    let cap = Duration::from_secs(1);
+    let deadline = Duration::from_secs(60);
+    assert_eq!(outage_wait(cap, Duration::ZERO, deadline), cap);
+    assert_eq!(
+        outage_wait(cap, Duration::from_secs(30), deadline),
+        cap,
+        "the second half of a capped backoff, where the power poll has come due"
+    );
+    // A deadline nearer than the tick is slept to exactly, not overslept.
+    assert_eq!(
+        outage_wait(cap, Duration::ZERO, Duration::from_millis(100)),
+        Duration::from_millis(100)
+    );
+    // A deadline that has passed is no wait at all: the caller runs the cycle.
+    assert_eq!(outage_wait(cap, deadline, deadline), Duration::ZERO);
+    assert_eq!(
+        outage_wait(cap, deadline + Duration::from_secs(5), deadline),
+        Duration::ZERO
+    );
 }
 
 #[test]
@@ -916,6 +980,202 @@ fn a_transient_store_error_backs_off_instead_of_ending_the_run() {
         recorder.count("could not be updated"),
         1,
         "one injected failure, one report"
+    );
+
+    shutdown.store(true, Ordering::SeqCst);
+    run.join().unwrap().unwrap();
+}
+
+/// The wait the last `could not be updated` line announced, in seconds.
+fn announced_delay(recorder: &Recorder) -> f64 {
+    let line = recorder
+        .lines()
+        .into_iter()
+        .rev()
+        .find(|line| line.contains("retrying in "))
+        .expect("a failure line with a delay");
+    line.rsplit("retrying in ")
+        .next()
+        .unwrap()
+        .trim_end_matches(" s")
+        .parse()
+        .expect("the announced delay is a number of seconds")
+}
+
+#[test]
+fn a_sustained_store_outage_sleeps_instead_of_spinning_a_core() {
+    // The regression the QA probe found: phase 1 (a three-second outage) cost
+    // nothing, phase 2 (a sustained one, with work queued) burnt 44% of a core
+    // for as long as it ran while the log showed one line a minute. The
+    // mechanism is the *outage wait*, not the retry count: it was
+    // `min(retry deadline, next_timer)`, and `next_timer` reports an already due
+    // timer — here the power poll, which the waiting pass never runs — as
+    // `ZERO`. A zero wait is an immediate return, so the loop spun at millions
+    // of passes a second for the rest of the backoff, and the second half of
+    // every capped backoff was a burnt core.
+    //
+    // This pins the wait, not just survival: the whole outage runs on a test
+    // clock, and the feed records what the loop asked for. A sleeping loop asks
+    // for its tick and gets it; a spinning one asks for nothing, so the pass
+    // count explodes in the same real time.
+    let data = tempfile::tempdir().unwrap();
+    let corpus = tempfile::tempdir().unwrap();
+    let data_dir = data.path().to_path_buf();
+    let clock = TestClock::new();
+    let loads = Arc::new(AtomicUsize::new(0));
+    let recorder = Recorder::default();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+    let (feed, waits) = RecordingFeed::new(rx);
+
+    let run = {
+        let corpus = corpus.path().to_path_buf();
+        let clock = clock.clone();
+        let loads = loads.clone();
+        let recorder = recorder.clone();
+        let shutdown = shutdown.clone();
+        let data_dir = data_dir.clone();
+        std::thread::spawn(move || {
+            let mut feed = feed;
+            let mut reporter = recorder;
+            let mut watch_options = options(&corpus, 1);
+            // Thirty seconds is the production power poll, and the timer that
+            // came due inside a capped backoff in the real run.
+            watch_options.power_poll = Duration::from_secs(30);
+            run_with(
+                &data_dir,
+                watch_options,
+                Parts {
+                    models: Box::new(FakeModels::new(Gate::new(), loads)),
+                    power: Box::new(FixedPower(PowerState::Ac)),
+                    clock: Box::new(clock),
+                    events: &mut feed,
+                },
+                &shutdown,
+                &mut reporter,
+            )
+        })
+    };
+
+    assert!(recorder.wait_for("0 file(s) need indexing"));
+    let quiet = waits.lock().unwrap().len();
+
+    // The store breaks from outside the process, exactly as the QA probe broke
+    // it: a second connection renames the table every coordinator call reads.
+    let intruder = {
+        use rusqlite::Connection;
+        let conn = Connection::open(data_dir.join("index.sqlite")).unwrap();
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        conn
+    };
+    intruder
+        .execute_batch("ALTER TABLE files RENAME TO files_hidden")
+        .unwrap();
+
+    // Work queued behind the failure: the event cannot be admitted while the
+    // store refuses, so the rescan the failure owes is what recovers it.
+    let queued = corpus.path().join("queued-during-outage.txt");
+    std::fs::write(&queued, "the invoice written while the store was gone").unwrap();
+    tx.send(WatchEvent {
+        paths: vec![queued.clone()],
+        rescan: false,
+    })
+    .unwrap();
+    assert!(
+        recorder.wait_for("could not be updated"),
+        "the broken store was never noticed: {:?}",
+        recorder.lines()
+    );
+
+    // Walk the backoff to its cap. Each announced delay is what the loop is
+    // waiting for, so the clock moves past it — twice the delay plus a second,
+    // so an advance cannot land in the instant between the line being printed
+    // and the deadline being set from the same clock. One jump crosses one
+    // deadline, so the recorded sequence is exactly the delays the loop chose.
+    let mut delays = vec![announced_delay(&recorder)];
+    while *delays.last().unwrap() < COORDINATOR_BACKOFF_CAP.as_secs_f64() {
+        let announced = *delays.last().unwrap();
+        clock.advance(Duration::from_secs(announced as u64 * 2 + 1));
+        assert!(
+            recorder.wait_for_count("could not be updated", delays.len() + 1),
+            "the backoff stopped retrying: {:?}",
+            recorder.lines()
+        );
+        delays.push(announced_delay(&recorder));
+    }
+    assert_eq!(
+        delays,
+        vec![1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0],
+        "a sustained outage must still back off to the cap, not give up early"
+    );
+
+    // A capped backoff is sixty seconds and the power poll is thirty, so the
+    // second half of the wait is where the old code spun: the poll had come due
+    // and the waiting pass never ran it.
+    let before_sample = waits.lock().unwrap().len();
+    clock.advance(Duration::from_secs(30));
+    std::thread::sleep(Duration::from_millis(150));
+    let sample = waits.lock().unwrap()[before_sample..].to_vec();
+    assert!(
+        !sample.is_empty(),
+        "the loop stopped looking at the event feed during the outage; it is \
+         not waiting for anything"
+    );
+    assert!(
+        sample.iter().all(|wait| !wait.is_zero()),
+        "a zero wait while the retry deadline is still in the future: the \
+         waiting pass asked the feed not to block, which is a spin. Waits: {:?}",
+        &sample[..sample.len().min(20)]
+    );
+    assert!(
+        sample.len() < 1_000,
+        "the loop passed over the outage {} times in 150 ms of a 5 ms tick: it \
+         is spinning a core instead of sleeping until the retry",
+        sample.len()
+    );
+
+    // A save that lands while the store is refusing is absorbed by the waiting
+    // pass on purpose: nothing can be recorded, so queueing it would only grow a
+    // list the store cannot absorb. Every failure re-arms the rescan, so it must
+    // not be lost.
+    let during = corpus.path().join("saved-during-outage.txt");
+    std::fs::write(&during, "another invoice, written during the outage").unwrap();
+    tx.send(WatchEvent {
+        paths: vec![during.clone()],
+        rescan: false,
+    })
+    .unwrap();
+    // Let the waiting pass take it before the store comes back.
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(
+        !run.is_finished(),
+        "the watcher gave up during a capped outage"
+    );
+
+    // Recovery: the table returns, the retry deadline passes, and the owed walk
+    // finds both files — the announced one and the one saved mid-outage.
+    intruder
+        .execute_batch("ALTER TABLE files_hidden RENAME TO files")
+        .unwrap();
+    clock.advance(Duration::from_secs(61));
+    assert!(
+        wait_until(|| {
+            recorder.outcomes("indexed", "queued-during-outage.txt") >= 1
+                && recorder.outcomes("indexed", "saved-during-outage.txt") >= 1
+        }),
+        "work queued during the outage was lost: {:?}",
+        recorder.lines()
+    );
+    assert_eq!(
+        loads.load(Ordering::SeqCst),
+        1,
+        "recovering one outage must cost one model load, not one per retry"
+    );
+    let outage_passes = waits.lock().unwrap().len() - quiet;
+    assert!(
+        outage_passes < 5_000,
+        "the whole outage cost {outage_passes} coordinator passes; a sleeping \
+         loop makes a few hundred"
     );
 
     shutdown.store(true, Ordering::SeqCst);
