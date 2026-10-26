@@ -30,6 +30,17 @@ use windows::Graphics::Imaging::{
 
 use super::{lines_into_text, OcrEngine};
 
+/// Blank rows added above and below every band before recognition.
+///
+/// Windows OCR silently drops a line that touches the bottom of the crop.
+/// `band_rows` cuts at the first quiet row, so without a margin the last line
+/// above a cut has zero blank rows inside the band — the round-5 seam repro
+/// read 2 of 5 lines and recovered the lost ones with 40–60 px of padding.
+/// 64 px is just above that and about two line heights at the gate's capture
+/// scale. The band-content limit shrinks by twice this, so a padded band still
+/// fits `OcrEngine::MaxImageDimension`.
+const BAND_MARGIN: u32 = 64;
+
 /// Windows' own text recogniser.
 pub struct WindowsOcr {
     engine: windows::Media::Ocr::OcrEngine,
@@ -155,9 +166,13 @@ impl WindowsOcr {
             );
         }
         let bands = band_rows(&pixels, max);
+        // Padding is only needed where there is a cut. A single band is the
+        // whole (possibly width-scaled) image, which is already inside the
+        // recogniser's limit; adding rows could push it back over.
+        let margin = if bands.len() > 1 { band_margin(max) } else { 0 };
         let mut lines = Vec::new();
         for (top, bottom) in bands {
-            let bitmap = band_bitmap(&pixels, top, bottom)?;
+            let bitmap = band_bitmap(&pixels, top, bottom, margin)?;
             lines.extend(self.read_bitmap(&bitmap, path)?);
         }
         Ok(lines)
@@ -205,19 +220,35 @@ fn software_bitmap(decoder: &BitmapDecoder, path: &Path) -> Result<SoftwareBitma
 
 /// One band as a WinRT bitmap, built straight into the pixel format the
 /// recogniser wants. Opaque, because the recogniser only reads the text.
-fn band_bitmap(pixels: &image::RgbImage, top: u32, bottom: u32) -> Result<SoftwareBitmap> {
+///
+/// `margin` blank rows are added above and below the band's content. The band
+/// content never exceeds `max - 2 * band_margin(max)`, so the padded bitmap is
+/// still within the recogniser's limit.
+fn band_bitmap(
+    pixels: &image::RgbImage,
+    top: u32,
+    bottom: u32,
+    margin: u32,
+) -> Result<SoftwareBitmap> {
     use windows::Storage::Streams::DataWriter;
 
     let width = pixels.width();
-    let height = bottom - top;
+    let height = bottom - top + 2 * margin;
     let raw = pixels.as_raw();
     let mut bgra = Vec::with_capacity(width as usize * height as usize * 4);
+    let blank_row = vec![0xFFu8; width as usize * 4];
+    for _ in 0..margin {
+        bgra.extend_from_slice(&blank_row);
+    }
     for y in top..bottom {
         let row = &raw[y as usize * width as usize * 3..];
         for x in 0..width as usize {
             let rgb = &row[x * 3..x * 3 + 3];
             bgra.extend_from_slice(&[rgb[2], rgb[1], rgb[0], 0xFF]);
         }
+    }
+    for _ in 0..margin {
+        bgra.extend_from_slice(&blank_row);
     }
 
     let writer = DataWriter::new().context("preparing a recognised band")?;
@@ -252,13 +283,17 @@ fn band_rows(pixels: &image::RgbImage, max: u32) -> Vec<(u32, u32)> {
     if height <= max {
         return vec![(0, height)];
     }
+    // Room for the blank margin on both sides of a recognised band. It is
+    // derived from `max` so a tiny limit cannot make the padded band illegal.
+    let margin = band_margin(max);
+    let content = max - 2 * margin;
     let mut bands = Vec::new();
     let mut top = 0;
-    while height - top > max {
+    while height - top > content {
         // Half a band is the floor: it bounds the number of bands and
         // guarantees the loop makes progress even on a fully inked image.
-        let floor = top + max / 2 + 1;
-        let ideal = top + max;
+        let floor = top + content / 2 + 1;
+        let ideal = top + content;
         let mut cut = ideal;
         let mut best = u32::MAX;
         for y in floor..=ideal {
@@ -273,6 +308,11 @@ fn band_rows(pixels: &image::RgbImage, max: u32) -> Vec<(u32, u32)> {
     }
     bands.push((top, height));
     bands
+}
+
+/// The largest blank margin that still leaves a band one row of content.
+fn band_margin(max: u32) -> u32 {
+    ((max.saturating_sub(1)) / 2).min(BAND_MARGIN)
 }
 
 /// How many colour changes a row has. A blank row scores zero, a line of text
@@ -513,6 +553,111 @@ mod tests {
                 "band {top}..{bottom} is over the limit"
             );
         }
+    }
+
+    /// The rows of `image` that hold ink, outside the fixture's border.
+    fn ink_rows(image: &image::RgbImage) -> Vec<(u32, u32)> {
+        let mut runs = Vec::new();
+        let mut current: Option<u32> = None;
+        for y in 0..image.height() {
+            let inked = (30..image.width().saturating_sub(30)).any(|x| {
+                let pixel = image.get_pixel(x, y);
+                pixel[0] < 128 && pixel[1] < 128 && pixel[2] < 128
+            });
+            match (inked, current) {
+                (true, None) => current = Some(y),
+                (false, Some(top)) => {
+                    runs.push((top, y - 1));
+                    current = None;
+                }
+                _ => {}
+            }
+        }
+        if let Some(top) = current {
+            runs.push((top, image.height() - 1));
+        }
+        runs
+    }
+
+    /// A line that ends on the row immediately before a band's cut must still
+    /// be read.
+    ///
+    /// This is the round-5 seam defect: `band_bitmap`'s bottom is exclusive, so
+    /// the first quiet row becomes the cut and the line above it has zero blank
+    /// rows inside the crop. Windows OCR silently drops a line touching its
+    /// bottom edge, and the old geometric seam test could not see it because it
+    /// never recognised a band. Here the fixture's last text line is placed so
+    /// its final inked row is exactly `cut - 1`; the assertion is on recovered
+    /// text, not on where the cut landed.
+    #[test]
+    fn a_line_flush_to_a_band_cut_is_still_read() {
+        let Ok(engine) = WindowsOcr::new() else {
+            eprintln!("skipping: no Windows OCR language pack on this machine");
+            return;
+        };
+        let Some(max) = image_limit() else {
+            eprintln!("skipping: this Windows will not report its OCR image limit");
+            return;
+        };
+        if !(400..=20_000).contains(&max) {
+            eprintln!("skipping: a {max}-pixel limit is not a useful banding fixture");
+            return;
+        }
+
+        let fixture = image::open(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ocr-sample.png"),
+        )
+        .expect("the fixture is readable")
+        .into_rgb8();
+        let (line_top, line_bottom) = *ink_rows(&fixture)
+            .last()
+            .expect("the fixture has a last line of text");
+        // The text only, with the border and the lines above it left behind.
+        let line = image::imageops::crop_imm(
+            &fixture,
+            30,
+            line_top,
+            fixture.width() - 60,
+            line_bottom - line_top + 1,
+        )
+        .to_image();
+
+        // The first cut is the first quiet row in `[floor, top + content]`.
+        // With nothing but this line inked, that is `floor`. Placing the line's
+        // last row at `floor - 1` makes it flush with the band's exclusive
+        // bottom; the padding is what gives it a blank row inside the band.
+        let content = max - 2 * band_margin(max);
+        let cut = content / 2 + 1;
+        let height = max * 2 + 200;
+        let mut tall =
+            image::RgbImage::from_pixel(fixture.width(), height, image::Rgb([255, 255, 255]));
+        let paste_top = cut - line.height();
+        image::imageops::replace(&mut tall, &line, 30, i64::from(paste_top));
+
+        let bands = band_rows(&tall, max);
+        assert_eq!(
+            bands[0],
+            (0, cut),
+            "the fixture must exercise the first cut: {bands:?}"
+        );
+        assert!(
+            transitions(&tall, cut - 1) > 0,
+            "the line must end on the row before the cut"
+        );
+        assert_eq!(transitions(&tall, cut), 0, "the cut row itself is blank");
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("flush.png");
+        tall.save(&path).expect("the tall capture is writable");
+
+        let text = engine
+            .recognize(&path)
+            .expect("a capture over the recogniser's limit must still be read")
+            .to_lowercase();
+        assert!(
+            text.contains("issued"),
+            "the line flush to the cut at row {cut} was dropped: {text:?}"
+        );
     }
 
     #[test]
