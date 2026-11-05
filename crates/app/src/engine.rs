@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
-use tessera_core::cli::{image_embedder, text_embedder};
+use tessera_core::cli::{image_query_embedder, text_embedder, text_query_embedder};
 use tessera_core::fusion::{parse_query, search as fused_search};
 use tessera_core::index::{index_folder, index_folder_with_text, IndexSummary};
 use tessera_core::models::Models;
@@ -246,8 +246,9 @@ impl AppService {
         }
         let models = Models::open(&self.models_dir).map_err(|err| format!("{err:#}"))?;
         let embedders = SearchEmbedders {
-            image: image_embedder(&models).map(|embedder| -> Arc<dyn QueryEmbedder> { embedder }),
-            text: text_embedder(&models)
+            image: image_query_embedder(&models)
+                .map(|embedder| -> Arc<dyn QueryEmbedder> { embedder }),
+            text: text_query_embedder(&models)
                 .map(|embedder| -> Arc<dyn TextEmbedder> { Arc::new(embedder) }),
         };
         #[cfg(test)]

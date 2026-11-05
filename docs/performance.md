@@ -1672,6 +1672,11 @@ never asks the event feed for a zero wait while a retry deadline is still ahead.
 
 ## The 5,000-file milestone gate — measured (ticket 12)
 
+> Superseded on 2026-11-05 by **the re-measured table at the end of this file**
+> ("The 5,000-file gate latency re-measured after ticket 15"), which uses the
+> same corpus shape and hardware with the query-latency fixes in. The numbers
+> below are kept exactly as they were measured, for provenance.
+
 **What was run.** The week 2–3 exit criterion (product-definition §5): a 5,001-file
 mixed corpus indexed end to end by `tessera watch`, then the known-answer and
 latency queries against that index. Everything below comes from
@@ -1764,8 +1769,9 @@ not prove it through a known answer.
 - p50/p95 are over the four fused queries × 8 repeats (32 samples; the fifth
   sweep query is the separate `--describe` diagnostic): p95 is effectively the
   near-maximum of 32 samples, not an estimate of a query distribution.
-- 50,000 items is unmeasured. Both scan terms grow linearly with the corpus, so
-  50k will be worse than the numbers above, not better.
+- 50,000 items was unmeasured at the time of this run; it has now been
+  measured — see the ticket-15 section below. Both scan terms grow linearly
+  with the corpus, and 50k is indeed worse: 457 ms p50 (missed against §6).
 - Save→searchable at 5k was measured by the harness but not persisted by it; the
   row quoted is the 400-file `scripts/measure-watch.ps1` run below. The gate
   harness now records both save figures in its JSON, so the next run will carry
@@ -1773,6 +1779,152 @@ not prove it through a known answer.
 - The 31%-real corpus is the largest honesty gap here: a genuinely personal
   5,000-file folder is mostly PDFs, office documents and photos, and photos are
   the hard OCR case, not rendered screenshots.
+
+## The 5,000-file gate latency re-measured after ticket 15 — 2026-11-05
+
+**What was run.** The same gate corpus generator output as the ticket-12 gate
+(`scripts/make-gate-corpus.py --total 5000`), indexed by `tessera watch` into a
+fresh index: **5,000 files, 17,807 chunks, 1,800 images, 0 failed**. The
+earlier gate's "5,001" tally counted the two corrupt fixture PDFs retried
+inside the run; the corpus itself is the same five thousand files. This index
+was migrated in place to schema **v7** (`files.text_chars` and its backfill)
+the first time the new binary opened it — no re-index was needed, which is
+what an existing user's upgrade will look like.
+
+Latency: `scripts/measure-latency.ps1 -Data $env:TEMP\tessera-gate15\index`,
+the gate's five-query sweep × 8 repetitions (32 samples for fused; the fifth
+query is the separate `--describe` diagnostic), with the gate queries
+unchanged — `northwind ledger reconciliation`, `Zephyrine codicil`, `invoice
+supplier portal`, `quarterly operations report` — against
+`target/release/tessera.exe` and the installed model set (`--models-dir`,
+passed the way the harness passes it), models verified before the engine
+timer starts. Machine: Intel Core Ultra 5 225H (14 logical processors), 15 GB
+RAM, Windows 11 build 26200, mains power, no build running. Known answers
+re-queried on this index with the fixed build: `report-0007.pdf`,
+`memo-0042.docx` and `screenshot-0017.png` all return first, as at the gate.
+
+| What | Gate (ticket 12) | Re-measured |
+|---|---|---|
+| Fused query, engine time | **397 ms p50 / 501 ms p95** | **65 ms p50 / 80 ms p95** |
+| — keyword arm | 49 / 145 | **17 / 58** |
+| — image arm (fused runs) | 120 / 237 | **36 / 46** |
+| — meaning arm | **310 / 418** | **44 / 60** |
+| `--describe`, the image-only diagnostic (8 runs) | (reported separately) | 29 / 32 |
+| Fused query, whole process (models built) | 2,030 / 2,047 | 2,025 / 2,038 |
+
+**Where the milliseconds were, and what moved them.** The stage figures come
+from `crates/core/tests/query_latency.rs` (release, fixed query vector, no
+ONNX — it measures the scan, not the model) against this very index:
+
+| Stage | Before | After |
+|---|---|---|
+| Decode 17,807 vectors into `Vec<f32>`s for ranking | 96 ms (cold) / 40 ms (warm) | **~30 ms**: one prepared statement, borrowed blobs (`get_ref`), dot product in place |
+| Tile → file collapse | **~59–149 ms**: 17,807 rows sorted by score, then 18 batched `IN` queries of 1,000 ids | gone: rows stream in file order (`tiles_file_seq` covering index), per-file best kept, only ~5,000 files sorted |
+| Evidence pass — `SUM(LENGTH(text))` over every tile | **60.8 ms** | **2.5 ms**: stored `files.text_chars`, written where tiles are written |
+| Arm-empty check — `COUNT(*)` over both vector tables | **~26 ms** (one bit, paid on every query) | **<2 ms**: `EXISTS` probes |
+| `Store::open` × 4 per query | 0.8 ms | 0.8 ms |
+
+**Threads, not just code.** The query-time ONNX sessions (SigLIP and MiniLM)
+ran on eight intra-op threads each and starved each other. The query-side
+sessions now run on two (indexing keeps its own eight); in-process, the fused
+query went from 172 ms p50 (both sessions at 4 threads) to **130 ms p50**, and
+one thread is worse again (154 ms) — the regression at 1, and the gate at 8,
+bracket the sweet spot. The table above is the end-to-end result of these
+fixes: 397 → **65 ms**.
+
+**What is left, and what dominates now.**
+
+- The §5 exit check (fused < 100 ms at 5k) — **met**: 65 ms p50, 80 ms p95.
+- The §6 target at **50,000 items** is the open row; it is measured below for
+  the first time.
+- The fixed-vector floor of the whole fused path (no ONNX, same passes) is
+  ~78 ms, so at this scale the model work is no longer the dominant term —
+  ambient cache, the 14-thread OS and the scan are.
+- A fresh process pays a one-off ~10 ms `Store::open` and the first embedding
+  call carries lazy session setup; both are inside this run's figures.
+
+**Caveats.** Corpus bias is unchanged (~31% real files; generated screenshots
+are the easy OCR case); p95 over 32 samples is effectively the near-maximum,
+not an estimate of a query distribution; one run for this configuration; mains
+power, no build running; one machine. The OS file cache is warm across the
+harness's processes, as it was at the gate's own runs; a fully cold box would
+be slower. The known-answer queries were re-verified on this index after the
+fixes (all first).
+
+## The 50,000-item row — first measured — 2026-11-05
+
+**What was run.** The same generator at `--total 50000` (20,000 text, 7,000
+PDF, 5,000 DOCX, 18,000 images; the same ~31%-real bias), indexed by
+`tessera watch --schedule always` into a fresh index. The drain:
+
+| What | Measured |
+|---|---|
+| Files | **50,000** |
+| Chunks embedded | **130,698** |
+| Drain | 4654 s wall → **10.8 files/s** |
+| Indexed / moved / skipped / failed | 50,000 / 0 / 0 / **0** |
+| Index size | **686 MB → 13.7 MB per 1,000 files** |
+| Peak working set / private, during the drain | **694 MB / 797 MB** |
+| OCR, Windows | **28.6 ms p50** |
+| OCR, ONNX fallback | 632 ms p50 (1,511 / 992 / 117 / 632 / 529) |
+
+**The 50,000-query failed, and the failure was the interesting part.** The
+harness recorded `FusedP50Ms: null` and four of the five known-answer queries
+returned nothing, for one reason: `tile_text_lengths` (and `files_by_ids`,
+`file_displays`, `tile_rows`, `describe`) built one bind parameter per id and
+never noticed that a 50,000-file index passes SQLite's default variable limit
+of 32,766 — the query threw `SQL logic error ... at offset N` and the CLI
+printed it and exited non-zero. `--describe` was unaffected because its path
+never builds the fused evidence set. **Fix: every `IN (...)` in the store now
+binds in 1,000-id batches.** The error reproduced on the first query after
+installing the 50k index; after the fix, the four failing queries return the
+expected files first (`report-0007.pdf`, `memo-0042.docx`,
+`screenshot-0017.png` twice). No code path shipped that query ever worked at
+that scale before today.
+
+Latency was re-measured on the same index (no re-index): `scripts/measure-latency.ps1
+-Data $env:TEMP\tessera-gate50k\index`, the gate's five-query sweep × 8
+repetitions, same machine, models passed with `--models-dir` as the harness
+always passes them. Drain numbers above are from the watch run; the latency
+below is from the fixed binary on the same index.
+
+| What | Measured |
+|---|---|
+| Fused query, engine time | **457 ms p50 / 523 ms p95** |
+| — keyword arm | 68 / 313 |
+| — image arm (fused runs) | 110 / 123 |
+| — meaning arm | **241 / 298** |
+| `--describe`, the image-only diagnostic (8 runs) | 72 / 77 |
+| Fused query, whole process (models built) | 2,033 / 2,039 |
+| Known answers | **5 of 5** |
+
+**Against product-definition §6 — MISSED.** `< 100 ms at 50k items` is not met:
+~4.6× over, p50 457 ms. The meaning arm is the dominant term (241 ms) — the
+brute-force cosine over 130,698 384-d vectors, sequential over ~200 MB of
+vectors — and the shared evidence pass adds ~32 ms warm (measured on this
+index; cold-process samples pay more, which is inside the fused figure). The
+§5 exit check at 5,000 items is met (65 ms). Between the two, the scaling is
+linear-plus: the same fused path that costs 65 ms at 17.8k vectors costs 457 ms
+at 130.7k — about 5.9× the chunks for 7.0× the time.
+
+**What this says about the product.** The fixes that made 5k pass (streaming
+scan, stored evidence, probes, two query threads) carry into 50k unchanged —
+the ~6.1× improvement at 5k is what keeps 50k at 457 rather than over 1 s.
+But closing the remaining 4.6× is not a matter of more of the same: both arms'
+scans are linear in corpus size, and at this size the one that owns the shape
+is the meaning arm. Approaches that can change the exponent — an ANN index or
+vector quantization on the scan side, or SQLite's vector extension — are an
+ADR, not a context get-it-done fix, and they are not implemented here. The
+honest status is that v0.1 meets §5 at 5,000 and **misses §6 at 50,000**, with
+the gap now measured rather than projected.
+
+**Caveats.** Corpus bias and the p95-over-32-samples caveat are unchanged.
+The drain was measured once; the latency sweep ran on the fixed binary on an
+index built by the unchanged watcher — the same mixed-builtins situation as
+the 5k row, and stated for the same reason. Warm OS cache is assumed, as in
+every gate run. First-call ONNX initialisation is inside the fused figures;
+the `store opened` line in a trace is ~10 ms and the whole process costs
+~2 s of model verification, which the engine timer excludes.
 
 ## Image arm control — rendered text, measured (ticket 07)
 

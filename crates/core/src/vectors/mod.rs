@@ -199,6 +199,31 @@ pub fn cosine(a: &Embedding, b: &Embedding) -> f32 {
     a.values().iter().zip(b.values()).map(|(x, y)| x * y).sum()
 }
 
+/// Score one stored vector against `query` without materializing an
+/// [`Embedding`].
+///
+/// A scan over tens of thousands of rows that built a `Vec<f32>` per row would
+/// allocate the corpus a second time, so the comparison happens against the
+/// raw bytes instead: the same little-endian f32 layout
+/// [`Embedding::from_blob`] validates at the other end.
+///
+/// Returns `None` when the blob is not exactly `query`'s width, or when the
+/// result is not finite — a corrupt row, quarantined by the caller, never a
+/// zero-valued competitor for a top slot.
+pub(crate) fn score_blob(query: &Embedding, bytes: &[u8]) -> Option<f32> {
+    let dim = query.dim();
+    if bytes.len() != dim * F32_BYTES {
+        return None;
+    }
+    let (floats, rest) = bytes.as_chunks::<F32_BYTES>();
+    debug_assert!(rest.is_empty(), "the width was checked");
+    let mut sum = 0.0f32;
+    for (value, chunk) in query.values().iter().zip(floats) {
+        sum += value * f32::from_le_bytes(*chunk);
+    }
+    sum.is_finite().then_some(sum)
+}
+
 /// One row of a scan result: which file, and how well it matched.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScoredFile {
@@ -264,6 +289,34 @@ mod tests {
         let original = embed([0.5, -0.25, 0.125, -1.0]);
         let restored = Embedding::from_blob(&original.to_blob(), DIM).expect("the blob is whole");
         assert_eq!(original, restored, "the bytes lost precision");
+    }
+
+    #[test]
+    fn scoring_a_stored_blob_is_the_same_dot_product_as_decoding_it() {
+        let query = embed([1.0, 0.0, 0.0, 0.0]);
+        let stored = embed([0.25, -0.5, 0.125, 0.75]);
+        let from_bytes =
+            score_blob(&query, &stored.to_blob()).expect("the blob is the query's width");
+        assert_eq!(from_bytes, cosine(&query, &stored));
+    }
+
+    #[test]
+    fn a_blob_of_the_wrong_width_is_not_a_score() {
+        // A corrupt or wrongly tagged row must be quarantined as `None`, not
+        // scored as a zero vector's dot product.
+        let query = embed([1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(score_blob(&query, &[0u8; 3 * F32_BYTES]), None);
+        assert_eq!(score_blob(&query, &[0u8; 5 * F32_BYTES]), None);
+    }
+
+    #[test]
+    fn a_non_finite_float_in_a_blob_is_not_a_score() {
+        // A NaN in a ranking would sort arbitrarily and silently.
+        let query = embed([1.0, 0.0, 0.0, 0.0]);
+        let mut bytes = Vec::with_capacity(DIM * F32_BYTES);
+        bytes.extend_from_slice(&f32::NAN.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; (DIM - 1) * F32_BYTES]);
+        assert_eq!(score_blob(&query, &bytes), None);
     }
 
     #[test]

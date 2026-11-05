@@ -75,10 +75,10 @@ fn embedders(models: &Models) -> Option<(Option<Arc<SiglipEmbedder>>, MiniLm)> {
         );
         return None;
     }
-    let minilm = MiniLm::new(models, 4).expect("the minilm models are installed and load");
+    let minilm = MiniLm::new(models, 2).expect("the minilm models are installed and load");
     let siglip = if SiglipEmbedder::is_installed(models) {
         Some(Arc::new(
-            SiglipEmbedder::new(models, 4).expect("the siglip models are installed and load"),
+            SiglipEmbedder::new(models, 2).expect("the siglip models are installed and load"),
         ))
     } else {
         eprintln!(
@@ -266,12 +266,14 @@ fn fused_search_latency_is_measured() {
 
     let mut samples: Vec<f64> = Vec::new();
     let mut per_arm: Vec<(&'static str, Vec<f64>)> = Vec::new();
+    let mut residual: Vec<f64> = Vec::new();
     for i in 0..40 {
         let query = &queries[i % queries.len()];
         let parsed = parse_query(std::slice::from_ref(query)).unwrap();
         let started = Instant::now();
         let outcome = search(&index, &parsed, image, Some(text), 10).unwrap();
-        samples.push(started.elapsed().as_secs_f64() * 1000.0);
+        let total = started.elapsed().as_secs_f64() * 1000.0;
+        samples.push(total);
         for timing in &outcome.timings {
             match per_arm
                 .iter_mut()
@@ -281,6 +283,12 @@ fn fused_search_latency_is_measured() {
                 None => per_arm.push((timing.arm.name(), vec![timing.millis])),
             }
         }
+        let slowest = outcome
+            .timings
+            .iter()
+            .map(|timing| timing.millis)
+            .fold(0.0_f64, f64::max);
+        residual.push(total - slowest);
     }
 
     let at = |sorted: &[f64], p: f64| sorted[((sorted.len() - 1) as f64 * p).round() as usize];
@@ -297,6 +305,9 @@ fn fused_search_latency_is_measured() {
     };
     println!("\n-- fused search, one query in, one ranking out --");
     report("total", samples.clone());
+    // The time after the slowest arm lands minus that arm: the shared passes
+    // (opens, evidence, fusion, display) that no arm timer sees.
+    report("residual", residual);
     for (arm, values) in per_arm {
         report(arm, values);
     }

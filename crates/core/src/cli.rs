@@ -211,7 +211,17 @@ fn set_present(models: &Models, set: &str) -> bool {
 /// installed is silence; a set whose files are all there but which will not
 /// load or does not match its pins is worth saying out loud.
 pub fn image_embedder(models: &Models) -> Option<std::sync::Arc<SiglipEmbedder>> {
-    match SiglipEmbedder::new(models, default_threads()) {
+    image_embedder_at(models, default_threads())
+}
+
+/// The image arm for a query on the paired models: two threads, alongside the
+/// text session rather than alone.
+pub fn image_query_embedder(models: &Models) -> Option<std::sync::Arc<SiglipEmbedder>> {
+    image_embedder_at(models, query_threads())
+}
+
+fn image_embedder_at(models: &Models, threads: usize) -> Option<std::sync::Arc<SiglipEmbedder>> {
+    match SiglipEmbedder::new(models, threads) {
         Ok(embedder) => Some(std::sync::Arc::new(embedder)),
         Err(err) => {
             if set_present(models, siglip::MODEL_SET) {
@@ -232,7 +242,17 @@ pub fn image_embedder(models: &Models) -> Option<std::sync::Arc<SiglipEmbedder>>
 /// missing. The caller says so once rather than once per file. Built first for
 /// [`image_embedder`]'s reason: the constructor already verifies the set.
 pub fn text_embedder(models: &Models) -> Option<MiniLm> {
-    match MiniLm::new(models, default_threads()) {
+    text_embedder_at(models, default_threads())
+}
+
+/// The meaning arm for a query on the paired models: two threads, alongside
+/// the image session rather than alone.
+pub fn text_query_embedder(models: &Models) -> Option<MiniLm> {
+    text_embedder_at(models, query_threads())
+}
+
+fn text_embedder_at(models: &Models, threads: usize) -> Option<MiniLm> {
+    match MiniLm::new(models, threads) {
         Ok(embedder) => Some(embedder),
         Err(err) => {
             if set_present(models, minilm::MODEL_SET) {
@@ -253,6 +273,19 @@ fn default_threads() -> usize {
         .map(|n| n.get())
         .unwrap_or(4)
         .clamp(1, 8)
+}
+
+/// Threads for the query-time ONNX sessions, not the indexing ones.
+///
+/// A fused query embeds on two sessions at once; handing both eight intra-op
+/// threads doubles each embed's wall, because SigLIP's kernels occupy the
+/// cores MiniLM needs. One sequence is far too little work to fill a machine,
+/// so the cap is about contention rather than size. Measured on the 5,000-file
+/// gate corpus, the fused query falls from 172 ms p50 (both sessions at four
+/// threads) to 130 ms p50 with both at two; one thread is worse again because
+/// each session alone is slower than the next pass is helped by the free cores.
+fn query_threads() -> usize {
+    2
 }
 
 /// Entry point for the binary; returns the process exit code.
@@ -384,7 +417,7 @@ pub fn run() -> Result<()> {
             // the keyword arm is much the stronger of the two.
             if let Some(description) = describe {
                 let models = Models::open(&models_dir(&data_dir, cli.models_dir.as_deref()))?;
-                let Some(embedder) = image_embedder(&models) else {
+                let Some(embedder) = image_query_embedder(&models) else {
                     anyhow::bail!(
                         "description search needs the siglip models, which are not installed. \
                          Fix it with: tessera models install --set siglip"
@@ -418,7 +451,7 @@ pub fn run() -> Result<()> {
 
             if let Some(meaning) = describe_text {
                 let models = Models::open(&models_dir(&data_dir, cli.models_dir.as_deref()))?;
-                let Some(embedder) = text_embedder(&models) else {
+                let Some(embedder) = text_query_embedder(&models) else {
                     anyhow::bail!(
                         "meaning search needs the minilm models, which are not installed. \
                          Fix it with: tessera models install --set minilm"
@@ -465,8 +498,8 @@ pub fn run() -> Result<()> {
                 anyhow::bail!("nothing to search for — give a word, or a filter like type:pdf");
             }
             let models = Models::open(&models_dir(&data_dir, cli.models_dir.as_deref()))?;
-            let image = image_embedder(&models);
-            let text = text_embedder(&models);
+            let image = image_query_embedder(&models);
+            let text = text_query_embedder(&models);
             // Measured after the embedders are built: this number is the
             // search, not the model loading a process pays once.
             let started = std::time::Instant::now();

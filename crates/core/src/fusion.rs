@@ -472,6 +472,19 @@ pub struct SearchOutcome {
     pub notes: Vec<String>,
 }
 
+/// Milliseconds since the query started, printed when
+/// `TESSERA_SEARCH_TRACE` is set — how a slow stage is found without guessing.
+/// Every mark is guarded in one place so the cost when unset is one
+/// environment lookup.
+fn trace_mark(started: Instant, label: &str) {
+    if std::env::var_os("TESSERA_SEARCH_TRACE").is_some() {
+        eprintln!(
+            "search trace: {label}: {:.1} ms since query start",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+}
+
 /// Run every available arm against the index in `data_dir` and fuse.
 ///
 /// The arms run on threads, each opening its own [`Store`] inside its thread:
@@ -491,7 +504,9 @@ pub fn search(
     text: Option<&dyn TextEmbedder>,
     limit: usize,
 ) -> Result<SearchOutcome> {
+    let trace_started = Instant::now();
     let store = Store::open(data_dir).context("opening the index for search")?;
+    trace_mark(trace_started, "store opened");
 
     if query.terms.is_empty() {
         let hits = if query.filter.is_empty() {
@@ -507,20 +522,21 @@ pub fn search(
     }
 
     let mut notes = Vec::new();
-    if image.is_some() && store.image_embedding_count()? == 0 {
+    if image.is_some() && !store.has_image_vectors()? {
         notes.push(
             "the image arm has no vectors yet — run `tessera index` to embed the files \
              already indexed"
                 .to_string(),
         );
     }
-    if text.is_some() && store.text_embedding_count()? == 0 {
+    if text.is_some() && !store.has_text_vectors()? {
         notes.push(
             "the meaning arm has no vectors yet — run `tessera index` to embed the files \
              already indexed"
                 .to_string(),
         );
     }
+    trace_mark(trace_started, "arm pin counts checked");
 
     let terms: Vec<&str> = query.terms.iter().map(String::as_str).collect();
     let content = query.content();
@@ -615,6 +631,7 @@ pub fn search(
 
         Ok(())
     })?;
+    trace_mark(trace_started, "arms joined");
 
     // A filter honoured by one arm and not another would let the other arm
     // smuggle back exactly the files the user excluded, so the allowed set
@@ -637,13 +654,16 @@ pub fn search(
         .into_iter()
         .map(|(file_id, chars)| (file_id, evidence_of(chars)))
         .collect();
+    trace_mark(trace_started, "candidates and evidence collected");
 
     let fused = fuse(&arms, &evidence, &CHOSEN, limit);
+    trace_mark(trace_started, "fused");
 
     let ids: Vec<i64> = fused.iter().map(|hit| hit.file_id).collect();
     let displays = store.file_displays(&ids)?;
     let tiles: Vec<i64> = fused.iter().filter_map(|hit| hit.tile_id).collect();
     let chosen_tiles = store.tile_rows(&tiles)?;
+    trace_mark(trace_started, "display rows fetched");
 
     let mut hits = Vec::with_capacity(fused.len());
     for hit in fused {
@@ -681,6 +701,7 @@ pub fn search(
             arms: hit.arms,
         });
     }
+    trace_mark(trace_started, "hits built");
 
     Ok(SearchOutcome {
         hits,

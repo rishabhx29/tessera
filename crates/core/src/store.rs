@@ -26,7 +26,7 @@ use crate::vectors::Embedding;
 
 /// The schema version this engine understands. Bumping it means writing a
 /// migration; opening a future-version store must fail loudly.
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// The width of a SigLIP-base embedding. Pinned by the model's own output shape,
 /// so it is a constant rather than something read from a file that might be a
@@ -253,11 +253,9 @@ fn row_to_ref(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRowRef> {
 }
 
 /// One tile row plus its file's identity. [`Store::describe_text`] and the
-/// fused display path resolve chosen tiles through this; the arm ranking's
-/// collapse needs only identity, and asks `tile_file_ids` instead. Private to
-/// the crate because it is a shape the store builds and consumes; the public
-/// result is [`MatchedFile`], and fusion reads the fields it needs to render a
-/// hit.
+/// fused display path resolve chosen tiles through this. Private to the crate
+/// because it is a shape the store builds and consumes; the public result is
+/// [`MatchedFile`], and fusion reads the fields it needs to render a hit.
 pub(crate) struct TileRow {
     pub(crate) file_id: i64,
     pub(crate) path: String,
@@ -300,6 +298,12 @@ fn holes(n: usize) -> String {
         .collect::<Vec<_>>()
         .join(",")
 }
+
+/// Bind at most this many ids per round trip: SQLite's default variable limit
+/// is 32,766, and a 50,000-file index must not fail its search at the
+/// thirty-thousand-and-first file. One extra round trip per 1,000 ids is far
+/// cheaper than that failure.
+const IN_BATCH: usize = 1000;
 
 /// Escape `LIKE`'s metacharacters so a user's `%` or `_` is a literal.
 fn like_escape(s: &str) -> String {
@@ -436,6 +440,16 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// Characters of text the tile list holds, the same count SQLite's
+/// `LENGTH(text)` reports: characters before the first NUL. Fusion's weights
+/// read this column to decide how much text a file carries.
+fn text_chars_of(tiles: &[Tile]) -> i64 {
+    tiles
+        .iter()
+        .map(|tile| tile.text.split('\0').next().unwrap_or("").chars().count() as i64)
+        .sum()
+}
+
 /// Delete a file's tiles from the tiles table and from the FTS index.
 ///
 /// External-content FTS5 has no rows of its own to cascade: deleting a tile
@@ -559,6 +573,18 @@ impl Store {
                      COMMIT;",
                 )
                 .context("migrating schema to v6")?,
+            7 => self
+                .conn
+                .execute_batch(
+                    "BEGIN;
+                     ALTER TABLE files ADD COLUMN text_chars INTEGER NOT NULL DEFAULT 0;
+                     UPDATE files SET text_chars = COALESCE(
+                       (SELECT SUM(LENGTH(t.text)) FROM tiles t WHERE t.file_id = files.id),
+                       0
+                     );
+                     COMMIT;",
+                )
+                .context("migrating schema to v7")?,
             other => anyhow::bail!("no migration for schema version {other}"),
         }
         self.conn
@@ -748,6 +774,10 @@ impl Store {
                 rusqlite::params![tile_id, tile.text],
             )?;
         }
+        tx.execute(
+            "UPDATE files SET text_chars = ?1 WHERE id = ?2",
+            rusqlite::params![text_chars_of(tiles), file_id],
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -971,39 +1001,38 @@ impl Store {
         if file_ids.is_empty() {
             return Ok(Vec::new());
         }
-        // One bind parameter per id, filled from the slice.
-        let holes = (1..=file_ids.len())
-            .map(|i| format!("?{i}"))
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!(
-            "SELECT f.id, f.path, f.kind, t.seq, t.page, t.text
-             FROM files f JOIN tiles t ON t.file_id = f.id
-             WHERE f.id IN ({holes})
-             ORDER BY f.id, t.seq"
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(file_ids), |row| {
-            Ok(MatchedFile {
-                file_id: row.get::<_, i64>(0)?,
-                path: row.get(1)?,
-                kind: row.get::<_, String>(2)?,
-                tiles: vec![MatchedTile {
-                    seq: row.get::<_, u32>(3)?,
-                    page: row.get::<_, Option<u32>>(4)?,
-                    text: row.get(5)?,
-                }],
-            })
-        })?;
-        let mut out: Vec<MatchedFile> = Vec::new();
-        for row in rows {
-            let mut file = row?;
-            // Consecutive rows of one file collapse into one result.
-            match out.last_mut() {
-                Some(last) if last.file_id == file.file_id => {
-                    last.tiles.append(&mut file.tiles);
+        let mut out: Vec<MatchedFile> = Vec::with_capacity(file_ids.len());
+        for chunk in file_ids.chunks(IN_BATCH) {
+            let sql = format!(
+                "SELECT f.id, f.path, f.kind, t.seq, t.page, t.text
+                 FROM files f JOIN tiles t ON t.file_id = f.id
+                 WHERE f.id IN ({})
+                 ORDER BY f.id, t.seq",
+                holes(chunk.len())
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |row| {
+                Ok(MatchedFile {
+                    file_id: row.get::<_, i64>(0)?,
+                    path: row.get(1)?,
+                    kind: row.get::<_, String>(2)?,
+                    tiles: vec![MatchedTile {
+                        seq: row.get::<_, u32>(3)?,
+                        page: row.get::<_, Option<u32>>(4)?,
+                        text: row.get(5)?,
+                    }],
+                })
+            })?;
+            for row in rows {
+                let mut file = row?;
+                // Consecutive rows of one file collapse into one result; a file
+                // never spans chunks, so batches never split a file.
+                match out.last_mut() {
+                    Some(last) if last.file_id == file.file_id => {
+                        last.tiles.append(&mut file.tiles);
+                    }
+                    _ => out.push(file),
                 }
-                _ => out.push(file),
             }
         }
         Ok(out)
@@ -1106,25 +1135,30 @@ impl Store {
     /// the fusion weights are chosen from. A file with no tiles at all — a
     /// photo with nothing to read — is absent from the map, which is the same
     /// statement as a count of 0.
+    ///
+    /// The count is stored on the file row and maintained where the tiles are
+    /// written; asking SQLite to `LENGTH` every tile's text here cost ~60 ms
+    /// on a 5,000-file index, inside the fused query's shared passes.
     pub fn tile_text_lengths(&self, file_ids: &[i64]) -> Result<HashMap<i64, u64>> {
         if file_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let sql = format!(
-            "SELECT file_id, SUM(LENGTH(text)) FROM tiles
-             WHERE file_id IN ({})
-             GROUP BY file_id",
-            holes(file_ids.len())
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(file_ids), |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-        })?;
         let mut out = HashMap::with_capacity(file_ids.len());
-        for row in rows {
-            let (file_id, length) = row?;
-            // LENGTH never goes negative; the cast is the type rusqlite speaks.
-            out.insert(file_id, length.max(0) as u64);
+        for chunk in file_ids.chunks(IN_BATCH) {
+            let sql = format!(
+                "SELECT id, text_chars FROM files
+                 WHERE id IN ({}) AND text_chars > 0",
+                holes(chunk.len())
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for row in rows {
+                let (file_id, chars) = row?;
+                // LENGTH never goes negative; the cast is the type rusqlite speaks.
+                out.insert(file_id, chars.max(0) as u64);
+            }
         }
         Ok(out)
     }
@@ -1137,110 +1171,160 @@ impl Store {
         if file_ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let sql = format!(
-            "SELECT f.id, f.path, f.kind, t.id, t.page, t.text
-             FROM files f
-             LEFT JOIN tiles t
-               ON t.file_id = f.id
-              AND t.seq = (SELECT MIN(seq) FROM tiles WHERE file_id = f.id)
-             WHERE f.id IN ({})",
-            holes(file_ids.len())
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(file_ids), |row| {
-            let tile_id: Option<i64> = row.get(3)?;
-            let first_tile = match tile_id {
-                Some(id) => Some((id, row.get(4)?, row.get(5)?)),
-                None => None,
-            };
-            Ok((
-                row.get::<_, i64>(0)?,
-                FileDisplay {
-                    path: row.get(1)?,
-                    kind: row.get(2)?,
-                    first_tile,
-                },
-            ))
-        })?;
         let mut out = HashMap::with_capacity(file_ids.len());
-        for row in rows {
-            let (file_id, display) = row?;
-            out.insert(file_id, display);
+        for chunk in file_ids.chunks(IN_BATCH) {
+            let sql = format!(
+                "SELECT f.id, f.path, f.kind, t.id, t.page, t.text
+                 FROM files f
+                 LEFT JOIN tiles t
+                   ON t.file_id = f.id
+                  AND t.seq = (SELECT MIN(seq) FROM tiles WHERE file_id = f.id)
+                 WHERE f.id IN ({})",
+                holes(chunk.len())
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |row| {
+                let tile_id: Option<i64> = row.get(3)?;
+                let first_tile = match tile_id {
+                    Some(id) => Some((id, row.get(4)?, row.get(5)?)),
+                    None => None,
+                };
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    FileDisplay {
+                        path: row.get(1)?,
+                        kind: row.get(2)?,
+                        first_tile,
+                    },
+                ))
+            })?;
+            for row in rows {
+                let (file_id, display) = row?;
+                out.insert(file_id, display);
+            }
         }
         Ok(out)
     }
 
     /// The image arm's order: every embedded image, most similar first. Only
     /// ids — fusion fuses ranks, and the display row is fetched once, for the
-    /// survivors.
+    /// survivors. The scan borrows each blob straight out of SQLite: images are
+    /// one vector per file, so no collapse is involved.
     pub fn ranked_image_file_ids(&self, query: &Embedding, dim: usize) -> Result<Vec<i64>> {
-        let embeddings = self.image_embeddings(dim)?;
-        Ok(crate::vectors::rank(
-            query,
-            embeddings.iter().map(|(id, e)| (*id, e)).collect(),
-            embeddings.len(),
-        )
-        .into_iter()
-        .map(|scored| scored.file_id)
-        .collect())
+        if query.dim() != dim {
+            anyhow::bail!(
+                "the image query has {} dimensions but the scan was asked for {}: the vectors are \
+                 from different models",
+                query.dim(),
+                dim
+            );
+        }
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT file_id, vec FROM img_vec ORDER BY file_id")?;
+        let mut rows = stmt.query([])?;
+        let mut scored: Vec<(i64, f32)> = Vec::new();
+        while let Some(row) = rows.next()? {
+            let file_id: i64 = row.get(0)?;
+            let bytes = match row.get_ref(1)? {
+                rusqlite::types::ValueRef::Blob(bytes) => bytes,
+                _ => {
+                    eprintln!(
+                        "skipping an image vector for file {file_id}: the stored value is not a \
+                         blob. Re-index that file to repair it; every other image is still \
+                         searchable by description."
+                    );
+                    continue;
+                }
+            };
+            match crate::vectors::score_blob(query, bytes) {
+                Some(score) => scored.push((file_id, score)),
+                None => eprintln!(
+                    "skipping a corrupt image vector for file {file_id}: the stored blob is not \
+                     {dim} finite float32 values. Re-index that file to repair it; every other \
+                     image is still searchable by description."
+                ),
+            }
+        }
+        // Ties break by file id: two images the arm cannot separate must
+        // still come back in the same order every run.
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+        Ok(scored.into_iter().map(|(file_id, _)| file_id).collect())
     }
 
     /// The text arm's order: every embedded chunk, most similar first,
     /// collapsed to one row per file at that file's best chunk — the chunk the
     /// hit will be shown from.
     pub fn ranked_text_file_tiles(&self, query: &Embedding, dim: usize) -> Result<Vec<(i64, i64)>> {
-        let embeddings = self.text_embeddings(dim)?;
-        let ranked = crate::vectors::rank(
-            query,
-            embeddings.iter().map(|(id, e)| (*id, e)).collect(),
-            embeddings.len(),
-        );
-        // Ranked rows carry tile ids; the tile → file collapse runs in
-        // batches, the same shape describe_text uses, and keeps each file's
-        // first appearance. Identity only: the chosen tile's text is fetched
-        // for the final hits alone, not for every chunk in the ranking. A
-        // thousand ids per query keeps a full ranking to a handful of
-        // round trips.
-        const BATCH: usize = 1000;
-        let mut out = Vec::new();
-        let mut seen = HashSet::new();
-        for batch in ranked.chunks(BATCH) {
-            let ids: Vec<i64> = batch.iter().map(|scored| scored.file_id).collect();
-            let tiles = self.tile_file_ids(&ids)?;
-            for scored in batch {
-                let Some(&file_id) = tiles.get(&scored.file_id) else {
+        if query.dim() != dim {
+            anyhow::bail!(
+                "the text query has {} dimensions but the scan was asked for {}: the vectors are \
+                 from different models",
+                query.dim(),
+                dim
+            );
+        }
+        // Scan once, in file order (the planner uses the covering
+        // `tiles_file_seq` index, then the vector's primary key): one prepared
+        // statement, borrowed blobs, no per-row allocation, and each file's
+        // best chunk kept as it goes. The old path read every vector into a
+        // `Vec<Embedding>`, sorted all of them, then re-fetched tile→file ids
+        // in batches of a thousand.
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT t.file_id, v.tile_id, v.vec
+             FROM tiles t JOIN txt_vec v ON v.tile_id = t.id
+             ORDER BY t.file_id",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut best: Vec<(i64, i64, f32)> = Vec::new();
+        let mut current: Option<(i64, i64, f32)> = None;
+        while let Some(row) = rows.next()? {
+            let file_id: i64 = row.get(0)?;
+            let tile_id: i64 = row.get(1)?;
+            let bytes = match row.get_ref(2)? {
+                rusqlite::types::ValueRef::Blob(bytes) => bytes,
+                _ => {
+                    eprintln!(
+                        "skipping a text vector for tile {tile_id}: the stored value is not a blob. \
+                         Re-index that file to repair it; every other document is still searchable \
+                         by meaning."
+                    );
                     continue;
-                };
-                if seen.insert(file_id) {
-                    out.push((file_id, scored.file_id));
+                }
+            };
+            let Some(score) = crate::vectors::score_blob(query, bytes) else {
+                eprintln!(
+                    "skipping a corrupt text vector for tile {tile_id}: the stored blob is not \
+                     {dim} finite float32 values. Re-index that file to repair it; every other \
+                     document is still searchable by meaning."
+                );
+                continue;
+            };
+            match &mut current {
+                Some((file, tile, best_score)) if *file == file_id => {
+                    if score > *best_score {
+                        *tile = tile_id;
+                        *best_score = score;
+                    }
+                }
+                _ => {
+                    if let Some(entry) = current.take() {
+                        best.push(entry);
+                    }
+                    current = Some((file_id, tile_id, score));
                 }
             }
         }
-        Ok(out)
-    }
-
-    /// Tile ids → the file each belongs to, without the tile's text or the
-    /// file's path. [`Self::tile_rows`] answers the rendering question and pays
-    /// for a JOIN and a corpus's worth of text; this answers the ranking's
-    /// question, which is only "whose was this?".
-    fn tile_file_ids(&self, ids: &[i64]) -> Result<HashMap<i64, i64>> {
-        if ids.is_empty() {
-            return Ok(HashMap::new());
+        if let Some(entry) = current {
+            best.push(entry);
         }
-        let sql = format!(
-            "SELECT id, file_id FROM tiles WHERE id IN ({})",
-            holes(ids.len())
-        );
-        let mut stmt = self.conn.prepare_cached(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(ids), |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-        })?;
-        let mut out = HashMap::with_capacity(ids.len());
-        for row in rows {
-            let (tile_id, file_id) = row?;
-            out.insert(tile_id, file_id);
-        }
-        Ok(out)
+        // Ties break by file id: two files the arms cannot separate must still
+        // come back in the same order every run.
+        best.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
+        Ok(best
+            .into_iter()
+            .map(|(file_id, tile_id, _)| (file_id, tile_id))
+            .collect())
     }
 
     /// The model version whose vectors `arm` currently holds, or `None` if
@@ -1310,11 +1394,27 @@ impl Store {
             .map_err(Into::into)
     }
 
+    /// Whether the image arm holds any vector at all.
+    ///
+    /// One indexed probe, for the hot path: asking `COUNT(*)` here reads every
+    /// row, ~27 MB of vectors, to learn one bit.
+    pub fn has_image_vectors(&self) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row("SELECT EXISTS(SELECT 1 FROM img_vec LIMIT 1)", [], |row| {
+                row.get::<_, i64>(0)
+            })?
+            != 0)
+    }
+
     /// How many image files currently carry a vector.
     ///
     /// This is the number that answers "did re-indexing actually fill the arm
     /// in?", which is otherwise invisible: a missing vector does not fail a
     /// query, it just quietly returns fewer results.
+    ///
+    /// Slow on a full arm: use [`Self::has_image_vectors`] where only an
+    /// empty/non-empty answer is needed.
     pub fn image_embedding_count(&self) -> Result<i64> {
         self.conn
             .query_row("SELECT COUNT(*) FROM img_vec", [], |row| row.get(0))
@@ -1367,57 +1467,55 @@ impl Store {
         dim: usize,
         limit: usize,
     ) -> Result<Vec<MatchedFile>> {
-        let embeddings = self.image_embeddings(dim)?;
-        let ranked = crate::vectors::rank(
-            query,
-            embeddings.iter().map(|(id, e)| (*id, e)).collect(),
-            limit,
-        );
-        let ids: Vec<i64> = ranked.iter().map(|r| r.file_id).collect();
+        let ids: Vec<i64> = self
+            .ranked_image_file_ids(query, dim)?
+            .into_iter()
+            .take(limit)
+            .collect();
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
         // A dedicated query rather than `files_by_ids`, which inner-joins
         // `tiles`. A photo of a dog has no tiles at all — there is nothing to
         // read from it — so that join drops it, and description search would be
         // unable to return precisely the textless images it exists to find. The
         // text is fetched alongside for the preview line and is allowed to be
-        // absent.
-        let holes = (1..=ids.len())
-            .map(|i| format!("?{i}"))
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!(
-            "SELECT f.id, f.path, f.kind, t.seq, t.page, t.text
-             FROM files f
-             LEFT JOIN tiles t ON t.id =
-                 (SELECT t2.id FROM tiles t2 WHERE t2.file_id = f.id ORDER BY t2.seq LIMIT 1)
-             WHERE f.id IN ({holes})"
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(&ids), |row| {
-            let seq: Option<u32> = row.get(3)?;
-            let page: Option<u32> = row.get(4)?;
-            let text: Option<String> = row.get(5)?;
-            let tiles = match (seq, text) {
-                (Some(seq), Some(text)) => vec![MatchedTile { seq, page, text }],
-                _ => Vec::new(),
-            };
-            Ok(MatchedFile {
-                file_id: row.get::<_, i64>(0)?,
-                path: row.get(1)?,
-                kind: row.get::<_, String>(2)?,
-                tiles,
-            })
-        })?;
+        // absent. Ids bind in batches, because a limit of 50,000 is a legal
+        // way to call this and SQLite's variable limit is 32,766.
         let mut by_id: std::collections::HashMap<i64, MatchedFile> =
-            std::collections::HashMap::new();
-        for row in rows {
-            let file: MatchedFile = row?;
-            by_id.insert(file.file_id, file);
+            std::collections::HashMap::with_capacity(ids.len());
+        for chunk in ids.chunks(IN_BATCH) {
+            let sql = format!(
+                "SELECT f.id, f.path, f.kind, t.seq, t.page, t.text
+                 FROM files f
+                 LEFT JOIN tiles t ON t.id =
+                     (SELECT t2.id FROM tiles t2 WHERE t2.file_id = f.id ORDER BY t2.seq LIMIT 1)
+                 WHERE f.id IN ({})",
+                holes(chunk.len())
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |row| {
+                let seq: Option<u32> = row.get(3)?;
+                let page: Option<u32> = row.get(4)?;
+                let text: Option<String> = row.get(5)?;
+                let tiles = match (seq, text) {
+                    (Some(seq), Some(text)) => vec![MatchedTile { seq, page, text }],
+                    _ => Vec::new(),
+                };
+                Ok(MatchedFile {
+                    file_id: row.get::<_, i64>(0)?,
+                    path: row.get(1)?,
+                    kind: row.get::<_, String>(2)?,
+                    tiles,
+                })
+            })?;
+            for row in rows {
+                let file: MatchedFile = row?;
+                by_id.insert(file.file_id, file);
+            }
         }
         // Back into score order, which is the entire point of the query.
-        Ok(ranked
-            .iter()
-            .filter_map(|r| by_id.get(&r.file_id).cloned())
-            .collect())
+        Ok(ids.into_iter().filter_map(|id| by_id.remove(&id)).collect())
     }
 
     /// Forget the image arm: drop every vector **and** clear its version pin, in
@@ -1472,9 +1570,25 @@ impl Store {
         Ok(())
     }
 
+    /// Whether the text arm holds any vector at all.
+    ///
+    /// One indexed probe, for the hot path: asking `COUNT(*)` here reads every
+    /// chunk vector, to learn one bit.
+    pub fn has_text_vectors(&self) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row("SELECT EXISTS(SELECT 1 FROM txt_vec LIMIT 1)", [], |row| {
+                row.get::<_, i64>(0)
+            })?
+            != 0)
+    }
+
     /// How many tiles currently carry a text vector. The number that answers
     /// "did the sweep fill the arm in?" — a missing vector does not fail a
     /// query, it just quietly returns fewer results.
+    ///
+    /// Slow on a full arm: use [`Self::has_text_vectors`] where only an
+    /// empty/non-empty answer is needed.
     pub fn text_embedding_count(&self) -> Result<i64> {
         self.conn
             .query_row("SELECT COUNT(*) FROM txt_vec", [], |row| row.get(0))
@@ -1571,38 +1685,27 @@ impl Store {
     /// vector, then one hit per file, carrying the tile that actually matched
     /// so a result can say "page 4" with the snippet from page 4.
     ///
-    /// Ties and near-ties are resolved by [`crate::vectors::rank`], not here;
-    /// this function's job is the tile → file collapse. It fetches ranked tiles
-    /// in batches because a file with a hundred chunks should not be able to
-    /// force a read of every tile's text to find the next file.
+    /// [`Store::ranked_text_file_tiles`] resolves the order; this function
+    /// fetches the tile rows and stops as soon as `limit` files have been
+    /// named, in batches so a file with a hundred chunks is not able to force
+    /// a read of every tile's text at once.
     pub fn describe_text(
         &self,
         query: &Embedding,
         dim: usize,
         limit: usize,
     ) -> Result<Vec<MatchedFile>> {
-        let embeddings = self.text_embeddings(dim)?;
-        let ranked = crate::vectors::rank(
-            query,
-            embeddings.iter().map(|(id, e)| (*id, e)).collect(),
-            embeddings.len(),
-        );
+        let ranked = self.ranked_text_file_tiles(query, dim)?;
 
         const BATCH: usize = 200;
         let mut hits: Vec<MatchedFile> = Vec::new();
-        let mut seen: HashSet<i64> = HashSet::new();
-        let mut start = 0;
-        while start < ranked.len() && hits.len() < limit {
-            let end = (start + BATCH).min(ranked.len());
-            let ids: Vec<i64> = ranked[start..end].iter().map(|r| r.file_id).collect();
+        for batch in ranked.chunks(BATCH) {
+            let ids: Vec<i64> = batch.iter().map(|&(_, tile_id)| tile_id).collect();
             let rows = self.tile_rows(&ids)?;
-            for scored in &ranked[start..end] {
-                let Some(row) = rows.get(&scored.file_id) else {
+            for &(_, tile_id) in batch {
+                let Some(row) = rows.get(&tile_id) else {
                     continue;
                 };
-                if !seen.insert(row.file_id) {
-                    continue;
-                }
                 hits.push(MatchedFile {
                     file_id: row.file_id,
                     path: row.path.clone(),
@@ -1614,10 +1717,9 @@ impl Store {
                     }],
                 });
                 if hits.len() == limit {
-                    break;
+                    return Ok(hits);
                 }
             }
-            start = end;
         }
         Ok(hits)
     }
@@ -1629,33 +1731,32 @@ impl Store {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let holes = (1..=ids.len())
-            .map(|i| format!("?{i}"))
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!(
-            "SELECT t.id, t.file_id, f.path, f.kind, t.seq, t.page, t.text
-             FROM tiles t JOIN files f ON f.id = t.file_id
-             WHERE t.id IN ({holes})"
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(ids), |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                TileRow {
-                    file_id: row.get(1)?,
-                    path: row.get(2)?,
-                    kind: row.get(3)?,
-                    seq: row.get(4)?,
-                    page: row.get(5)?,
-                    text: row.get(6)?,
-                },
-            ))
-        })?;
         let mut out = HashMap::with_capacity(ids.len());
-        for row in rows {
-            let (id, tile) = row?;
-            out.insert(id, tile);
+        for chunk in ids.chunks(IN_BATCH) {
+            let sql = format!(
+                "SELECT t.id, t.file_id, f.path, f.kind, t.seq, t.page, t.text
+                 FROM tiles t JOIN files f ON f.id = t.file_id
+                 WHERE t.id IN ({})",
+                holes(chunk.len())
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    TileRow {
+                        file_id: row.get(1)?,
+                        path: row.get(2)?,
+                        kind: row.get(3)?,
+                        seq: row.get(4)?,
+                        page: row.get(5)?,
+                        text: row.get(6)?,
+                    },
+                ))
+            })?;
+            for row in rows {
+                let (id, tile) = row?;
+                out.insert(id, tile);
+            }
         }
         Ok(out)
     }
@@ -2982,6 +3083,29 @@ mod tests {
             "a tileless file has no evidence, not zero"
         );
 
+        // Re-indexing with less text shrinks the stored count rather than
+        // keeping the old one.
+        indexed_file(&store, "/corpus/shrink.txt", &["a b", "cde"]);
+        let shrink = store.file_id(Path::new("/corpus/shrink.txt")).unwrap();
+        assert_eq!(
+            store.tile_text_lengths(&[shrink]).unwrap().get(&shrink),
+            Some(&6),
+            "the count adds up across the file's tiles"
+        );
+        indexed_file(&store, "/corpus/shrink.txt", &["a"]);
+        assert_eq!(
+            store.tile_text_lengths(&[shrink]).unwrap().get(&shrink),
+            Some(&1),
+            "the evidence count follows the tiles that are there now"
+        );
+        indexed_file(&store, "/corpus/empty.txt", &[]);
+        let empty = store.file_id(Path::new("/corpus/empty.txt")).unwrap();
+        assert_eq!(
+            store.tile_text_lengths(&[empty]).unwrap().get(&empty),
+            None,
+            "a file with zero characters of text has no evidence, not zero"
+        );
+
         let displays = store.file_displays(&[doc, photo_id]).unwrap();
         let doc_row = &displays[&doc];
         assert_eq!(doc_row.path, "/corpus/doc.txt");
@@ -3046,5 +3170,33 @@ mod tests {
                 .unwrap(),
             vec![(x, x_tiles[1]), (y, y_tiles[0])]
         );
+    }
+
+    #[test]
+    fn the_existence_probe_tracks_the_vectors_not_just_the_pin() {
+        let (_dir, store) = tmp_store();
+        assert!(!store.has_text_vectors().unwrap());
+        assert!(!store.has_image_vectors().unwrap());
+
+        let corpus = tempfile::tempdir().unwrap();
+        let id = indexed_image(&store, corpus.path(), "a.png");
+        indexed_file(&store, "/corpus/x.txt", &["x.txt\nx0"]);
+        let x_tiles = text_tile_ids(&store, "/corpus/x.txt");
+
+        store
+            .put_text_embedding(x_tiles[0], &text_embedding([1.0, 0.0]))
+            .unwrap();
+        assert!(store.has_text_vectors().unwrap());
+        assert!(!store.has_image_vectors().unwrap());
+
+        store
+            .put_image_embedding(id, &embedding([1.0, 0.0, 0.0, 0.0]))
+            .unwrap();
+        assert!(store.has_image_vectors().unwrap());
+
+        store.forget_text_arm().unwrap();
+        store.forget_image_arm().unwrap();
+        assert!(!store.has_text_vectors().unwrap());
+        assert!(!store.has_image_vectors().unwrap());
     }
 }
