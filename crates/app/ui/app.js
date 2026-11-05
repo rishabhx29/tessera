@@ -49,6 +49,9 @@ async function call(command, args = {}) {
 function showView(view) {
   state.view = view;
   $("app").dataset.view = view;
+  // The preview belongs to a search answer; carrying it into Activity or
+  // Settings leaves a pane answering a question this view no longer asks.
+  if (view !== "search") closePreview();
   for (const section of ["search", "activity", "settings"]) {
     $(`view-${section}`).hidden = section !== view;
   }

@@ -300,10 +300,9 @@ h1 {
 }
 
 h2 {
-  margin: 0 0 10px;
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0.07em;
+  margin: 0 0 12px;
+  font: 600 11px/1.4 var(--mono);
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
   display: flex;
@@ -400,6 +399,11 @@ h2 {
   color: var(--ink-2);
   padding: 7px 10px;
   font-size: 12px;
+}
+
+/* An empty note box reads as a broken control; say nothing instead. */
+.note:empty {
+  display: none;
 }
 
 .note.error {
@@ -675,6 +679,8 @@ mark {
   margin: 0;
   text-align: right;
   font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .folders,
@@ -686,9 +692,11 @@ mark {
 }
 
 .folders li {
-  padding: 5px 0;
+  padding: 6px 0;
   border-top: 1px solid var(--line);
   color: var(--ink-2);
+  font: 11.5px/1.6 var(--mono);
+  font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 
@@ -784,6 +792,11 @@ mark {
   border-top: 1px solid var(--line);
   padding: 7px 6px 7px 0;
   vertical-align: middle;
+}
+
+/* Model set names are identifiers; they read best in mono. */
+.models td:first-child {
+  font: 12px/1.5 var(--mono);
 }
 
 .models td.state {
