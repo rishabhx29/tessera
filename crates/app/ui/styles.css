@@ -215,9 +215,11 @@ code {
   cursor: pointer;
 }
 
-.rail-item:hover {
-  background: var(--surface-2);
-  color: var(--ink);
+/* The rail's active item is a state, not a hover — it stays where it is. */
+.rail-end {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .rail-item[aria-current="page"] {
@@ -225,6 +227,39 @@ code {
   color: var(--ink);
   box-shadow: inset 0 0 0 1px var(--line);
   font-weight: 600;
+}
+
+/* Hover states live behind a pointer check: a touch device would otherwise
+   stick the first tapped row, button or example in its hover style. */
+@media (hover: hover) and (pointer: fine) {
+  .rail-item:hover {
+    background: var(--surface-2);
+    color: var(--ink);
+  }
+
+  .example:hover {
+    border-color: var(--line-strong);
+    background: var(--surface-2);
+  }
+
+  .example:hover .q {
+    color: var(--ink);
+  }
+
+  button.primary:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--canvas);
+  }
+
+  button.ghost:hover {
+    background: var(--surface-2);
+  }
+
+  button.danger-button:hover {
+    background: var(--bad);
+    color: var(--surface);
+  }
 }
 
 .rail-foot {
@@ -606,17 +641,8 @@ mark {
   white-space: nowrap;
 }
 
-.example:hover {
-  border-color: var(--line-strong);
-  background: var(--surface-2);
-}
-
 .example .q {
   transition: color var(--dur-1) ease;
-}
-
-.example:hover .q {
-  color: var(--ink);
 }
 
 .first-run h1 {
@@ -840,24 +866,9 @@ button.primary {
   font-weight: 600;
 }
 
-button.primary:hover {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-soft);
-}
-
-button.ghost:hover {
-  background: var(--surface-2);
-}
-
 button.danger-button {
   border-color: var(--bad);
   color: var(--bad);
-}
-
-button.danger-button:hover {
-  background: var(--bad);
-  color: var(--surface);
 }
 
 button:disabled {
@@ -979,10 +990,13 @@ button:disabled {
     grid-template-columns: 64px minmax(0, 1fr);
   }
   .brand-name,
-  .rail-item kbd,
-  .rail-item span:not(.dot),
+  .rail-end kbd,
+  .rail-item > span:not(.rail-end),
   #engine-label {
     display: none;
+  }
+  .rail-end {
+    display: flex;
   }
   .rail-item {
     justify-content: center;
