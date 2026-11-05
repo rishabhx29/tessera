@@ -1,47 +1,61 @@
 /* Tessera's shell: a quiet, keyboard-first search surface.
-   Warm paper rather than pure white, one accent for selection and matches,
-   borders at 1px with a soft shadow only where something floats. */
+   The tokens are the website's brand (website/DESIGN.md): warm paper, ink,
+   one terracotta accent, hairline rules. Motion follows the launcher rules in
+   DESIGN.md — keyboard actions never animate; color changes do. */
 
 :root {
-  --paper: #f4f1e9;
-  --surface: #fffdf8;
-  --surface-2: #faf6ec;
-  --ink: #211d17;
-  --ink-2: #4b4339;
-  --muted: #7a7062;
-  --line: #e2dacb;
-  --line-strong: #cec3b0;
-  --accent: #8d3b27;
-  --accent-ink: #fff8f3;
-  --accent-soft: #f2e0d8;
-  --ok: #3f6b3a;
+  --canvas: #faf9f5;
+  --surface: #ffffff;
+  --surface-2: #f3f1eb;
+  --inset: #ebe8e0;
+  --ink: #181715;
+  --ink-2: #45423d;
+  --muted: #59554e;
+  --faint: #6b665e;
+  --line: #e5e2d9;
+  --line-strong: #d1cdc0;
+  --accent: #c2410c;
+  --accent-strong: #9a3412;
+  --accent-soft: #fff7ed;
+  --ok: #3d6b35;
   --warn: #8a5a17;
   --bad: #9b2c20;
-  --shadow: 0 1px 2px rgb(52 40 24 / 6%), 0 8px 24px rgb(52 40 24 / 8%);
+  --shadow-tile: 0 1px 3px rgb(24 23 21 / 5%), 0 1px 2px rgb(24 23 21 / 3%);
+  --shadow-float: 0 1px 2px rgb(24 23 21 / 6%), 0 10px 30px -10px rgb(24 23 21 / 12%);
   --radius: 10px;
   --radius-sm: 6px;
   --rail: 216px;
   --preview: minmax(320px, 34vw);
+  --serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --dur-1: 120ms;
+  --dur-2: 200ms;
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --paper: #16140f;
+    --canvas: #16140f;
     --surface: #1d1a14;
     --surface-2: #242019;
+    --inset: #12100c;
     --ink: #f2ece0;
     --ink-2: #d6cdbc;
     --muted: #9c9385;
+    --faint: #8a8175;
     --line: #302b22;
     --line-strong: #464035;
     --accent: #e08a6d;
-    --accent-ink: #231410;
+    --accent-strong: #f0a184;
     --accent-soft: #3a241d;
     --ok: #8fbc84;
     --warn: #d9ac63;
     --bad: #e2907f;
-    --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 10px 30px rgb(0 0 0 / 35%);
+    --shadow-tile: 0 1px 2px rgb(0 0 0 / 30%);
+    --shadow-float: 0 1px 2px rgb(0 0 0 / 40%), 0 10px 30px rgb(0 0 0 / 35%);
     color-scheme: dark;
   }
 }
@@ -57,9 +71,9 @@ body {
 }
 
 body {
-  background: var(--paper);
+  background: var(--canvas);
   color: var(--ink);
-  font: 13px/1.5 -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font: 13px/1.5 var(--sans);
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
 }
@@ -71,8 +85,8 @@ input {
 }
 
 kbd {
-  font: 11px/1 ui-monospace, "Cascadia Mono", Consolas, monospace;
-  color: var(--muted);
+  font: 11px/1 var(--mono);
+  color: var(--faint);
   border: 1px solid var(--line);
   border-bottom-color: var(--line-strong);
   border-radius: 4px;
@@ -81,17 +95,54 @@ kbd {
 }
 
 code {
-  font: 12px/1.2 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font: 12px/1.2 var(--mono);
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: 4px;
   padding: 1px 4px;
 }
 
+::selection {
+  background: color-mix(in oklab, var(--accent) 20%, transparent);
+}
+
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: 3px;
+}
+
+/* Quiet scrollbars: thin, hairline track, a thumb that darkens on hover.
+   The results list is the main scroller and it should not shout. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--line-strong);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 #app {
@@ -112,7 +163,7 @@ code {
   gap: 22px;
   padding: 22px 14px 16px;
   border-right: 1px solid var(--line);
-  background: var(--paper);
+  background: var(--canvas);
   -webkit-app-region: drag;
 }
 
@@ -134,12 +185,12 @@ code {
   height: 26px;
   border-radius: 7px;
   background: var(--ink);
-  color: var(--paper);
-  font: 600 15px/1 "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  color: var(--canvas);
+  font: 600 15px/1 var(--serif);
 }
 
 .brand-name {
-  font: 600 17px/1 "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  font: 600 17px/1 var(--serif);
   letter-spacing: -0.01em;
 }
 
@@ -244,7 +295,7 @@ code {
 
 h1 {
   margin: 0;
-  font: 600 25px/1.15 "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  font: 600 25px/1.15 var(--serif);
   letter-spacing: -0.015em;
 }
 
@@ -271,12 +322,12 @@ h2 {
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-float);
 }
 
 .search-bar:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow);
+  box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow-float);
 }
 
 .search-icon {
@@ -516,7 +567,7 @@ mark {
 .failures .path,
 .path {
   color: var(--muted);
-  font: 11px/1.4 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font: 11px/1.4 var(--mono);
   overflow-wrap: anywhere;
 }
 
@@ -570,7 +621,7 @@ mark {
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   color: var(--ink-2);
-  font: 11px/1.55 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font: 11px/1.55 var(--mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -639,14 +690,14 @@ button.danger-button {
 button.primary {
   background: var(--ink);
   border-color: var(--ink);
-  color: var(--paper);
+  color: var(--canvas);
   font-weight: 600;
 }
 
 button.primary:hover {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--accent-ink);
+  color: var(--accent-soft);
 }
 
 button.ghost:hover {
@@ -752,8 +803,8 @@ button:disabled {
   padding: 10px 14px;
   border-radius: var(--radius-sm);
   background: var(--ink);
-  color: var(--paper);
-  box-shadow: var(--shadow);
+  color: var(--canvas);
+  box-shadow: var(--shadow-float);
   font-size: 12.5px;
 }
 
