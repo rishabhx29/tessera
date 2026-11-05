@@ -10,6 +10,23 @@ releases begin.
 
 ### Added
 
+- The window's design direction, written down where the UI lives
+  (`crates/app/ui/DESIGN.md`): the website's brand tokens — canvas `#FAF9F5`,
+  ink `#181715`, terracotta `#C2410C`, hairlines `#E5E2D9` — plus the
+  launcher-class interaction rules the window now follows: keyboard actions
+  never animate, hovers change color only, presses answer with a 0.97 scale,
+  and everything else stays under 200 ms and gated on reduced-motion.
+- `dev-mock.js`, a stand-in for the Tauri IPC that exists only in a plain
+  browser (inert under the real app), mirroring the payload shapes in
+  `engine.rs`. It exists because every QA round correctly noted that the
+  window's UI was read, never run; every visual state — home, results,
+  preview, first-run, no-match, activity, settings, dark theme — can now be
+  rendered and screenshotted without building the shell. The mock paints a
+  corner badge so its screenshots are never mistaken for the real window.
+- A home state for the empty search box: the mosaic mark, one line, and three
+  example queries that teach the three arms by running them. The miss state
+  names its cause and suggests a filter. An empty models note no longer
+  renders as a stray bordered pill.
 - CI now also runs on Linux and macOS. Linux is where the non-Windows paths are
   compiled at all; macOS is the only place `ocr/vision.rs` exists, since it is
   `#[cfg(target_os = "macos")]` and no other runner can see that code. The
@@ -105,6 +122,28 @@ releases begin.
 
 ### Changed
 
+- The window adopts the website's brand palette and type stacks, replacing
+  its ad-hoc warm scheme; they are one product now. Scrollbars are quiet
+  (thin, hairline thumb), `::selection` gets the accent wash, and the dark
+  theme keeps the same structure with a lifted accent.
+- The search readout moved out of the input — where it fought the query for
+  the line — into a mono status line under the bar: results, total wall
+  time, engine time, arms, reserved at one line so the list never jumps.
+- Result rows carry one file-kind glyph each (image, PDF, doc, text) in the
+  search icon's stroke, so forty rows are scanned by shape; the folder line
+  and every path, identifier and number in Activity and Settings is mono,
+  with tabular numerals.
+- Arrow keys now work wherever focus is on the search view — from the input,
+  from the list, from nowhere — instead of ignoring the input's focus; one
+  keydown handler owns the view. Esc walks back: preview, then query, and
+  any other view returns to search. Clearing the query bumps the search
+  sequence, so a still-in-flight answer cannot render ghost results after
+  Esc; identical in-flight searches are deduplicated (the window's half of
+  QA round 6's D11 — the engine call itself cannot be aborted from here).
+- A search preview no longer stays open after switching views; the pane
+  belongs to the view that asked for it.
+- Every hover rule sits behind a hover-capable-pointer check, so a touch
+  device cannot stick its first tap in a hover state.
 - `tessera index` reports indexed / unchanged / moved / skipped / failed /
   removed counts.
 - `tessera watch` parks on the nearest timer it keeps — a rescan, the power
