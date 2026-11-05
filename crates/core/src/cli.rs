@@ -146,10 +146,81 @@ enum ModelsAction {
     Status,
 }
 
-/// The default data dir: the OS local-data dir (e.g. %LOCALAPPDATA%\Tessera).
+/// The default data dir: the OS local-data dir (e.g. %LOCALAPPDATA%\TesseraData).
+///
+/// Deliberately *not* `%LOCALAPPDATA%\Tessera`: the NSIS installer's per-user
+/// default install dir is exactly that name, and its uninstaller removes the
+/// install dir wholesale — a collision would delete the index and the models
+/// on uninstall. The data dir is therefore one the installer will never pick.
 pub fn default_data_dir() -> Result<PathBuf> {
     let base = dirs::data_local_dir().context("the OS has no local data directory")?;
-    Ok(base.join("Tessera"))
+    Ok(base.join("TesseraData"))
+}
+
+/// The data dir this process uses: `TESSERA_DATA_DIR` wins, then the default,
+/// and a one-time migration moves an existing index and models from the
+/// pre-0.1.0 location. The migration is a rename on the same volume; if the
+/// index cannot be moved (its app is still running) the legacy dir stays
+/// authoritative for this process and the run says so.
+pub fn data_dir() -> Result<PathBuf> {
+    if let Ok(overridden) = std::env::var("TESSERA_DATA_DIR") {
+        if !overridden.trim().is_empty() {
+            return Ok(PathBuf::from(overridden));
+        }
+    }
+    let new_dir = default_data_dir()?;
+    let legacy = dirs::data_local_dir()
+        .context("the OS has no local data directory")?
+        .join("Tessera");
+    if legacy == new_dir || !legacy.exists() || new_dir.exists() {
+        return Ok(new_dir);
+    }
+    match migrate_legacy_data_dir(&legacy, &new_dir) {
+        Ok(true) => eprintln!(
+            "moved the index and models from {} to {} (the installer now owns the old folder)",
+            legacy.display(),
+            new_dir.display()
+        ),
+        Ok(false) => {}
+        Err(err) => {
+            eprintln!(
+                "the index at {} could not be moved, so it stays there; \
+                 close any running Tessera and run a command again to finish \
+                 moving it to {} ({err:#})",
+                legacy.display(),
+                new_dir.display()
+            );
+            return Ok(legacy);
+        }
+    }
+    Ok(new_dir)
+}
+
+/// Move a pre-0.1.0 index (and its sidecars and models) from `legacy` into
+/// `new_dir`. Returns whether anything moved. Only the engine's own files go:
+/// the legacy folder may also hold an installed app — the v0.1.0 installer's
+/// collision — and those files are not the engine's to touch. Renames within
+/// one volume, so the move is cheap and the data never copies through a
+/// temporary file.
+fn migrate_legacy_data_dir(legacy: &Path, new_dir: &Path) -> Result<bool> {
+    let index = legacy.join("index.sqlite");
+    if !index.exists() {
+        return Ok(false);
+    }
+    std::fs::create_dir_all(new_dir)?;
+    std::fs::rename(&index, new_dir.join("index.sqlite")).map_err(|err| {
+        anyhow::anyhow!(
+            "the index at {} could not be moved: {err}",
+            legacy.display()
+        )
+    })?;
+    for name in ["index.sqlite-shm", "index.sqlite-wal", "models"] {
+        let src = legacy.join(name);
+        if src.exists() {
+            let _ = std::fs::rename(&src, new_dir.join(name));
+        }
+    }
+    Ok(true)
 }
 
 /// Every pipeline the engine has, in the order they are offered a file.
@@ -293,7 +364,7 @@ pub fn run() -> Result<()> {
     let cli = Cli::parse();
     let data_dir = match cli.data_dir {
         Some(dir) => dir,
-        None => default_data_dir()?,
+        None => data_dir()?,
     };
     let store = Store::open(&data_dir)?;
     match cli.command {
@@ -824,6 +895,52 @@ mod tests {
         assert_eq!(human_bytes(0), "0 B");
         assert_eq!(human_bytes(999), "999 B");
         assert_eq!(human_bytes(23_000_000), "23 MB");
+    }
+
+    #[test]
+    fn the_data_dir_migration_moves_a_legacy_index_whole() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root.path().join("Tessera");
+        let new_dir = root.path().join("TesseraData");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("index.sqlite"), b"the index").unwrap();
+        std::fs::write(legacy.join("index.sqlite-wal"), b"wal").unwrap();
+        std::fs::create_dir(legacy.join("models")).unwrap();
+        std::fs::write(legacy.join("models").join("siglip.int8.onnx"), b"weights").unwrap();
+        // The v0.1.0 installer put its files in the same folder; the migration
+        // must leave them exactly where they are.
+        std::fs::write(legacy.join("tessera-app.exe"), b"binary").unwrap();
+
+        let moved = migrate_legacy_data_dir(&legacy, &new_dir).unwrap();
+        assert!(moved, "a legacy index is moved");
+        assert!(new_dir.join("index.sqlite").exists());
+        assert!(new_dir.join("index.sqlite-wal").exists());
+        assert!(new_dir.join("models").join("siglip.int8.onnx").exists());
+        // The installer's own files are not the engine's to touch.
+        assert!(legacy.join("tessera-app.exe").exists());
+        assert!(!legacy.join("index.sqlite").exists());
+
+        // A second run is a no-op: the new dir now exists.
+        let again = migrate_legacy_data_dir(&legacy, &new_dir).unwrap();
+        assert!(!again, "an already-migrated home is left alone");
+    }
+
+    #[test]
+    fn the_data_dir_migration_skips_a_folder_without_an_index() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root.path().join("Tessera");
+        let new_dir = root.path().join("TesseraData");
+        std::fs::create_dir_all(&legacy).unwrap();
+        // Models without an index: nothing the migration is for.
+        std::fs::create_dir(legacy.join("models")).unwrap();
+
+        let moved = migrate_legacy_data_dir(&legacy, &new_dir).unwrap();
+        assert!(!moved, "no index means nothing to move");
+        assert!(
+            legacy.join("models").exists(),
+            "the legacy folder is untouched"
+        );
+        assert!(!new_dir.exists());
     }
 
     #[test]

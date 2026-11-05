@@ -249,8 +249,7 @@ fn show_window(app: &AppHandle) {
 }
 
 fn main() {
-    let data_dir =
-        tessera_core::cli::default_data_dir().expect("the OS has no local data directory");
+    let data_dir = tessera_core::cli::data_dir().expect("the OS has no local data directory");
     let models_dir = tessera_core::cli::models_dir(&data_dir, None);
     let shell = Shell {
         service: AppService::new(&data_dir, &models_dir),
