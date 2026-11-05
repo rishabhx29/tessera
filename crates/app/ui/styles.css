@@ -322,12 +322,13 @@ h2 {
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: var(--shadow-float);
+  box-shadow: var(--shadow-tile);
+  transition: border-color var(--dur-1) ease, box-shadow var(--dur-1) ease;
 }
 
 .search-bar:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow-float);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 16%, transparent), var(--shadow-tile);
 }
 
 .search-icon {
@@ -335,7 +336,7 @@ h2 {
   height: 18px;
   flex: none;
   fill: none;
-  stroke: var(--muted);
+  stroke: var(--faint);
   stroke-width: 1.6;
   stroke-linecap: round;
 }
@@ -350,12 +351,33 @@ h2 {
   padding: 0;
 }
 
+#query::placeholder {
+  color: var(--faint);
+}
+
 #query::-webkit-search-cancel-button {
   display: none;
 }
 
 .search-hint {
   flex: none;
+}
+
+/* The readout: a quiet status line under the bar, reserved at one line so the
+   result list never jumps when the first answer arrives. */
+.search-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-height: 18px;
+  margin: 8px 2px 0;
+  font: 11px/1.4 var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+
+.search-meta .sep {
+  opacity: 0.6;
 }
 
 .notes {
@@ -385,7 +407,7 @@ h2 {
 }
 
 .results {
-  margin-top: 14px;
+  margin-top: 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
@@ -479,11 +501,91 @@ mark {
   font-weight: 650;
 }
 
+/* The three states of an answered (or unanswered) box: the home state that
+   teaches the arms, the miss state that names its cause, and the first run
+   that offers the one action that fixes everything. */
+
+.home,
 .first-run,
 .empty {
-  margin: 46px auto 0;
-  max-width: 520px;
+  margin: 0 auto;
+  max-width: 560px;
+  padding-top: 14vh;
   text-align: center;
+}
+
+.home-mark {
+  width: 44px;
+  height: 44px;
+  margin-bottom: 22px;
+}
+
+.home-mark rect {
+  fill: color-mix(in oklab, var(--ink) 14%, transparent);
+}
+
+.home-mark .mark-accent {
+  fill: var(--accent);
+}
+
+.home-line,
+.first-run p {
+  color: var(--ink-2);
+  font-size: 14px;
+  line-height: 1.6;
+  margin: 0 auto 26px;
+  max-width: 46ch;
+}
+
+.home-examples {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 480px;
+  margin: 0 auto;
+  text-align: left;
+}
+
+.example {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+  text-align: left;
+}
+
+.example .tag {
+  flex: none;
+  width: 58px;
+  font: 600 10px/1.4 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.example .q {
+  color: var(--ink-2);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.example:hover {
+  border-color: var(--line-strong);
+  background: var(--surface-2);
+}
+
+.example .q {
+  transition: color var(--dur-1) ease;
+}
+
+.example:hover .q {
+  color: var(--ink);
 }
 
 .first-run h1 {
@@ -491,15 +593,19 @@ mark {
   margin-bottom: 12px;
 }
 
-.first-run p {
-  color: var(--ink-2);
-  font-size: 14px;
-  margin: 0 auto 22px;
-  max-width: 44ch;
+.first-run {
+  padding-top: 18vh;
 }
 
 .empty-title {
   font-weight: 600;
+  font-size: 15px;
+  margin: 0 0 6px;
+}
+
+.empty .dim {
+  font-size: 13px;
+  margin: 0;
 }
 
 .dim {

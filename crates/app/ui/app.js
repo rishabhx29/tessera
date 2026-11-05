@@ -114,6 +114,7 @@ async function runSearch() {
     renderNotes([{ text: String(error), error: true }]);
     state.results = [];
     state.selected = -1;
+    renderSearchMeta(null);
     renderResults();
     return;
   }
@@ -125,17 +126,40 @@ async function runSearch() {
   renderSearchMeta(payload);
 }
 
+// The readout under the search bar: how long the whole wait was, the engine's
+// share of it, and the arms that answered. Plain numbers the user can check —
+// the honesty promise made visible. Inside the input it fought the query for
+// space; below it, it is a quiet status line.
+function formatMillis(ms) {
+  if (!Number.isFinite(ms)) return "";
+  return ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${Math.round(ms)} ms`;
+}
+
 function renderSearchMeta(payload) {
-  const hint = $("search-hint");
+  const meta = $("search-meta");
   if (!payload || !payload.rows?.length) {
-    hint.textContent = "Ctrl K";
+    meta.replaceChildren();
     return;
   }
-  const arms = payload.arms?.length ? ` · ${payload.arms.join(" + ")}` : "";
-  const engine = Number.isFinite(payload.engine_millis)
-    ? ` · engine ${payload.engine_millis} ms`
-    : "";
-  hint.textContent = `${payload.rows.length} in ${payload.millis} ms total${engine}${arms}`;
+  meta.replaceChildren();
+  const parts = [
+    `${payload.rows.length} ${payload.rows.length === 1 ? "result" : "results"}`,
+    `${formatMillis(payload.millis)} total`,
+  ];
+  if (Number.isFinite(payload.engine_millis)) parts.push(`${formatMillis(payload.engine_millis)} engine`);
+  if (payload.arms?.length) parts.push(payload.arms.join(" + "));
+  parts.forEach((text, index) => {
+    if (index > 0) {
+      const dot = document.createElement("span");
+      dot.className = "sep";
+      dot.setAttribute("aria-hidden", "true");
+      dot.textContent = "·";
+      meta.append(dot);
+    }
+    const span = document.createElement("span");
+    span.textContent = text;
+    meta.append(span);
+  });
 }
 
 function renderNotes(notes) {
@@ -152,7 +176,9 @@ function renderNotes(notes) {
 function renderResults() {
   const list = $("results");
   list.replaceChildren();
-  $("empty").hidden = !state.query || state.results.length > 0 || !$("first-run").hidden;
+  const showEmpty = Boolean(state.query) && state.results.length === 0 && $("first-run").hidden;
+  $("empty").hidden = !showEmpty;
+  $("home").hidden = Boolean(state.query) || state.results.length > 0 || !$("first-run").hidden;
   list.setAttribute("aria-activedescendant", "");
   state.results.forEach((row, index) => {
     const button = document.createElement("button");
@@ -566,6 +592,17 @@ async function checkFirstRun() {
 
 document.querySelectorAll(".rail-item").forEach((button) => {
   button.addEventListener("click", () => showView(button.dataset.view));
+});
+
+// The home state's example queries are real searches, not decoration: each
+// fills the box and runs, so the three arms demonstrate themselves.
+document.querySelectorAll(".example").forEach((button) => {
+  button.addEventListener("click", () => {
+    const input = $("query");
+    input.value = button.dataset.query;
+    input.focus();
+    runSearch();
+  });
 });
 
 $("query").addEventListener("input", () => {

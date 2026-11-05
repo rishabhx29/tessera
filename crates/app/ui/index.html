@@ -48,8 +48,42 @@
             />
             <kbd class="search-hint" id="search-hint">Ctrl K</kbd>
           </form>
+          <div class="search-meta" id="search-meta" role="status"></div>
           <div class="notes" id="notes" role="status"></div>
           <div class="results" id="results" role="listbox" aria-label="Results" tabindex="0"></div>
+          <div class="home" id="home" hidden>
+            <svg class="home-mark" viewBox="0 0 44 44" aria-hidden="true">
+              <g>
+                <rect x="2" y="2" width="10" height="10" rx="3" />
+                <rect x="17" y="2" width="10" height="10" rx="3" />
+                <rect x="32" y="2" width="10" height="10" rx="3" />
+                <rect x="2" y="17" width="10" height="10" rx="3" />
+                <rect class="mark-accent" x="17" y="17" width="10" height="10" rx="3" />
+                <rect x="32" y="17" width="10" height="10" rx="3" />
+                <rect x="2" y="32" width="10" height="10" rx="3" />
+                <rect x="17" y="32" width="10" height="10" rx="3" />
+                <rect x="32" y="32" width="10" height="10" rx="3" />
+              </g>
+            </svg>
+            <p class="home-line">
+              One search bar for everything the file system can't search — the
+              words inside screenshots and documents, and what pictures show.
+            </p>
+            <div class="home-examples" aria-label="Example searches">
+              <button type="button" class="example" data-query="type:pdf quarterly report">
+                <span class="tag">words</span>
+                <span class="q">type:pdf quarterly report</span>
+              </button>
+              <button type="button" class="example" data-query="the contract that stops me working for a competitor">
+                <span class="tag">meaning</span>
+                <span class="q">the contract that stops me working for a competitor</span>
+              </button>
+              <button type="button" class="example" data-query="a dog on grass">
+                <span class="tag">picture</span>
+                <span class="q">a dog on grass</span>
+              </button>
+            </div>
+          </div>
           <div class="first-run" id="first-run" hidden>
             <h1>Your files, findable by anything you remember.</h1>
             <p>
