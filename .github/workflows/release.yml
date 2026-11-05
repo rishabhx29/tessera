@@ -1,0 +1,65 @@
+# Release: a tag push builds the Windows installer and publishes a GitHub
+# release with it. GitHub's windows-latest targets MSVC, so the GNU toolchain
+# constraint documented for the dev machine (cargo-tessera.ps1) does not apply
+# here — CI and the installer both build with plain cargo.
+#
+# The first-run model download is checksum-pinned in the binary, so the
+# installer carries no model weights and stays small.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  bundle-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (MSVC, stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            crates/core
+            crates/app
+
+      - name: Build and bundle the NSIS installer
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: crates/app
+          tagName: ${{ github.ref_name }}
+          releaseName: "Tessera ${{ github.ref_name }}"
+          releaseBody: |
+            One search bar for everything your PC can't search — images,
+            screenshots, PDFs, and documents — offline, free, and open source.
+
+            Install with `Tessera_x64-setup.exe`. The first launch downloads the
+            models once (checksum-pinned, no account); after that the app never
+            touches the network at query time.
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: false
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          $dir = "crates/app/target/release/bundle/nsis"
+          Get-ChildItem $dir -Filter *.exe | ForEach-Object {
+            (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + "  " + $_.Name
+          } | Out-File "$dir/SHA256SUMS.txt"
+          $tag = "${{ github.ref_name }}"
+          $rel = (Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag" -Headers @{ Authorization = "Bearer ${{ secrets.GITHUB_TOKEN }}" })
+          $asset = $rel.assets | Where-Object { $_.name -like "*-setup.exe" } | Select-Object -First 1
+          $upload = "https://uploads.github.com/repos/${{ github.repository }}/releases/$($rel.id)/assets?name=SHA256SUMS.txt"
+          $headers = @{ Authorization = "Bearer ${{ secrets.GITHUB_TOKEN }}"; "Content-Type" = "text/plain" }
+          Invoke-RestMethod -Uri $upload -Method Post -Headers $headers -InFile "$dir/SHA256SUMS.txt"
