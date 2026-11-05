@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://tessera.dev/sitemap.xml

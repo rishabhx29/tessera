@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    background-color: #FAF9F5;
+    color: #181715;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Accessible focus indicators with confident accent */
+  :focus-visible {
+    outline: 2px solid #C2410C;
+    outline-offset: 2px;
+  }
+
+  /* Smooth transitions */
+  * {
+    border-color: #E5E2D9;
+  }
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #FAF9F5;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D1CDC0;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #A39E95;
+}
