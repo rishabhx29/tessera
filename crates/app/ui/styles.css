@@ -1003,10 +1003,38 @@ button:disabled {
   }
 }
 
+/* Motion, all of it in one place. Every rule here is gated on
+   no-preference: reduced motion keeps the color changes and loses the
+   movement. What animates: color transitions on interactive elements, the
+   press answer, the toast. What never animates: keyboard actions, view
+   switches, search results (they re-render per keystroke). */
 @media (prefers-reduced-motion: no-preference) {
   .result,
   .rail-item,
-  button {
-    transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+  button,
+  .example {
+    transition:
+      background-color var(--dur-1) ease,
+      color var(--dur-1) ease,
+      border-color var(--dur-1) ease,
+      transform var(--dur-1) var(--ease-out);
+  }
+
+  /* A pressable thing answers the press — the one transform feedback a
+     high-frequency surface keeps. Result rows are buttons too; a 0.97 dip
+     reads as the list acknowledging the click. */
+  button:active {
+    transform: scale(0.97);
+  }
+
+  .toast {
+    transition:
+      opacity 160ms var(--ease-out),
+      transform 160ms var(--ease-out);
+  }
+
+  .toast:not(.shown) {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
   }
 }

@@ -18,6 +18,11 @@ const state = {
   searchTimer: null,
   pollTimer: null,
   toastTimer: null,
+  // The query an in-flight search is computing, if any. The engine call
+  // cannot be aborted from here, so the honest mitigation for rapid typing
+  // is to never start the same search twice and to render only the newest
+  // answer (the seq guard below); a superseded answer's cost is paid once.
+  inflightQuery: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -29,9 +34,17 @@ function toast(message, kind = "info") {
   el.textContent = message;
   el.dataset.kind = kind;
   el.hidden = false;
+  // Commit the from-state styles before adding the class, so the transition
+  // has two states to move between. (A rAF here would be throttled in an
+  // occluded window; a reflow read is not.)
+  void el.offsetWidth;
+  el.classList.add("shown");
   clearTimeout(state.toastTimer);
   state.toastTimer = setTimeout(() => {
-    el.hidden = true;
+    el.classList.remove("shown");
+    state.toastTimer = setTimeout(() => {
+      el.hidden = true;
+    }, 180);
   }, 4200);
 }
 
@@ -100,20 +113,28 @@ async function runSearch() {
   const query = $("query").value.trim();
   state.query = query;
   if (!query) {
+    // Bump the sequence: a search still in flight for the cleared query must
+    // not come back from the dead and render after the user hit Esc.
+    state.searchSeq++;
     state.results = [];
     state.selected = -1;
+    state.inflightQuery = null;
     renderResults();
+    renderSearchMeta(null);
     $("notes").replaceChildren();
     closePreview();
     checkFirstRun();
     return;
   }
+  if (query === state.inflightQuery) return;
   const seq = ++state.searchSeq;
+  state.inflightQuery = query;
   let payload;
   try {
     payload = await call("search", { query, limit: 40 });
   } catch (error) {
     if (seq !== state.searchSeq) return;
+    state.inflightQuery = null;
     renderNotes([{ text: String(error), error: true }]);
     state.results = [];
     state.selected = -1;
@@ -122,6 +143,7 @@ async function runSearch() {
     return;
   }
   if (seq !== state.searchSeq) return;
+  state.inflightQuery = null;
   state.results = payload.rows ?? [];
   state.selected = state.results.length ? 0 : -1;
   renderNotes((payload.notes ?? []).map((text) => ({ text, error: false })));
@@ -643,16 +665,60 @@ $("search-form").addEventListener("submit", (event) => {
   if (state.selected >= 0) select(state.selected, true);
 });
 
-$("results").addEventListener("keydown", (event) => {
-  if (event.key === "ArrowDown") {
+// Arrow keys work wherever the focus is on the search view — from the input,
+// from the list, from nowhere in particular. Spotlight and Raycast never ask
+// the user to tab somewhere before the arrows answer; neither does this.
+document.addEventListener("keydown", (event) => {
+  const mod = event.ctrlKey || event.metaKey;
+  if (mod && event.key.toLowerCase() === "k") {
     event.preventDefault();
-    move(1);
-  } else if (event.key === "ArrowUp") {
+    showView("search");
+    $("query").select();
+    return;
+  }
+  if (mod && event.key === "1") {
     event.preventDefault();
-    move(-1);
-  } else if (event.key === "Enter" && state.selected >= 0) {
+    showView("search");
+    return;
+  }
+  if (mod && event.key === "2") {
     event.preventDefault();
-    select(state.selected, true);
+    showView("activity");
+    return;
+  }
+  if (mod && event.key === "3") {
+    event.preventDefault();
+    showView("settings");
+    return;
+  }
+  if (event.key === "Escape") {
+    if (!$("preview").hidden) {
+      closePreview();
+    } else if (state.view !== "search") {
+      showView("search");
+    } else if ($("query").value) {
+      $("query").value = "";
+      runSearch();
+    }
+    return;
+  }
+  if (state.view !== "search") return;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    if (state.results.length) {
+      event.preventDefault();
+      move(event.key === "ArrowDown" ? 1 : -1);
+    }
+    return;
+  }
+  if (event.key === "Enter") {
+    const target = document.activeElement;
+    // The input's Enter is the form submit; a focused result button clicks
+    // itself. Only the unclaimed Enter opens the selection.
+    if (target === $("query") || target?.classList?.contains("result")) return;
+    if (state.selected >= 0) {
+      event.preventDefault();
+      select(state.selected, true);
+    }
   }
 });
 
@@ -680,45 +746,6 @@ $("autostart").addEventListener("change", async (event) => {
   } catch (error) {
     event.target.checked = !event.target.checked;
     fail("Could not change autostart", error);
-  }
-});
-
-document.addEventListener("keydown", (event) => {
-  const mod = event.ctrlKey || event.metaKey;
-  if (mod && event.key.toLowerCase() === "k") {
-    event.preventDefault();
-    showView("search");
-    $("query").select();
-    return;
-  }
-  if (mod && event.key === "1") {
-    event.preventDefault();
-    showView("search");
-    return;
-  }
-  if (mod && event.key === "2") {
-    event.preventDefault();
-    showView("activity");
-    return;
-  }
-  if (mod && event.key === "3") {
-    event.preventDefault();
-    showView("settings");
-    return;
-  }
-  if (event.key === "Escape") {
-    if (!$("preview").hidden) {
-      closePreview();
-    } else if ($("query").value) {
-      $("query").value = "";
-      runSearch();
-    }
-  }
-  if ((event.key === "ArrowDown" || event.key === "ArrowUp") && document.activeElement !== $("query")) {
-    if (state.view === "search" && state.results.length) {
-      event.preventDefault();
-      move(event.key === "ArrowDown" ? 1 : -1);
-    }
   }
 });
 
