@@ -173,6 +173,26 @@ function renderNotes(notes) {
   }
 }
 
+// One glyph per file family, drawn in the same 1.5px stroke as the search
+// icon. Scanning forty rows by extension string is slow; scanning them by
+// shape is not.
+const KIND_ICONS = {
+  image:
+    '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2"></rect><circle cx="7.2" cy="8" r="1.4"></circle><path d="M3.5 14.5 8 10l3 2.75 3-3.25 2.5 2.5"></path></svg>',
+  pdf:
+    '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2.75h6.5l3.5 3.5v11H5z"></path><path d="M11.5 2.75v3.5h3.5"></path><path d="M7.5 11.25h5M7.5 13.75h5"></path></svg>',
+  doc: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2.75h6.5l3.5 3.5v11H5z"></path><path d="M11.5 2.75v3.5h3.5"></path></svg>',
+  text: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5h12M4 10h12M4 14.5h8"></path></svg>',
+};
+
+function kindGroup(kind) {
+  const extension = String(kind || "").toLowerCase();
+  if (["png", "jpg", "jpeg", "webp", "bmp", "gif", "tiff"].includes(extension)) return "image";
+  if (extension === "pdf") return "pdf";
+  if (extension === "docx") return "doc";
+  return "text";
+}
+
 function renderResults() {
   const list = $("results");
   list.replaceChildren();
@@ -188,6 +208,11 @@ function renderResults() {
     button.setAttribute("role", "option");
     button.setAttribute("aria-selected", index === state.selected ? "true" : "false");
     button.dataset.index = String(index);
+
+    const icon = document.createElement("span");
+    icon.className = "result-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.innerHTML = KIND_ICONS[kindGroup(row.kind)];
 
     const name = document.createElement("span");
     name.className = "result-name";
@@ -222,7 +247,7 @@ function renderResults() {
     snippet.className = "result-snippet";
     appendSegments(snippet, row.snippet);
 
-    button.append(name, folder, badges, snippet);
+    button.append(icon, name, folder, badges, snippet);
     button.addEventListener("click", () => select(index, true));
     list.append(button);
   });
