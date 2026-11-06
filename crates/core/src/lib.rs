@@ -20,6 +20,7 @@ pub mod models;
 pub mod ocr;
 pub mod search;
 pub mod store;
+pub mod thumb;
 pub mod vectors;
 pub mod watch;
 
