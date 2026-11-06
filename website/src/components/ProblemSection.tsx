@@ -1,177 +1,189 @@
 import React from 'react';
+import { ArrowRight } from 'lucide-react';
+import { Section, SectionHeading } from './Section';
 
-export const ProblemSection: React.FC = () => {
-  return (
-    <section className="py-20 bg-subtle/50 border-b border-line">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Section Header */}
-        <div className="max-w-3xl mb-14">
-          <div className="text-xs font-mono uppercase tracking-wider text-accent font-semibold mb-2">
-            The Reality of Desktop Search
-          </div>
-          <h2 className="font-serif text-3xl sm:text-4xl font-bold tracking-tight text-ink-primary leading-tight">
-            Windows treats images as opaque pictures, and a folder of ten thousand files as a dead-end maze.
-          </h2>
-          <p className="mt-4 text-base sm:text-lg text-ink-secondary leading-relaxed">
-            Every day you capture screenshots, save PDFs, and download receipts.
-            The moment they land on your hard drive, traditional file search forgets what is inside them.
-          </p>
-        </div>
+const FAILURES = [
+  {
+    number: '01',
+    title: 'Screenshots are named after the clock.',
+    body: 'Screenshot 2026-10-11 at 14.32.11.png says nothing about the airline invoice inside it. Windows can see the date, not the words.',
+    answer: 'Tessera reads the words inside the image.',
+  },
+  {
+    number: '02',
+    title: 'Semantic search wants new hardware.',
+    body: 'Copilot+ search needs an NPU PC. Most people are going to keep the machine they already own.',
+    answer: 'Tessera runs on the CPU in that machine.',
+  },
+  {
+    number: '03',
+    title: 'One tool sees one format.',
+    body: 'Screenshot tools, photo tools and document tools each hold a slice. You end up guessing which one to open.',
+    answer: 'One index covers screenshots, PDFs, Word and text.',
+  },
+];
 
-        {/* 3 Problem Cards with Editorial Contrast */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
-          {/* Card 1 */}
-          <div className="p-6 rounded-xl bg-surface border border-line shadow-tile flex flex-col justify-between">
-            <div>
-              <div className="w-10 h-10 rounded-lg bg-red-50 border border-red-200 flex items-center justify-center text-red-700 mb-4 font-mono font-bold text-sm">
-                01
-              </div>
-              <h3 className="font-serif text-lg font-bold text-ink-primary mb-2">
-                Screenshots have useless names
-              </h3>
-              <p className="text-sm text-ink-secondary leading-relaxed mb-4">
-                Filenames like <code className="text-xs font-mono bg-subtle px-1.5 py-0.5 rounded text-ink-primary">Screenshot 2026-10-11 at 14.32.11.png</code> contain
-                zero semantic signal. You remember the airline confirmation code, but Windows search only knows the creation timestamp.
-              </p>
-            </div>
-            <div className="text-xs font-mono text-ink-muted pt-3 border-t border-line">
-              Tessera runs native OCR to index every word automatically.
-            </div>
-          </div>
+const COMPARISON = [
+  {
+    capability: 'Text inside screenshots',
+    tessera: 'Indexed locally',
+    explorer: 'No',
+    cloud: 'Sometimes, paid',
+    copilot: 'Copilot+ PCs only',
+  },
+  {
+    capability: 'Search images by description',
+    tessera: 'SigLIP, local',
+    explorer: 'No',
+    cloud: 'Uploads the image',
+    copilot: 'Copilot+ PCs only',
+  },
+  {
+    capability: 'One query across formats',
+    tessera: 'Screenshot, PDF, Word, text',
+    explorer: 'File names',
+    cloud: 'Usually one format',
+    copilot: 'Partial',
+  },
+  {
+    capability: 'Works offline',
+    tessera: 'Yes, at query time',
+    explorer: 'Yes',
+    cloud: 'No',
+    copilot: 'Partly',
+  },
+  {
+    capability: 'Cost',
+    tessera: 'Free, MIT',
+    explorer: 'Bundled',
+    cloud: 'About $15 to $19 a month',
+    copilot: 'New hardware',
+  },
+];
 
-          {/* Card 2 */}
-          <div className="p-6 rounded-xl bg-surface border border-line shadow-tile flex flex-col justify-between">
-            <div>
-              <div className="w-10 h-10 rounded-lg bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-800 mb-4 font-mono font-bold text-sm">
-                02
-              </div>
-              <h3 className="font-serif text-lg font-bold text-ink-primary mb-2">
-                Copilot+ requires $1,500 new laptops
-              </h3>
-              <p className="text-sm text-ink-secondary leading-relaxed mb-4">
-                Microsoft provides semantic search, but restricts it exclusively to Copilot+ certified PCs with 40+ TOPS NPU silicon.
-                Your existing 8-core desktop or lightweight laptop is left behind.
-              </p>
-            </div>
-            <div className="text-xs font-mono text-ink-muted pt-3 border-t border-line">
-              Tessera runs on standard CPU threads in under 250 MB idle RAM.
-            </div>
-          </div>
+export const ProblemSection: React.FC = () => (
+  <Section id="problem" labelledBy="problem-title">
+    <SectionHeading
+      id="problem-title"
+      title={
+        <>
+          Your PC can find a file by its name. It cannot find the receipt inside
+          it.
+        </>
+      }
+      lede={
+        <>
+          Windows indexes names and dates. The words inside a screenshot, the page
+          of a PDF and the paragraph in a Word file stay invisible. On a Copilot+
+          PC you get part of this, if you buy the right laptop.
+        </>
+      }
+    />
 
-          {/* Card 3 */}
-          <div className="p-6 rounded-xl bg-surface border border-line shadow-tile flex flex-col justify-between">
-            <div>
-              <div className="w-10 h-10 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-800 mb-4 font-mono font-bold text-sm">
-                03
-              </div>
-              <h3 className="font-serif text-lg font-bold text-ink-primary mb-2">
-                Single-format tools fragment your search
-              </h3>
-              <p className="text-sm text-ink-secondary leading-relaxed mb-4">
-                Existing tools only index one format: screenshot tools only see screenshots, photo tools only see camera rolls, document tools ignore images.
-                You are forced to guess which tool to open.
-              </p>
-            </div>
-            <div className="text-xs font-mono text-ink-muted pt-3 border-t border-line">
-              One search bar fuses screenshots, PDFs, and documents together.
-            </div>
-          </div>
-        </div>
-
-        {/* Comparison Table: The Honest Positioning */}
-        <div className="rounded-xl border border-line-strong bg-surface overflow-hidden shadow-tile">
-          <div className="px-6 py-4 bg-canvas border-b border-line flex items-center justify-between">
-            <h3 className="font-serif text-base font-bold text-ink-primary">
-              Positioning vs Other Approaches
+    <ol className="mt-12 border-t border-line">
+      {FAILURES.map((failure) => (
+        <li
+          key={failure.number}
+          className="grid gap-3 border-b border-line py-6 md:grid-cols-[2.5rem_minmax(0,1.25fr)_minmax(0,0.75fr)] md:gap-8 md:py-7"
+        >
+          <span className="font-mono text-[11px] text-ink-faint">
+            {failure.number}
+          </span>
+          <div>
+            <h3 className="font-serif text-[19px] font-bold leading-snug text-ink-primary">
+              {failure.title}
             </h3>
-            <span className="text-xs font-mono text-ink-muted">Transparent comparison</span>
+            <p className="mt-1.5 max-w-[58ch] text-sm leading-relaxed text-ink-secondary">
+              {failure.body}
+            </p>
           </div>
+          <p className="flex items-start gap-2 text-sm leading-relaxed text-ink-primary md:justify-self-end">
+            <ArrowRight
+              className="mt-1 h-3.5 w-3.5 shrink-0 text-accent"
+              aria-hidden="true"
+            />
+            <span>{failure.answer}</span>
+          </p>
+        </li>
+      ))}
+    </ol>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-subtle text-ink-secondary font-mono text-xs border-b border-line">
-                <tr>
-                  <th className="py-3 px-4 sm:px-6 font-medium">Capability</th>
-                  <th className="py-3 px-4 sm:px-6 font-semibold text-accent bg-accent-subtle/50">
-                    Tessera (v0.1)
-                  </th>
-                  <th className="py-3 px-4 sm:px-6 font-medium">Windows Explorer</th>
-                  <th className="py-3 px-4 sm:px-6 font-medium">Commercial SaaS</th>
-                  <th className="py-3 px-4 sm:px-6 font-medium">Copilot+ Search</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line font-sans text-ink-secondary text-xs sm:text-sm">
-                <tr>
-                  <td className="py-3.5 px-4 sm:px-6 font-medium text-ink-primary">
-                    Search screenshot text (OCR)
-                  </td>
-                  <td className="py-3.5 px-4 sm:px-6 font-semibold text-accent bg-accent-subtle/20 font-mono">
-                    Yes (34.4 ms p50)
-                  </td>
-                  <td className="py-3.5 px-4 sm:px-6 text-ink-muted">No</td>
-                  <td className="py-3.5 px-4 sm:px-6">Varies ($15-$19/mo)</td>
-                  <td className="py-3.5 px-4 sm:px-6">Yes (Copilot+ only)</td>
-                </tr>
-                <tr>
-                  <td className="py-3.5 px-4 sm:px-6 font-medium text-ink-primary">
-                    Search images by description
-                  </td>
-                  <td className="py-3.5 px-4 sm:px-6 font-semibold text-accent bg-accent-subtle/20 font-mono">
-                    Yes (SigLIP local)
-                  </td>
-                  <td className="py-3.5 px-4 sm:px-6 text-ink-muted">No</td>
-                  <td className="py-3.5 px-4 sm:px-6">Requires cloud upload</td>
-                  <td className="py-3.5 px-4 sm:px-6">Yes (Copilot+ only)</td>
-                </tr>
-                <tr>
-                  <td className="py-3.5 px-4 sm:px-6 font-medium text-ink-primary">
-                    Mixed-format single query
-                  </td>
-                  <td className="py-3.5 px-4 sm:px-6 font-semibold text-accent bg-accent-subtle/20 font-mono">
-                    Images + PDFs + DOCX
-                  </td>
-                  <td className="py-3.5 px-4 sm:px-6 text-ink-muted">Filename only</td>
-                  <td className="py-3.5 px-4 sm:px-6 text-ink-muted">Single format only</td>
-                  <td className="py-3.5 px-4 sm:px-6">Partial</td>
-                </tr>
-                <tr>
-                  <td className="py-3.5 px-4 sm:px-6 font-medium text-ink-primary">
-                    Hardware requirement
-                  </td>
-                  <td className="py-3.5 px-4 sm:px-6 font-semibold text-accent bg-accent-subtle/20 font-mono">
-                    Any standard PC (CPU)
-                  </td>
-                  <td className="py-3.5 px-4 sm:px-6">Any PC</td>
-                  <td className="py-3.5 px-4 sm:px-6">Any PC</td>
-                  <td className="py-3.5 px-4 sm:px-6 text-red-700 font-medium">New NPU PC only</td>
-                </tr>
-                <tr>
-                  <td className="py-3.5 px-4 sm:px-6 font-medium text-ink-primary">
-                    Privacy & Telemetry
-                  </td>
-                  <td className="py-3.5 px-4 sm:px-6 font-semibold text-accent bg-accent-subtle/20 font-mono">
-                    Zero network calls
-                  </td>
-                  <td className="py-3.5 px-4 sm:px-6">Bing sync telemetry</td>
-                  <td className="py-3.5 px-4 sm:px-6 text-red-700">Cloud servers</td>
-                  <td className="py-3.5 px-4 sm:px-6">Microsoft account sync</td>
-                </tr>
-                <tr>
-                  <td className="py-3.5 px-4 sm:px-6 font-medium text-ink-primary">
-                    Price & License
-                  </td>
-                  <td className="py-3.5 px-4 sm:px-6 font-semibold text-accent bg-accent-subtle/20 font-mono">
-                    Free · Open Source (MIT)
-                  </td>
-                  <td className="py-3.5 px-4 sm:px-6">Bundled in OS</td>
-                  <td className="py-3.5 px-4 sm:px-6">$15–$19 / month</td>
-                  <td className="py-3.5 px-4 sm:px-6">Hardware bundled</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
+    <div className="mt-14">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between">
+        <h3 className="font-serif text-[22px] font-bold tracking-tight text-ink-primary">
+          What changes with Tessera
+        </h3>
+        <p className="text-[12px] text-ink-muted">
+          General comparison, not a benchmark. Prices are the commercial tools we
+          could find.
+        </p>
       </div>
-    </section>
-  );
-};
+
+      <div className="mt-5 hidden overflow-hidden rounded-lg border border-line bg-surface md:block">
+        <table className="w-full border-collapse text-left text-[12px] lg:text-[13px]">
+          <caption className="sr-only">
+            Capability comparison between Tessera, Windows Explorer, cloud search
+            tools and Copilot+ search
+          </caption>
+          <thead>
+            <tr className="border-b border-line bg-subtle/70">
+              <th scope="col" className="w-[30%] px-4 py-3 font-medium text-ink-muted">
+                Capability
+              </th>
+              <th scope="col" className="px-4 py-3 font-semibold text-accent">
+                Tessera
+              </th>
+              <th scope="col" className="px-4 py-3 font-medium text-ink-muted">
+                Explorer
+              </th>
+              <th scope="col" className="px-4 py-3 font-medium text-ink-muted">
+                Cloud search tools
+              </th>
+              <th scope="col" className="px-4 py-3 font-medium text-ink-muted">
+                Copilot+
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line">
+            {COMPARISON.map((row) => (
+              <tr key={row.capability}>
+                <th
+                  scope="row"
+                  className="px-4 py-3 font-medium text-ink-primary"
+                >
+                  {row.capability}
+                </th>
+                <td className="bg-accent-subtle/40 px-4 py-3 font-medium text-ink-primary">
+                  {row.tessera}
+                </td>
+                <td className="px-4 py-3 text-ink-secondary">{row.explorer}</td>
+                <td className="px-4 py-3 text-ink-secondary">{row.cloud}</td>
+                <td className="px-4 py-3 text-ink-secondary">{row.copilot}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="mt-5 divide-y divide-line border-y border-line md:hidden">
+        {COMPARISON.map((row) => (
+          <div key={row.capability} className="py-4">
+            <h4 className="font-serif text-[16px] font-bold text-ink-primary">
+              {row.capability}
+            </h4>
+            <dl className="mt-2.5 grid grid-cols-[5.75rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-[12px] leading-snug">
+              <dt className="text-ink-muted">Tessera</dt>
+              <dd className="font-medium text-accent">{row.tessera}</dd>
+              <dt className="text-ink-muted">Explorer</dt>
+              <dd className="text-ink-secondary">{row.explorer}</dd>
+              <dt className="text-ink-muted">Cloud tools</dt>
+              <dd className="text-ink-secondary">{row.cloud}</dd>
+              <dt className="text-ink-muted">Copilot+</dt>
+              <dd className="text-ink-secondary">{row.copilot}</dd>
+            </dl>
+          </div>
+        ))}
+      </div>
+    </div>
+  </Section>
+);

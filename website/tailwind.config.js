@@ -1,3 +1,5 @@
+import plugin from 'tailwindcss/plugin';
+
 /** @type {import('tailwindcss').Config} */
 export default {
   content: [
@@ -65,5 +67,11 @@ export default {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    // Hover styles only apply where a real pointer can hover. Touch devices
+    // otherwise fire hover on tap and leave the state stuck.
+    plugin(({ addVariant }) => {
+      addVariant('hover', '@media (hover: hover) and (pointer: fine) { &:hover }');
+    }),
+  ],
 }

@@ -17,12 +17,19 @@ const MIME_TYPES = {
   '.json': 'application/json',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
   '.svg': 'image/svg+xml',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.vtt': 'text/vtt',
 };
 
 const server = http.createServer((req, res) => {
-  let filePath = path.join(DIST_DIR, req.url === '/' ? 'index.html' : req.url.split('?')[0]);
-  if (!fs.existsSync(filePath)) {
+  let filePath = path.join(
+    DIST_DIR,
+    req.url === '/' ? 'index.html' : decodeURIComponent(req.url.split('?')[0])
+  );
+  if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
     filePath = path.join(DIST_DIR, 'index.html');
   }
 
@@ -34,11 +41,115 @@ const server = http.createServer((req, res) => {
       res.writeHead(500);
       res.end('Server error: ' + err.code);
     } else {
-      res.writeHead(200, { 'Content-Type': contentType });
-      res.end(content, 'utf-8');
+      res.writeHead(200, {
+        'Content-Type': contentType,
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-store',
+      });
+      res.end(content);
     }
   });
 });
+
+const checks = {
+  desktop: {},
+  mobile: {},
+  reducedMotion: {},
+};
+
+function watchPage(page, bucket) {
+  bucket.consoleErrors = [];
+  bucket.pageErrors = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      bucket.consoleErrors.push(message.text());
+    }
+  });
+  page.on('pageerror', (error) => {
+    bucket.pageErrors.push(String(error));
+  });
+}
+
+// Fixed UI (sticky header, skip link) appears at odd offsets in element
+// screenshots. Hide it only while a section is captured, then restore it.
+async function shootSection(page, selector, file) {
+  const style = await page.addStyleTag({
+    content:
+      'header{position:static!important}.skip-link{display:none!important}',
+  });
+  try {
+    await page.locator(selector).screenshot({ path: file });
+  } finally {
+    await style.evaluate((node) => node.remove());
+  }
+}
+
+async function inspect(page) {  return page.evaluate(() => {
+    const video = document.querySelector('video');
+    const buttons = Array.from(document.querySelectorAll('button'));
+    const unnamedButtons = buttons
+      .filter((button) => {
+        const label =
+          button.getAttribute('aria-label') ||
+          button.textContent.replace(/\s+/g, ' ').trim();
+        return !label;
+      })
+      .map((button) => button.outerHTML.slice(0, 120));
+
+    const missingAlt = Array.from(document.querySelectorAll('img'))
+      .filter((img) => !img.hasAttribute('alt'))
+      .map((img) => img.getAttribute('src'));
+
+    const targets = Array.from(
+      document.querySelectorAll('a[href], button, input, summary')
+    ).filter((el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
+
+    const smallTargets = targets
+      .filter((el) => {
+        const rect = el.getBoundingClientRect();
+        return rect.height < 24 || rect.width < 24;
+      })
+      .slice(0, 8)
+      .map((el) => ({
+        tag: el.tagName,
+        text: el.textContent.replace(/\s+/g, ' ').trim().slice(0, 40),
+        width: Math.round(el.getBoundingClientRect().width),
+        height: Math.round(el.getBoundingClientRect().height),
+      }));
+
+    return {
+      title: document.title,
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+      horizontalOverflow:
+        document.documentElement.scrollWidth >
+        document.documentElement.clientWidth + 1,
+      video: video
+        ? {
+            src: video.currentSrc,
+            poster: video.getAttribute('poster'),
+            duration: Number.isFinite(video.duration)
+              ? Math.round(video.duration * 100) / 100
+              : null,
+            readyState: video.readyState,
+            controls: video.controls,
+            autoplay: video.autoplay,
+            tracks: video.querySelectorAll('track').length,
+            captionsSrc: video.querySelector('track')?.getAttribute('src'),
+          }
+        : null,
+      unnamedButtons,
+      missingAlt,
+      smallTargets,
+      reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)')
+        .matches,
+      canHover: window.matchMedia('(hover: hover) and (pointer: fine)').matches,
+    };
+  });
+}
 
 async function run() {
   const PORT = 4188;
@@ -48,77 +159,218 @@ async function run() {
   const browser = await chromium.launch();
 
   // 1. Desktop 1440x900
-  console.log('Taking Desktop screenshot (1440x900)...');
+  console.log('Desktop 1440x900...');
   const desktopContext = await browser.newContext({
     viewport: { width: 1440, height: 900 },
     deviceScaleFactor: 1,
   });
   const desktopPage = await desktopContext.newPage();
-  await desktopPage.goto(`http://localhost:${PORT}`, { waitUntil: 'networkidle' });
+  watchPage(desktopPage, checks.desktop);
+  await desktopPage.goto(`http://localhost:${PORT}`, {
+    waitUntil: 'networkidle',
+  });
   await desktopPage.waitForTimeout(500);
 
-  // Measure performance timing
-  const perfMetrics = await desktopPage.evaluate(() => {
+  checks.desktop.performance = await desktopPage.evaluate(() => {
     const nav = performance.getEntriesByType('navigation')[0];
     const paint = performance.getEntriesByType('paint');
     const fcp = paint.find((p) => p.name === 'first-contentful-paint');
     return {
-      domContentLoaded: nav ? Math.round(nav.domContentLoadedEventEnd - nav.startTime) : null,
+      domContentLoaded: nav
+        ? Math.round(nav.domContentLoadedEventEnd - nav.startTime)
+        : null,
       loadTime: nav ? Math.round(nav.loadEventEnd - nav.startTime) : null,
       fcp: fcp ? Math.round(fcp.startTime) : null,
       domInteractive: nav ? Math.round(nav.domInteractive - nav.startTime) : null,
     };
   });
-  console.log('Performance Metrics (Desktop):', JSON.stringify(perfMetrics, null, 2));
 
-  // Save desktop screenshots
-  const desktopViewportPath = path.join(PREVIEW_DIR, 'desktop-1440x900-hero.png');
-  const desktopFullPath = path.join(PREVIEW_DIR, 'desktop-1440x900-full.png');
-  await desktopPage.screenshot({ path: desktopViewportPath, fullPage: false });
-  await desktopPage.screenshot({ path: desktopFullPath, fullPage: true });
-  console.log(`Desktop screenshots saved: ${desktopViewportPath}, ${desktopFullPath}`);
+  await desktopPage.screenshot({
+    path: path.join(PREVIEW_DIR, 'desktop-1440x900-hero.png'),
+  });
+  await desktopPage.screenshot({
+    path: path.join(PREVIEW_DIR, 'desktop-1440x900-full.png'),
+    fullPage: true,
+  });
 
-  // Test interactive click on pdf filter tab
-  const pdfButton = desktopPage.locator('button:has-text("pdf")');
-  if (await pdfButton.isVisible()) {
-    await pdfButton.click();
-    await desktopPage.waitForTimeout(300);
-    const pdfTabPath = path.join(PREVIEW_DIR, 'desktop-interactive-pdf-tab.png');
-    await desktopPage.screenshot({ path: pdfTabPath });
-    console.log(`Interactive screenshot saved: ${pdfTabPath}`);
+  for (const [name, selector] of [
+    ['problem', '#problem'],
+    ['demo', '#demo'],
+    ['how-it-works', '#how-it-works'],
+    ['measured', '#measured'],
+    ['privacy', '#privacy'],
+    ['download', '#download'],
+    ['faq', '#faq'],
+  ]) {
+    const section = desktopPage.locator(selector);
+    if (await section.count()) {
+      await shootSection(
+        desktopPage,
+        selector,
+        path.join(PREVIEW_DIR, `desktop-section-${name}.png`)
+      );
+    }
   }
 
+  // Keyboard: first Tab should reveal the skip link, then land on the wordmark.
+  await desktopPage.keyboard.press('Tab');
+  checks.desktop.firstTab = await desktopPage.evaluate(() => {
+    const el = document.activeElement;
+    const styles = getComputedStyle(el);
+    return {
+      tag: el.tagName,
+      text: el.textContent.replace(/\s+/g, ' ').trim(),
+      transform: styles.transform,
+      visible: el.getBoundingClientRect().top >= 0,
+    };
+  });
+  await desktopPage.screenshot({
+    path: path.join(PREVIEW_DIR, 'desktop-focus-skip-link.png'),
+  });
+
+  await desktopPage.keyboard.press('Tab');
+  checks.desktop.secondTab = await desktopPage.evaluate(() => ({
+    tag: document.activeElement.tagName,
+    text: document.activeElement.textContent.replace(/\s+/g, ' ').trim(),
+  }));
+
+  // Focus ring on a primary action.
+  await desktopPage.locator('a.btn-primary').first().focus();
+  checks.desktop.focusRing = await desktopPage.evaluate(() => {
+    const el = document.activeElement;
+    const styles = getComputedStyle(el);
+    return {
+      text: el.textContent.replace(/\s+/g, ' ').trim(),
+      outlineWidth: styles.outlineWidth,
+      outlineColor: styles.outlineColor,
+      outlineOffset: styles.outlineOffset,
+    };
+  });
+
+  // Exercise the illustration filter and read the resulting announcement.
+  const filterButton = desktopPage.getByRole('button', { name: /^PDF$/i });
+  if (await filterButton.count()) {
+    await filterButton.first().click();
+    await desktopPage.waitForTimeout(250);
+    checks.desktop.illustrationFilter = await desktopPage
+      .getByRole('status')
+      .first()
+      .textContent()
+      .catch(() => null);
+    await desktopPage.screenshot({
+      path: path.join(PREVIEW_DIR, 'desktop-interactive-pdf-tab.png'),
+    });
+  }
+
+  checks.desktop.dom = await inspect(desktopPage);
   await desktopContext.close();
 
-  // 2. Mobile 390x844
-  console.log('Taking Mobile screenshot (390x844)...');
+  // 2. Mobile 390x844 (touch, no hover)
+  console.log('Mobile 390x844...');
   const mobileContext = await browser.newContext({
     viewport: { width: 390, height: 844 },
     deviceScaleFactor: 2,
     isMobile: true,
+    hasTouch: true,
   });
   const mobilePage = await mobileContext.newPage();
-  await mobilePage.goto(`http://localhost:${PORT}`, { waitUntil: 'networkidle' });
+  watchPage(mobilePage, checks.mobile);
+  await mobilePage.goto(`http://localhost:${PORT}`, {
+    waitUntil: 'networkidle',
+  });
   await mobilePage.waitForTimeout(500);
 
-  const mobileViewportPath = path.join(PREVIEW_DIR, 'mobile-390x844-hero.png');
-  const mobileFullPath = path.join(PREVIEW_DIR, 'mobile-390x844-full.png');
-  await mobilePage.screenshot({ path: mobileViewportPath, fullPage: false });
-  await mobilePage.screenshot({ path: mobileFullPath, fullPage: true });
-  console.log(`Mobile screenshots saved: ${mobileViewportPath}, ${mobileFullPath}`);
+  await mobilePage.screenshot({
+    path: path.join(PREVIEW_DIR, 'mobile-390x844-hero.png'),
+  });
+  await mobilePage.screenshot({
+    path: path.join(PREVIEW_DIR, 'mobile-390x844-full.png'),
+    fullPage: true,
+  });
 
+  for (const [name, selector] of [
+    ['demo', '#demo'],
+    ['measured', '#measured'],
+    ['download', '#download'],
+  ]) {
+    const section = mobilePage.locator(selector);
+    if (await section.count()) {
+      await shootSection(
+        mobilePage,
+        selector,
+        path.join(PREVIEW_DIR, `mobile-section-${name}.png`)
+      );
+    }
+  }
+
+  const menuButton = mobilePage.locator('button[aria-controls="mobile-nav"]');
+  checks.mobile.menuButtonVisible = await menuButton.isVisible();
+  if (checks.mobile.menuButtonVisible) {
+    await menuButton.click();
+    await mobilePage.waitForTimeout(250);
+    checks.mobile.menuExpanded = await menuButton.getAttribute('aria-expanded');
+    await mobilePage.screenshot({
+      path: path.join(PREVIEW_DIR, 'mobile-390x844-menu.png'),
+    });
+    await mobilePage.keyboard.press('Escape');
+    checks.mobile.menuExpandedAfterEscape =
+      await menuButton.getAttribute('aria-expanded');
+  }
+
+  checks.mobile.dom = await inspect(mobilePage);
   await mobileContext.close();
 
-  // Close browser and server
+  // 3. Reduced motion
+  console.log('Reduced motion...');
+  const reducedContext = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    reducedMotion: 'reduce',
+  });
+  const reducedPage = await reducedContext.newPage();
+  watchPage(reducedPage, checks.reducedMotion);
+  await reducedPage.goto(`http://localhost:${PORT}`, {
+    waitUntil: 'networkidle',
+  });
+  await reducedPage.waitForTimeout(400);
+  checks.reducedMotion.styles = await reducedPage.evaluate(() => {
+    const button = document.querySelector('.btn');
+    const html = getComputedStyle(document.documentElement);
+    return {
+      mediaMatches: window.matchMedia('(prefers-reduced-motion: reduce)')
+        .matches,
+      scrollBehavior: html.scrollBehavior,
+      buttonTransitionDuration: button
+        ? getComputedStyle(button).transitionDuration
+        : null,
+    };
+  });
+  await reducedPage.screenshot({
+    path: path.join(PREVIEW_DIR, 'desktop-reduced-motion-hero.png'),
+  });
+  await shootSection(
+    reducedPage,
+    '#demo',
+    path.join(PREVIEW_DIR, 'desktop-reduced-motion-demo.png')
+  );
+  checks.reducedMotion.dom = await inspect(reducedPage);
+  await reducedContext.close();
+
   await browser.close();
   server.close();
-  console.log('Screenshot capture completed successfully.');
 
   fs.writeFileSync(
-    path.join(PREVIEW_DIR, 'metrics.json'),
-    JSON.stringify(perfMetrics, null, 2),
+    path.join(PREVIEW_DIR, 'checks.json'),
+    JSON.stringify(checks, null, 2),
     'utf-8'
   );
+  fs.writeFileSync(
+    path.join(PREVIEW_DIR, 'metrics.json'),
+    JSON.stringify(checks.desktop.performance, null, 2),
+    'utf-8'
+  );
+
+  console.log(JSON.stringify(checks, null, 2));
+  console.log('Screenshot capture completed successfully.');
 }
 
 run().catch((err) => {

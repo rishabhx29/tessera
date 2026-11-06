@@ -1,261 +1,283 @@
-import React, { useState } from 'react';
-import { Eye, FileSearch, Binary, GitMerge, Zap, Check } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { ArrowLeft, ArrowRight } from 'lucide-react';
+import { Section, SectionHeading } from './Section';
 
 interface Stage {
   id: string;
-  stepNumber: string;
+  number: string;
   title: string;
-  shortSummary: string;
-  icon: React.ComponentType<{ className?: string }>;
-  details: {
-    heading: string;
-    description: string;
-    bullets: string[];
-    technicalBadge: string;
-    specQuote: string;
-  };
+  summary: string;
+  heading: string;
+  description: string;
+  bullets: string[];
+  spec: Array<[string, string]>;
 }
 
 const STAGES: Stage[] = [
   {
     id: 'watch',
-    stepNumber: '01',
+    number: '01',
     title: 'Watch',
-    shortSummary: 'Non-intrusive background file watcher',
-    icon: Eye,
-    details: {
-      heading: 'Background filesystem events at idle OS priority',
-      description:
-        'Tessera listens to directory changes using native OS hooks. It indexes your files when the PC is idle and automatically steps aside when you need full machine performance.',
-      bullets: [
-        'Newest-first queue: a freshly captured screenshot is indexed within seconds, even with a large backlog.',
-        'Idle-only priority: automatically pauses on battery power and runs threads at background IO priority.',
-        'OneDrive safe: detects cloud placeholder files and strictly skips them without triggering large file downloads.',
-        'Hard caps: files >50 MB are skipped with reasons recorded on the local diagnostics screen.',
-      ],
-      technicalBadge: 'ReadDirectoryChangesW · Newest-first Priority Queue · Battery-aware',
-      specQuote: 'Models load per backlog drain and unload when idle — keeping background RAM under 250 MB.',
-    },
+    summary: 'Filesystem events, newest first',
+    heading: 'New files first, while the machine is idle.',
+    description:
+      'Tessera watches the folders you choose. A screenshot you just saved jumps the queue, so it does not wait behind a backlog. The watcher runs at idle priority and pauses on battery.',
+    bullets: [
+      'Newest-first queue with up to four workers.',
+      'OneDrive placeholders are skipped, never hydrated.',
+      'Files over 50 MB are skipped and counted on the diagnostics screen.',
+    ],
+    spec: [
+      ['Trigger', 'Directory changes, plus mtime, size and SHA-1'],
+      ['Schedule', 'Idle-only, always, or paused'],
+      ['Safety', 'No file is moved or modified'],
+    ],
   },
   {
     id: 'extract',
-    stepNumber: '02',
+    number: '02',
     title: 'Extract',
-    shortSummary: 'Fast format-specific text extraction',
-    icon: FileSearch,
-    details: {
-      heading: 'Format-specialized text extraction pipelines',
-      description:
-        'Instead of treating all files with a heavy generic hammer, Tessera routes each file extension through an optimized pipeline.',
-      bullets: [
-        'Screenshots & Images: Windows.Media.Ocr native engine runs in 34.4 ms p50, extracting 188 mean characters per image.',
-        'Cross-platform fallback: PP-OCRv6 Det-tiny + Rec-small available on Linux/macOS.',
-        'PDF Documents: page text layer extraction into individual page-numbered tiles.',
-        'DOCX & Text: raw XML document text extraction with structured chunking.',
-      ],
-      technicalBadge: 'Windows.Media.Ocr (34.4 ms) · Page-Aware Chunker · Fallback Engine',
-      specQuote: 'Tile abstraction preserves 1-based page numbers so search results jump straight to the exact page.',
-    },
+    summary: 'Read the text inside each format',
+    heading: 'Read the words inside each format.',
+    description:
+      'Images go through the platform OCR path. PDFs are read page by page. Word and plain text are pulled from their own bytes. A tile keeps the page number, so a result can open at the right place.',
+    bullets: [
+      'Windows uses Windows.Media.Ocr, measured at 34.4 ms p50 over 40 screenshots.',
+      'Other platforms use the PP-OCRv6 small models through ONNX Runtime.',
+      'PDFs without a text layer are counted for later OCR, never dropped silently.',
+    ],
+    spec: [
+      ['Images', 'PNG, JPG, WEBP, BMP, GIF, TIFF'],
+      ['Documents', 'PDF text layer, DOCX, TXT, MD, CSV, LOG'],
+      ['Limit', 'Files over 50 MB, with a recorded reason'],
+    ],
   },
   {
     id: 'embed',
-    stepNumber: '03',
+    number: '03',
     title: 'Embed',
-    shortSummary: 'Local vision & language embeddings',
-    icon: Binary,
-    details: {
-      heading: 'Dual-tower representation in pinned vector spaces',
-      description:
-        'Local quantized neural networks generate high-dimensional vectors to allow search by meaning and visual description without cloud APIs.',
-      bullets: [
-        'Vision arm: SigLIP-base int8 embedding space for matching visual scenes and descriptions.',
-        'Document arm: MiniLM-L6-v2 transformer for document semantics and concept search.',
-        'Checksum pinning: model weights are compiled with pinned SHA-256 digests in lock.json.',
-        'Zero cloud leakage: all tensor inferences execute locally via ONNX Runtime CPU provider.',
-      ],
-      technicalBadge: 'SigLIP-base int8 (768-dim) · MiniLM-L6-v2 · SHA-256 Pinned',
-      specQuote: 'COCO retrieval benchmark measures 0.7015 R@1 and 0.9454 R@5 through the shipped SiglipEmbedder.',
-    },
+    summary: 'Two small models, one vector space',
+    heading: 'Two small models, pinned to one vector space.',
+    description:
+      'SigLIP base embeds images for description search. MiniLM-L6 embeds document chunks for meaning search. Model versions are recorded in the index. Changing a model forces a re-index instead of mixing vector spaces.',
+    bullets: [
+      'Image arm: SigLIP base, int8, 768 dimensions.',
+      'Text arm: MiniLM-L6, int8, 384 dimensions.',
+      'Weights are verified against SHA-256 hashes pinned in the binary.',
+    ],
+    spec: [
+      ['Download', 'About 1.3 GB, once, checksum-pinned'],
+      ['Inference', 'ONNX Runtime, CPU'],
+      ['Versioning', 'Recorded in the index meta table'],
+    ],
   },
   {
     id: 'fuse',
-    stepNumber: '04',
+    number: '04',
     title: 'Fuse',
-    shortSummary: 'Evidence-weighted reciprocal rank fusion',
-    icon: GitMerge,
-    details: {
-      heading: 'Rank-based merging across dissimilar channels',
-      description:
-        'BM25 lexical scores and vector cosine similarities are not mathematically comparable. Tessera merges rankings using weighted Reciprocal Rank Fusion (RRF).',
-      bullets: [
-        'Evidence weighting: text-bearing files weight the lexical arm at 1.0 and image arm at 0.05 to prevent noise from diluting exact matches.',
-        'Pure photos (no OCR text) let the SigLIP vision arm vote with full 1.0 weight.',
-        'Result transparency: every search hit details exactly which arm surfaced it and why.',
-        'Typo lookalike expansion: query-side folding (0/o, 1/l) catches common OCR character confusions.',
-      ],
-      technicalBadge: 'Weighted RRF · Evidence-aware Weight Sweep · Lookalike Folding',
-      specQuote: 'Measured sweep proved 0.05 image weight preserves 0.964 top-1 screenshot lexical retrieval without dilution.',
-    },
+    summary: 'Rank-based merging across arms',
+    heading: 'Rank-based fusion, because scores are not comparable.',
+    description:
+      'BM25 and cosine similarity live on different scales. Tessera merges the arms by rank with Reciprocal Rank Fusion, and weights the image arm down for files that already have text.',
+    bullets: [
+      'SQLite FTS5 trigram search handles partial words and lookalike typos.',
+      'Text-bearing files weight the image arm at 0.05, so it cannot drown exact matches.',
+      'Every hit states which arm surfaced it and why.',
+    ],
+    spec: [
+      ['Lexical', 'FTS5 trigram, BM25'],
+      ['Fusion', 'Weighted reciprocal rank fusion'],
+      ['Transparency', 'Match arm shown on every result'],
+    ],
   },
   {
     id: 'answer',
-    stepNumber: '05',
+    number: '05',
     title: 'Answer',
-    shortSummary: 'Instant query response in milliseconds',
-    icon: Zap,
-    details: {
-      heading: 'Sub-millisecond lexical filtering + vector ranking',
-      description:
-        'When you summon the search bar with Alt+Space, query execution runs across parallel local SQLite tables.',
-      bullets: [
-        'SQLite FTS5 Trigram tokenizer answers keyword keystrokes in 0.4 ms p50.',
-        'sqlite-vec vector extension scans KNN distances locally.',
-        'Results grouped into one clean unified grid with instant keyboard navigation (Arrows, Enter, Esc).',
-        'One-click actions: reveal in Explorer, copy snippet, open on specific page.',
-      ],
-      technicalBadge: 'SQLite 3.53 + APSW · sqlite-vec · FTS5 Trigram · Alt+Space Summon',
-      specQuote: 'Query end-to-end executes in ~50 ms parallel execution on standard consumer desktop hardware.',
-    },
+    summary: 'One grid, keyboard first',
+    heading: 'One grid, in tens of milliseconds at 5,000 files.',
+    description:
+      'A fused query took 65 ms p50 at 5,000 files on the reference machine, against a 100 ms target. At 50,000 files the same query took 457 ms p50 and missed that target. The measured section shows both.',
+    bullets: [
+      'Keyboard first: arrows, Enter, Escape.',
+      'Preview shows OCR text, a page number, or the paragraph.',
+      'Open the file or reveal it in its folder.',
+    ],
+    spec: [
+      ['At 5,000 files', '65 ms p50 / 80 ms p95, target met'],
+      ['At 50,000 files', '457 ms p50 / 523 ms p95, target missed'],
+      ['Index', 'One SQLite file'],
+    ],
   },
 ];
 
 export const HowItWorks: React.FC = () => {
-  const [activeStageId, setActiveStageId] = useState<string>('watch');
-  const activeStage = STAGES.find((s) => s.id === activeStageId) || STAGES[0];
+  const [activeIndex, setActiveIndex] = useState(0);
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const stage = STAGES[activeIndex];
+
+  const onTabKeyDown = (
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    index: number,
+  ) => {
+    const last = STAGES.length - 1;
+    let next = index;
+
+    if (event.key === 'ArrowRight') next = index === last ? 0 : index + 1;
+    else if (event.key === 'ArrowLeft') next = index === 0 ? last : index - 1;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = last;
+    else return;
+
+    event.preventDefault();
+    setActiveIndex(next);
+    tabRefs.current[next]?.focus();
+  };
+
+  const go = (direction: -1 | 1) => {
+    const next = (activeIndex + direction + STAGES.length) % STAGES.length;
+    setActiveIndex(next);
+    tabRefs.current[next]?.focus();
+  };
 
   return (
-    <section id="how-it-works" className="py-20 bg-canvas border-b border-line">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Section Header */}
-        <div className="max-w-2xl mb-12">
-          <div className="text-xs font-mono uppercase tracking-wider text-accent font-semibold mb-2">
-            The Technical Architecture
-          </div>
-          <h2 className="font-serif text-3xl sm:text-4xl font-bold tracking-tight text-ink-primary">
-            How it works: from saved file to instant answer.
-          </h2>
-          <p className="mt-3 text-base sm:text-lg text-ink-secondary leading-relaxed">
-            A technically honest five-stage pipeline designed for personal scale, background efficiency, and zero network dependency.
-          </p>
-        </div>
+    <Section id="how-it-works" labelledBy="how-title">
+      <SectionHeading
+        id="how-title"
+        title={<>From a saved file to a ranked answer.</>}
+        lede={
+          <>
+            Five stages, all local. Models load in batches, the queue goes newest
+            first, and the index is one SQLite file you can inspect.
+          </>
+        }
+      />
 
-        {/* Stepper Navigation Pills */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-3 mb-10">
-          {STAGES.map((stage) => {
-            const IconComponent = stage.icon;
-            const isSelected = stage.id === activeStageId;
-            return (
-              <button
-                key={stage.id}
-                onClick={() => setActiveStageId(stage.id)}
-                className={`p-3 rounded-lg text-left transition-all border ${
-                  isSelected
-                    ? 'bg-surface border-accent shadow-tile ring-1 ring-accent'
-                    : 'bg-subtle/70 border-line hover:border-line-strong hover:bg-subtle'
+      <div
+        role="tablist"
+        aria-label="Pipeline stages"
+        className="mt-10 grid grid-cols-5 gap-px overflow-hidden rounded-lg border border-line bg-line"
+      >
+        {STAGES.map((item, index) => {
+          const selected = index === activeIndex;
+          return (
+            <button
+              key={item.id}
+              ref={(element) => {
+                tabRefs.current[index] = element;
+              }}
+              type="button"
+              role="tab"
+              id={`stage-tab-${item.id}`}
+              aria-selected={selected}
+              aria-controls={`stage-panel-${item.id}`}
+              tabIndex={selected ? 0 : -1}
+              onClick={() => setActiveIndex(index)}
+              onKeyDown={(event) => onTabKeyDown(event, index)}
+              className={`flex min-h-[4.5rem] flex-col items-start justify-between p-2.5 text-left transition-colors duration-150 sm:min-h-[5.5rem] sm:p-4 ${
+                selected
+                  ? 'bg-surface shadow-[inset_0_2px_0_#C2410C]'
+                  : 'bg-canvas hover:bg-subtle'
+              }`}
+            >
+              <span
+                className={`font-mono text-[10px] ${
+                  selected ? 'text-accent' : 'text-ink-faint'
                 }`}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-mono text-xs font-bold text-accent">
-                    {stage.stepNumber}
-                  </span>
-                  <IconComponent
-                    className={`w-4 h-4 ${
-                      isSelected ? 'text-accent' : 'text-ink-muted'
-                    }`}
+                {item.number}
+              </span>
+              <span className="mt-2 block">
+                <span className="block font-serif text-[13px] font-bold text-ink-primary sm:text-[15px]">
+                  {item.title}
+                </span>
+                <span className="mt-0.5 hidden text-[11px] leading-snug text-ink-muted sm:block">
+                  {item.summary}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div
+        role="tabpanel"
+        id={`stage-panel-${stage.id}`}
+        aria-labelledby={`stage-tab-${stage.id}`}
+        tabIndex={0}
+        key={stage.id}
+        className="swap-in border-x border-b border-line bg-surface"
+      >
+        <div className="grid gap-8 p-5 sm:p-8 lg:grid-cols-[minmax(0,1fr)_19rem] lg:gap-10">
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-muted">
+              Stage {stage.number} of 05
+            </p>
+            <h3 className="mt-2 font-serif text-[clamp(1.4rem,1.15rem+1vw,1.85rem)] font-bold leading-tight tracking-tight text-ink-primary">
+              {stage.heading}
+            </h3>
+            <p className="mt-3 max-w-[58ch] text-[14px] leading-relaxed text-ink-secondary sm:text-[15px]">
+              {stage.description}
+            </p>
+            <ul className="mt-5 space-y-2.5">
+              {stage.bullets.map((bullet) => (
+                <li key={bullet} className="flex items-start gap-2.5 text-[13px] leading-relaxed text-ink-secondary">
+                  <span
+                    className="mt-[0.5rem] h-1 w-1 shrink-0 bg-accent"
+                    aria-hidden="true"
                   />
-                </div>
-                <div className="font-serif font-bold text-sm text-ink-primary">
-                  {stage.title}
-                </div>
-                <div className="text-[11px] text-ink-muted truncate mt-0.5">
-                  {stage.shortSummary}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Active Stage Detailed Panel */}
-        <div className="rounded-xl border border-line-strong bg-surface shadow-tile overflow-hidden">
-          <div className="p-6 sm:p-8">
-            <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-8">
-              {/* Left Column: Heading and Details */}
-              <div className="space-y-4 flex-1">
-                <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded bg-subtle border border-line text-xs font-mono text-accent font-semibold">
-                  <span>STAGE {activeStage.stepNumber} · {activeStage.title.toUpperCase()}</span>
-                </div>
-
-                <h3 className="font-serif text-2xl font-bold text-ink-primary">
-                  {activeStage.details.heading}
-                </h3>
-
-                <p className="text-base text-ink-secondary leading-relaxed">
-                  {activeStage.details.description}
-                </p>
-
-                {/* Bullets */}
-                <div className="pt-2 space-y-2.5">
-                  {activeStage.details.bullets.map((bullet, idx) => (
-                    <div key={idx} className="flex items-start gap-2.5 text-sm text-ink-secondary">
-                      <div className="w-5 h-5 rounded-full bg-accent-subtle flex items-center justify-center shrink-0 mt-0.5">
-                        <Check className="w-3 h-3 text-accent" />
-                      </div>
-                      <span>{bullet}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Right Column: Technical Spec Box */}
-              <div className="w-full lg:w-80 shrink-0 space-y-4">
-                <div className="p-4 rounded-lg bg-canvas border border-line font-mono text-xs space-y-3">
-                  <div className="text-ink-muted uppercase tracking-wider text-[10px] font-bold">
-                    Engine Implementation
-                  </div>
-                  <div className="p-2.5 rounded bg-surface border border-line text-ink-primary break-all">
-                    {activeStage.details.technicalBadge}
-                  </div>
-                  <div className="text-[11px] text-ink-secondary italic leading-relaxed pt-2 border-t border-line">
-                    "{activeStage.details.specQuote}"
-                  </div>
-                </div>
-
-                <div className="p-3.5 rounded-lg bg-subtle border border-line text-xs text-ink-secondary">
-                  <div className="font-semibold text-ink-primary mb-1">
-                    Guaranteed Invariant
-                  </div>
-                  <div>
-                    Zero telemetry emitted. Index stored as a single standard SQLite file in your local user directory.
-                  </div>
-                </div>
-              </div>
-            </div>
+                  <span>{bullet}</span>
+                </li>
+              ))}
+            </ul>
           </div>
 
-          {/* Stepper Footer Controls */}
-          <div className="px-6 py-3.5 bg-subtle border-t border-line flex items-center justify-between text-xs">
-            <span className="font-mono text-ink-muted">
-              Pipeline Step {activeStage.stepNumber} of 05
-            </span>
-            <div className="flex items-center gap-1">
-              {STAGES.map((s) => (
-                <button
-                  key={s.id}
-                  onClick={() => setActiveStageId(s.id)}
-                  className="p-2 flex items-center justify-center rounded focus-visible:ring-2 focus-visible:ring-accent"
-                  aria-label={`Jump to step ${s.stepNumber}`}
+          <div className="border border-line bg-canvas">
+            <p className="border-b border-line px-4 py-2.5 font-mono text-[10px] uppercase tracking-[0.08em] text-ink-muted">
+              Engine
+            </p>
+            <dl className="divide-y divide-line">
+              {stage.spec.map(([term, value]) => (
+                <div
+                  key={term}
+                  className="grid grid-cols-[5.25rem_minmax(0,1fr)] gap-3 px-4 py-3"
                 >
-                  <span
-                    className={`block h-2 rounded-full transition-all ${
-                      s.id === activeStageId ? 'w-6 bg-accent' : 'w-2 bg-line-strong'
-                    }`}
-                  />
-                </button>
+                  <dt className="font-mono text-[10px] uppercase leading-relaxed text-ink-faint">
+                    {term}
+                  </dt>
+                  <dd className="text-[12px] leading-relaxed text-ink-secondary">
+                    {value}
+                  </dd>
+                </div>
               ))}
-            </div>
+            </dl>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between border-t border-line bg-canvas px-3 py-2 sm:px-5">
+          <span className="font-mono text-[10px] text-ink-muted">
+            {stage.title}
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => go(-1)}
+              className="flex h-10 w-10 items-center justify-center rounded-md text-ink-secondary transition-colors duration-150 hover:bg-subtle hover:text-ink-primary"
+              aria-label="Previous stage"
+            >
+              <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={() => go(1)}
+              className="flex h-10 w-10 items-center justify-center rounded-md text-ink-secondary transition-colors duration-150 hover:bg-subtle hover:text-ink-primary"
+              aria-label="Next stage"
+            >
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
+            </button>
           </div>
         </div>
       </div>
-    </section>
+    </Section>
   );
 };

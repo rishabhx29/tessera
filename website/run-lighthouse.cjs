@@ -17,7 +17,11 @@ const MIME_TYPES = {
   '.json': 'application/json',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
   '.svg': 'image/svg+xml',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.vtt': 'text/vtt',
 };
 
 const server = http.createServer((req, res) => {
@@ -35,7 +39,7 @@ const server = http.createServer((req, res) => {
       res.end('Server error: ' + err.code);
     } else {
       res.writeHead(200, { 'Content-Type': contentType });
-      res.end(content, 'utf-8');
+      res.end(content);
     }
   });
 });

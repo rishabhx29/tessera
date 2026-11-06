@@ -1,182 +1,284 @@
 import React from 'react';
-import { Cpu, AlertTriangle } from 'lucide-react';
+import { ArrowUpRight } from 'lucide-react';
+import { Section, SectionHeading } from './Section';
 
-interface MetricFact {
-  id: string;
-  metric: string;
-  value: string;
-  unit: string;
-  secondaryStat: string;
-  title: string;
-  description: string;
-  script: string;
-  caveat: string;
-}
+const PERFORMANCE_LOG =
+  'https://github.com/rishabhx29/tessera/blob/main/docs/performance.md';
 
-const MEASURED_FACTS: MetricFact[] = [
-  {
-    id: 'ocr-native',
-    metric: 'OCR Latency (Windows Native)',
-    value: '34.4 ms',
-    unit: 'p50 per image',
-    secondaryStat: '188 mean characters extracted',
-    title: 'Hardware-native OCR on real screenshots',
-    description:
-      'Timed using cargo run --release --example ocr_bench over 40 real user screenshots. Windows.Media.Ocr processes an image in 34.4 ms p50 (p95: 139.9 ms), 28× faster than unoptimized models.',
-    script: 'crates/core/examples/ocr_bench.rs',
-    caveat:
-      'Single-threaded, one image at a time, cold file cache. Ambient machine load creates run-to-run variation (repeat pass measured 45.7 ms p50). 1 of 40 screenshots had zero text.',
-  },
-  {
-    id: 'save-searchable',
-    metric: 'Image Save → Searchable',
-    value: '~260–350 ms',
-    unit: 'projected end-to-end',
-    secondaryStat: 'Target was < 1,500 ms',
-    title: 'Fresh screenshot ready in a fraction of a second',
-    description:
-      'Components measured individually: image decode (5–100 ms) + Windows native OCR (50 ms p50) + SigLIP-base int8 vision embedding (200 ms p50).',
-    script: 'spike/swap_test2.py & ocr_bench',
-    caveat:
-      'Sum of verified component timings. Multi-worker queue throughput will scale across up to 4 threads; document extraction (~1,000 ms) is slower and queued in background.',
-  },
-  {
-    id: 'coco-retrieval',
-    metric: 'Description Search Recall',
-    value: '0.7015 R@1',
-    unit: '0.9454 at R@5 (top 5)',
-    secondaryStat: '300 images · 1,501 human queries',
-    title: 'Visual description retrieval on standard benchmark',
-    description:
-      'Measured on COCO 2014 validation split through the shipped SiglipEmbedder and query normalizer. 94.5% of queries find the matching photograph within the top 5 results.',
-    script: 'crates/core/tests/coco_retrieval.rs',
-    caveat:
-      'Rank-1 accuracy decays by ~8.5 points per doubling of library size (0.3552 at 5,000 photos). Text-bearing files are retrieved at 96% by OCR, so visual search is specifically for content photos.',
-  },
-  {
-    id: 'lexical-fts',
-    metric: 'Lexical Keystroke Query',
-    value: '0.4 ms',
-    unit: 'p50 query latency',
-    secondaryStat: '2.6 ms p95 over 406 tiles',
-    title: 'Sub-millisecond instant search on every keystroke',
-    description:
-      'SQLite FTS5 trigram tokenizer matches partial words ("invoic" → "invoice") and typos ("inv0ice" via lookalike expansion) virtually instantly.',
-    script: 'spike/spike.py',
-    caveat:
-      'Measured over 406 index tiles. In full hybrid mode, vector scanning across 50k items adds ~140 ms without quantization; lexical alone remains sub-millisecond.',
-  },
-];
+const Badge: React.FC<{
+  children: React.ReactNode;
+  tone?: 'pass' | 'miss' | 'neutral';
+}> = ({ children, tone = 'neutral' }) => {
+  const styles =
+    tone === 'miss'
+      ? 'border-accent/40 bg-accent-subtle text-accent'
+      : tone === 'pass'
+        ? 'border-line-strong bg-subtle text-ink-secondary'
+        : 'border-line bg-surface text-ink-muted';
 
-export const ProofSection: React.FC = () => {
   return (
-    <section id="proof" className="py-20 bg-surface border-b border-line">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Section Header */}
-        <div className="max-w-3xl mb-12">
-          <div className="text-xs font-mono uppercase tracking-wider text-accent font-semibold mb-2">
-            Verifiable Benchmarks
-          </div>
-          <h2 className="font-serif text-3xl sm:text-4xl font-bold tracking-tight text-ink-primary">
-            Measured numbers, never targets presented as results.
-          </h2>
-          <p className="mt-3 text-base sm:text-lg text-ink-secondary leading-relaxed">
-            Every figure below was measured with committed test scripts on real files and standard consumer laptop hardware.
-            No simulated synthetic cloud instances.
-          </p>
-        </div>
-
-        {/* Hardware Context Callout Box */}
-        <div className="p-4 sm:p-5 rounded-lg bg-canvas border border-line-strong mb-12 flex flex-col sm:flex-row sm:items-center justify-between gap-4 font-mono text-xs">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-md bg-subtle border border-line flex items-center justify-center shrink-0">
-              <Cpu className="w-5 h-5 text-accent" />
-            </div>
-            <div>
-              <div className="font-bold text-ink-primary">Benchmark Hardware Rig</div>
-              <div className="text-ink-secondary text-[11px]">
-                AMD Ryzen 3 5300U (8 threads) · 7.3 GB RAM · Windows 11 build 26300 · Release build · ONNX Runtime 1.31 CPU
-              </div>
-            </div>
-          </div>
-          <div className="text-[11px] text-ink-muted sm:text-right shrink-0">
-            Source: <code className="text-ink-primary">docs/performance.md</code>
-          </div>
-        </div>
-
-        {/* 4 Measured Fact Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
-          {MEASURED_FACTS.map((fact) => (
-            <div
-              key={fact.id}
-              className="p-6 rounded-xl bg-canvas border border-line shadow-tile flex flex-col justify-between"
-            >
-              <div>
-                {/* Metric Header */}
-                <div className="flex items-baseline justify-between gap-2 border-b border-line pb-4 mb-4">
-                  <div>
-                    <div className="text-xs font-mono text-ink-muted uppercase">
-                      {fact.metric}
-                    </div>
-                    <div className="font-mono text-3xl font-bold text-ink-primary tracking-tight mt-1">
-                      {fact.value}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-xs font-mono font-medium text-accent">
-                      {fact.unit}
-                    </div>
-                    <div className="text-[11px] font-mono text-ink-muted mt-0.5">
-                      {fact.secondaryStat}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Title & Description */}
-                <h3 className="font-serif text-lg font-bold text-ink-primary mb-2">
-                  {fact.title}
-                </h3>
-                <p className="text-sm text-ink-secondary leading-relaxed mb-4">
-                  {fact.description}
-                </p>
-              </div>
-
-              {/* Caveat & Provenance */}
-              <div className="pt-3 border-t border-line space-y-2">
-                <div className="flex items-start gap-2 text-xs text-ink-muted">
-                  <AlertTriangle className="w-3.5 h-3.5 text-amber-700 shrink-0 mt-0.5" />
-                  <span className="leading-snug">
-                    <strong className="text-ink-secondary">Honest caveat:</strong> {fact.caveat}
-                  </span>
-                </div>
-                <div className="text-[11px] font-mono text-ink-faint">
-                  Reproduce: <code className="text-ink-muted">{fact.script}</code>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Summary Banner on Engineering Discipline */}
-        <div className="p-6 rounded-xl bg-subtle border border-line flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <h4 className="font-serif text-base font-bold text-ink-primary">
-              The Tessera Benchmark Rule
-            </h4>
-            <p className="text-sm text-ink-secondary">
-              If an OCR engine misses characters or a model fails to reproduce on real files, it is recorded as a failure rather than swept into marketing copy.
-            </p>
-          </div>
-          <a
-            href="https://github.com/rishabhx29/tessera/blob/main/docs/performance.md"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-surface text-ink-primary border border-line text-xs font-mono hover:border-ink-muted transition-colors shrink-0"
-          >
-            <span>Read full performance log</span>
-          </a>
-        </div>
-      </div>
-    </section>
+    <span
+      className={`inline-flex w-fit items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.04em] ${styles}`}
+    >
+      {children}
+    </span>
   );
 };
+
+const Bar: React.FC<{
+  label: string;
+  value: string;
+  percent: number;
+  tone: 'pass' | 'miss';
+}> = ({ label, value, percent, tone }) => (
+  <div>
+    <div className="flex items-baseline justify-between gap-3 font-mono text-[11px]">
+      <span className="text-ink-secondary">{label}</span>
+      <span className="text-ink-primary">{value}</span>
+    </div>
+    <div className="relative mt-1.5 h-2 overflow-hidden rounded-sm bg-inset">
+      <div
+        className={`h-full ${tone === 'pass' ? 'bg-accent' : 'bg-ink-primary'}`}
+        style={{ width: `${percent}%` }}
+      />
+      <span
+        className="absolute inset-y-[-2px] left-[20%] border-l border-dashed border-accent"
+        aria-hidden="true"
+      />
+    </div>
+  </div>
+);
+
+const StatRow: React.FC<{
+  label: string;
+  badge: React.ReactNode;
+  value: string;
+  secondary: string;
+  context: React.ReactNode;
+  badgeTone?: 'pass' | 'miss' | 'neutral';
+}> = ({ label, badge, value, secondary, context, badgeTone }) => (
+  <article className="grid gap-4 border-b border-line py-6 md:grid-cols-[11.5rem_minmax(0,0.85fr)_minmax(0,1fr)] md:gap-8 md:py-7">
+    <div className="flex flex-col items-start gap-2">
+      <Badge tone={badgeTone}>{badge}</Badge>
+      <h3 className="text-[13px] font-medium leading-snug text-ink-primary">
+        {label}
+      </h3>
+    </div>
+    <div>
+      <p className="font-mono text-[22px] font-semibold leading-none tracking-tight text-ink-primary">
+        {value}
+      </p>
+      <p className="mt-1.5 font-mono text-[11px] text-ink-muted">{secondary}</p>
+    </div>
+    <p className="max-w-[54ch] text-[13px] leading-relaxed text-ink-secondary">
+      {context}
+    </p>
+  </article>
+);
+
+export const ProofSection: React.FC = () => (
+  <Section id="measured" tone="surface" labelledBy="measured-title">
+    <SectionHeading
+      id="measured-title"
+      title={<>The numbers we have, including the one that misses.</>}
+      lede={
+        <>
+          Every figure below comes from docs/performance.md, measured on one
+          machine with committed scripts. Targets are marked as met or missed.
+          The 50,000-file row is a miss, and it is shown as one.
+        </>
+      }
+      aside={
+        <a
+          href={PERFORMANCE_LOG}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hairline-link"
+        >
+          Read the full performance log
+          <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
+        </a>
+      }
+    />
+
+    <div className="mt-10 grid gap-8 border-y border-line py-8 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] md:items-end md:gap-12">
+      <div>
+        <p className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-muted">
+          Fused query, 5,000 files
+        </p>
+        <div className="mt-2 flex flex-wrap items-end gap-x-4 gap-y-2">
+          <span className="font-serif text-[clamp(3rem,2rem+4vw,4.75rem)] font-bold leading-none tracking-tightest text-ink-primary">
+            65 ms
+          </span>
+          <span className="mb-1.5 font-mono text-[12px] leading-relaxed text-ink-secondary">
+            p50
+            <br />
+            80 ms p95
+          </span>
+        </div>
+        <p className="mt-3 text-[13px] leading-relaxed text-ink-secondary">
+          Target under 100 ms. Gate met.
+        </p>
+        <div className="mt-5 max-w-sm space-y-3">
+          <Bar label="5,000 files" value="65 ms" percent={13} tone="pass" />
+          <Bar label="50,000 files" value="457 ms" percent={91.4} tone="miss" />
+          <p className="font-mono text-[10px] leading-relaxed text-ink-faint">
+            Dashed line: the 100 ms target. Bars share a 0 to 500 ms scale.
+          </p>
+        </div>
+      </div>
+
+      <dl className="grid gap-x-8 gap-y-4 text-[12px] leading-relaxed sm:grid-cols-2">
+        <div>
+          <dt className="font-mono text-[10px] uppercase tracking-[0.06em] text-ink-faint">
+            Machine
+          </dt>
+          <dd className="mt-1 text-ink-secondary">
+            Intel Core Ultra 5 225H, 14 cores, 15 GB RAM
+          </dd>
+        </div>
+        <div>
+          <dt className="font-mono text-[10px] uppercase tracking-[0.06em] text-ink-faint">
+            System
+          </dt>
+          <dd className="mt-1 text-ink-secondary">
+            Windows 11 build 26200, mains power, no build running
+          </dd>
+        </div>
+        <div>
+          <dt className="font-mono text-[10px] uppercase tracking-[0.06em] text-ink-faint">
+            Sample
+          </dt>
+          <dd className="mt-1 text-ink-secondary">
+            Four queries, eight repeats, 32 fused samples
+          </dd>
+        </div>
+        <div>
+          <dt className="font-mono text-[10px] uppercase tracking-[0.06em] text-ink-faint">
+            Arms at 5,000
+          </dt>
+          <dd className="mt-1 text-ink-secondary">
+            Keyword 17 / 58 ms. Image 36 / 46 ms. Meaning 44 / 60 ms. p50 / p95.
+          </dd>
+        </div>
+      </dl>
+    </div>
+
+    <div className="mt-2">
+      <StatRow
+        label="Fused query at 50,000 files"
+        badge="Target missed"
+        badgeTone="miss"
+        value="457 ms p50"
+        secondary="523 ms p95 · target under 100 ms"
+        context={
+          <>
+            About 4.6 times over the target. The meaning arm is the largest cost
+            at 241 ms p50. This row is not a win, and closing the gap needs a
+            different index shape, not a bigger number here.
+          </>
+        }
+      />
+
+      <StatRow
+        label="Windows OCR, per image"
+        badge="Single sample"
+        value="34.4 ms p50"
+        secondary="139.9 ms p95 · 188 mean characters"
+        context={
+          <>
+            40 real screenshots, one pass, one image at a time. Measured on an AMD
+            Ryzen 3 5300U, 8 threads, 7.3 GB RAM, Windows 11 build 26300. A repeat
+            pass moved p50 to 45.7 ms, so read the figure as one sample.
+          </>
+        }
+      />
+
+      <StatRow
+        label="Description search, 300 photos"
+        badge="COCO, 300 photos"
+        value="0.7015 R@1"
+        secondary="0.9454 R@5 · 1,501 captions"
+        context={
+          <>
+            Measured through the shipped SigLIP path on COCO 2014 photos. The
+            model was asked to reach 0.85 R@1. It does not, at any measured
+            library size.
+          </>
+        }
+      />
+
+      <StatRow
+        label="Description search, 5,000 photos"
+        badge="Rank 1 falls"
+        value="0.3552 R@1"
+        secondary="0.6033 R@5 · 25,010 captions"
+        context={
+          <>
+            The same path, a larger shelf. Rank 1 loses about 8.5 points per
+            doubling of the library, with no flattening in the measured curve.
+            Description search is a retrieval aid, not a guarantee.
+          </>
+        }
+      />
+
+      <StatRow
+        label="Index size on disk"
+        badge="Measured"
+        value="22.7 MB / 1,000"
+        secondary="13.7 MB / 1,000 at 50,000 files"
+        context={
+          <>
+            113.7 MB for the 5,000-file index; 686 MB for 50,000. The mix of file
+            types changes the number, so treat it as the measured shape of these
+            corpora, not a constant.
+          </>
+        }
+      />
+    </div>
+
+    <div className="mt-12 grid gap-6 border-t border-line pt-8 md:grid-cols-[minmax(0,0.55fr)_minmax(0,1fr)] md:gap-12">
+      <h3 className="font-serif text-[22px] font-bold tracking-tight text-ink-primary">
+        How to read these numbers
+      </h3>
+      <ul className="space-y-3 text-[13px] leading-relaxed text-ink-secondary">
+        <li>
+          <strong className="font-semibold text-ink-primary">
+            The corpus is not a personal folder.
+          </strong>{' '}
+          About 31% of the 5,000 and 50,000-file corpora are real files. Generated
+          screenshots are the easy case for OCR, so the real-world number is
+          likely worse.
+        </li>
+        <li>
+          <strong className="font-semibold text-ink-primary">
+            One machine, one run.
+          </strong>{' '}
+          The OS file cache was warm across the harness processes. A cold machine
+          would be slower.
+        </li>
+        <li>
+          <strong className="font-semibold text-ink-primary">
+            p95 is close to the maximum.
+          </strong>{' '}
+          With 32 samples, the p95 is effectively the near-maximum of those
+          samples, not an estimate of the query distribution.
+        </li>
+        <li>
+          <strong className="font-semibold text-ink-primary">
+            OCR and queries used different machines.
+          </strong>{' '}
+          The query rows used the Core Ultra 5 225H. The 34.4 ms OCR row used the
+          Ryzen 3 5300U. The hardware is stated on each row.
+        </li>
+        <li>
+          <strong className="font-semibold text-ink-primary">
+            COCO captions are not typed queries.
+          </strong>{' '}
+          The description numbers use human COCO captions, which is a cleaner
+          query than a person typing from memory.
+        </li>
+      </ul>
+    </div>
+  </Section>
+);

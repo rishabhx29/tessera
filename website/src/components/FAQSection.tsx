@@ -1,136 +1,201 @@
 import React, { useState } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { Plus } from 'lucide-react';
+import { Section } from './Section';
 
 interface FAQItem {
   id: string;
   question: string;
-  answer: string;
-  details?: string;
+  answer: React.ReactNode;
 }
 
 const FAQ_ITEMS: FAQItem[] = [
   {
+    id: 'download',
+    question: 'When can I download it?',
+    answer: (
+      <>
+        There is no public release yet. The Windows installer is built and has
+        been tested locally. Publishing it to GitHub Releases is the next step,
+        and there is no date to promise. Watch the{' '}
+        <a
+          href="https://github.com/rishabhx29/tessera/releases"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="link"
+        >
+          Releases page
+        </a>{' '}
+        to see it land.
+      </>
+    ),
+  },
+  {
     id: 'formats',
-    question: 'What file formats does Tessera index in v0.1?',
-    answer:
-      'In v0.1, Tessera indexes screenshots and images (PNG, JPG, JPEG, WEBP, BMP, GIF, TIFF) via local OCR and SigLIP vision embeddings. For documents, it indexes PDFs with text layers, DOCX Word files, and plain text formats (TXT, MD, CSV, LOG) using chunked MiniLM semantic embeddings.',
-    details:
-      'Video files (Whisper + keyframes) arrive in v0.2, and XLSX/PPTX in v0.4. Scanned PDFs lacking a text layer are counted on the local diagnostics page rather than silently discarded.',
+    question: 'What can it search?',
+    answer: (
+      <>
+        In v0.1: screenshots and images (PNG, JPG, WEBP, BMP, GIF, TIFF) through
+        OCR, PDFs with a text layer, Word documents, and plain text (TXT, MD,
+        CSV, LOG). Video is planned for v0.2; XLSX and PPTX for v0.4. Scanned
+        PDFs without a text layer are flagged and counted, not silently dropped.
+      </>
+    ),
   },
   {
-    id: 'telemetry',
-    question: 'Does Tessera upload anything to the cloud or phone home?',
-    answer:
-      'No. Tessera has zero network calls at query time and zero telemetry compiled into the binary. No usage analytics, no error tracking servers, and no account synchronization. Everything happens strictly within your local machine.',
-    details:
-      'You can verify this yourself by inspecting network traffic with Wireshark or running Tessera in an isolated offline environment.',
+    id: 'privacy',
+    question: 'Does it send anything anywhere?',
+    answer: (
+      <>
+        No. Search runs locally with no network step, and there is no telemetry
+        or account layer in the build. The only download is the model set on
+        first run, checked against SHA-256 hashes pinned in the binary.
+      </>
+    ),
   },
   {
-    id: 'battery-performance',
-    question: 'Will background indexing slow down my PC or drain my laptop battery?',
-    answer:
-      'No. The background watcher runs at idle CPU and IO priority. It automatically pauses execution when your laptop is unplugged and running on battery power.',
-    details:
-      'Machine learning models load into memory only during an active backlog drain and unload immediately once the queue is empty, preserving an idle RAM ceiling of ~250 MB.',
+    id: 'battery',
+    question: 'What does it cost in battery and memory?',
+    answer: (
+      <>
+        Indexing runs at idle priority and pauses on battery under the default
+        schedule. Models load when there is work and are released when the queue
+        drains. The 5,000-file drain peaked at 452 MB. A separate watcher run
+        measured 43.2 MB working set once idle; the 5,000-file run's idle figure
+        was not re-measured. The product target is under 250 MB at idle, and the
+        engine queues work rather than holding models to meet it.
+      </>
+    ),
   },
   {
     id: 'index-size',
-    question: 'How large is the search index on disk?',
-    answer:
-      'The index consumes roughly ~25 MB of disk space per 1,000 files. This includes trigram text tokens, document chunks, and vector embeddings.',
-    details:
-      'The entire index is stored in a single standard SQLite file (tessera.db) in your local application directory, which you can inspect or delete at any time.',
+    question: 'How big is the index?',
+    answer: (
+      <>
+        113.7 MB for 5,000 files, or 22.7 MB per 1,000. At 50,000 files it was
+        686 MB, or 13.7 MB per 1,000, because the mix of file types changes. It
+        is one SQLite file you can inspect, back up, move, or delete.
+      </>
+    ),
+  },
+  {
+    id: 'speed',
+    question: 'Is the 100 ms search target met?',
+    answer: (
+      <>
+        At 5,000 files, yes: 65 ms p50 and 80 ms p95. At 50,000 files, no: 457
+        ms p50 and 523 ms p95. The 50,000-file row is a miss, mostly in the
+        meaning arm, and it is reported as one. The full method and caveats are
+        in the{' '}
+        <a
+          href="https://github.com/rishabhx29/tessera/blob/main/docs/performance.md"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="link"
+        >
+          performance log
+        </a>
+        .
+      </>
+    ),
   },
   {
     id: 'platforms',
-    question: 'What is the status of Windows vs. macOS and Linux support?',
-    answer:
-      'Windows 10/11 x64 is the primary launch target with native Windows.Media.Ocr acceleration (34.4 ms p50). The macOS Vision OCR adapter is implemented and passes CI tests, but its physical benchmark timings are unmeasured. Linux is supported through the cross-platform ONNX fallback.',
-    details:
-      'We refuse to market "fast on all platforms" until physical hardware benchmarks are completed and published for macOS.',
-  },
-  {
-    id: 'models',
-    question: 'How are neural network models downloaded and verified?',
-    answer:
-      'Required quantized models download once upon initial setup. Every model file must match a cryptographic SHA-256 checksum hardcoded into the compiled binary (ADR-0009).',
-    details:
-      'If any file differs by a single byte, the engine rejects the download and halts loading to guarantee software supply-chain integrity.',
+    question: 'What about macOS and Linux?',
+    answer: (
+      <>
+        Windows 10 and 11 x64 is first. The macOS Vision adapter compiles and
+        passes a smoke test on a CI runner, but it has not been measured on
+        Apple hardware. Linux uses the ONNX fallback and is source only. Neither
+        has a downloadable build.
+      </>
+    ),
   },
   {
     id: 'license',
-    question: 'What is the license and is Tessera free for commercial use?',
-    answer:
-      'Tessera is 100% free and released under the permissive MIT License. You are completely free to use it for personal projects, enterprise work, and commercial development without restriction or subscription fees.',
+    question: 'What does it cost, and under what license?',
+    answer: (
+      <>
+        Free, under the MIT license. No subscription, no account, no paid tier.
+      </>
+    ),
   },
 ];
 
 export const FAQSection: React.FC = () => {
-  const [openIds, setOpenIds] = useState<Record<string, boolean>>({ formats: true });
-
-  const toggleItem = (id: string) => {
-    setOpenIds((prev) => ({
-      ...prev,
-      [id]: !prev[id],
-    }));
-  };
+  const [openId, setOpenId] = useState<string | null>('download');
 
   return (
-    <section id="faq" className="py-20 bg-canvas border-b border-line">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Section Header */}
-        <div className="text-center max-w-2xl mx-auto mb-14">
-          <div className="text-xs font-mono uppercase tracking-wider text-accent font-semibold mb-2">
-            Clear Answers
-          </div>
-          <h2 className="font-serif text-3xl sm:text-4xl font-bold tracking-tight text-ink-primary">
-            Frequently Asked Questions
+    <Section id="faq" labelledBy="faq-title">
+      <div className="grid gap-10 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] md:gap-16">
+        <div className="md:sticky md:top-24 md:self-start">
+          <h2
+            id="faq-title"
+            className="font-serif text-[clamp(1.85rem,1.15rem+2.15vw,3rem)] font-bold leading-[1.08] tracking-tighter text-ink-primary"
+          >
+            Questions worth asking.
           </h2>
-          <p className="mt-3 text-base text-ink-secondary">
-            Honest facts about formats, performance, privacy, and roadmap status.
+          <p className="mt-4 max-w-[38ch] text-[15px] leading-relaxed text-ink-secondary">
+            Short answers, including the ones that are not flattering. If
+            something is missing, open an issue.
           </p>
+          <a
+            href="https://github.com/rishabhx29/tessera/issues"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hairline-link mt-6"
+          >
+            Ask on GitHub
+          </a>
         </div>
 
-        {/* Accordion List */}
-        <div className="space-y-3">
+        <div className="border-t border-line">
           {FAQ_ITEMS.map((item) => {
-            const isOpen = !!openIds[item.id];
-            return (
-              <div
-                key={item.id}
-                className="rounded-lg border border-line bg-surface transition-all overflow-hidden"
-              >
-                <button
-                  type="button"
-                  onClick={() => toggleItem(item.id)}
-                  className="w-full px-5 py-4 text-left flex items-center justify-between gap-4 hover:bg-subtle/50 transition-colors focus-visible:ring-2 focus-visible:ring-accent"
-                  aria-expanded={isOpen}
-                >
-                  <span className="font-serif text-base sm:text-lg font-bold text-ink-primary">
-                    {item.question}
-                  </span>
-                  <ChevronDown
-                    className={`w-4 h-4 text-ink-muted shrink-0 transition-transform duration-200 ${
-                      isOpen ? 'rotate-180 text-accent' : ''
-                    }`}
-                  />
-                </button>
+            const isOpen = openId === item.id;
+            const panelId = `faq-panel-${item.id}`;
+            const buttonId = `faq-button-${item.id}`;
 
-                {isOpen && (
-                  <div className="px-5 pb-5 pt-1 text-sm text-ink-secondary border-t border-line/60 bg-canvas/30 space-y-2 leading-relaxed">
-                    <p>{item.answer}</p>
-                    {item.details && (
-                      <p className="text-xs text-ink-muted font-sans border-l-2 border-line-strong pl-3 mt-2">
-                        {item.details}
-                      </p>
-                    )}
-                  </div>
-                )}
+            return (
+              <div key={item.id} className="border-b border-line">
+                <h3>
+                  <button
+                    type="button"
+                    id={buttonId}
+                    aria-expanded={isOpen}
+                    aria-controls={panelId}
+                    onClick={() => setOpenId(isOpen ? null : item.id)}
+                    className="group flex w-full items-center justify-between gap-6 py-5 text-left"
+                  >
+                    <span
+                      className={`text-[15px] font-medium leading-snug transition-colors duration-150 ${
+                        isOpen ? 'text-ink-primary' : 'text-ink-secondary'
+                      }`}
+                    >
+                      {item.question}
+                    </span>
+                    <Plus
+                      className={`h-4 w-4 shrink-0 text-ink-muted transition-transform duration-150 ${
+                        isOpen ? 'rotate-45 text-accent' : ''
+                      }`}
+                      aria-hidden="true"
+                    />
+                  </button>
+                </h3>
+                <div
+                  id={panelId}
+                  role="region"
+                  aria-labelledby={buttonId}
+                  hidden={!isOpen}
+                  className="pb-5 pr-8"
+                >
+                  <p className="max-w-[62ch] text-[14px] leading-relaxed text-ink-secondary">
+                    {item.answer}
+                  </p>
+                </div>
               </div>
             );
           })}
         </div>
       </div>
-    </section>
+    </Section>
   );
 };
