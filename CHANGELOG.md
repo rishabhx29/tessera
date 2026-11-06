@@ -10,6 +10,15 @@ releases begin.
 
 ### Added
 
+- The release pipeline: a `v*` tag builds the Windows NSIS installer on
+  GitHub's MSVC runner (the GNU toolchain constraint is a dev-machine quirk,
+  not a product one), attaches it to a GitHub release, and uploads
+  `SHA256SUMS.txt`. The installer is 10.3 MB and carries no model weights —
+  the first-run model download is checksum-pinned in the binary.
+- `scoop/tessera.json`: a scoop manifest wired to GitHub Releases with
+  `checkver`/`autoupdate`, its hash taken from the release's SHA256SUMS.txt.
+- The workspace and app bundle carry version **0.1.0** — the first shippable
+  number; the scaffold's 0.0.0 never shipped anything.
 - The window's design direction, written down where the UI lives
   (`crates/app/ui/DESIGN.md`): the website's brand tokens — canvas `#FAF9F5`,
   ink `#181715`, terracotta `#C2410C`, hairlines `#E5E2D9` — plus the
@@ -161,6 +170,20 @@ releases begin.
 
 ### Fixed
 
+- Uninstalling the app no longer threatens the index and models. The silent-
+  install test found that the NSIS installer's per-user default installs to
+  `%LOCALAPPDATA%\Tessera` — exactly the engine's data dir — so the
+  uninstaller's wholesale removal of the install folder would have deleted
+  the index and 1.3 GB of models with the app. The data home is now
+  `%LOCALAPPDATA%\TesseraData` (`TESSERA_DATA_DIR` overrides it), and a
+  one-time rename-based migration moves an existing index, its sidecars and
+  the models on first use — leaving the installer's own files alone, and
+  falling back to the old location with a spoken reason if the index is
+  locked by a running app. Verified end to end on this machine: migrate,
+  uninstall (old folder gone, data intact), reinstall.
+- The bundle identifier was `dev.tessera.app`, which the bundler warns ends
+  with `.app` — a conflict with the macOS bundle extension. It is now
+  `io.github.rishabhx29.tessera`, changed safely before any release shipped.
 - A sustained store outage no longer burns a core while the watcher waits it
   out. The retry after a failed coordinator call slept for the *nearest timer*,
   which the loop reports as zero once a timer has come due (the 30 s power poll,

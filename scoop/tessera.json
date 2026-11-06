@@ -1,0 +1,30 @@
+{
+    "##": "Generated for Tessera's GitHub releases. Update 'version', 'url' and 'hash' from the release's SHA256SUMS.txt when a new tag ships.",
+    "version": "0.1.0",
+    "description": "One search bar for everything your PC can't search — images, screenshots, PDFs, and documents — offline, free, and open source.",
+    "homepage": "https://github.com/rishabhx29/tessera",
+    "license": "MIT",
+    "notes": [
+        "The first launch downloads the search models once (about 1.3 GB), checksum-pinned; after that Tessera never touches the network at query time.",
+        "Scoop installs the app but not the autostart entry — enable 'Start Tessera when I sign in' in Settings."
+    ],
+    "url": "https://github.com/rishabhx29/tessera/releases/download/v0.1.0/Tessera_0.1.0_x64-setup.exe",
+    "hash": "831ae237f60d493f5753c1b02799ca385fd0ff48097d5757e0fb45b3c5644154",
+    "innosetup": false,
+    "installer": {
+        "script": [
+            "Start-Process \"$dir\\$fname\" /S -Wait",
+            "Remove-Item \"$dir\\$fname\""
+        ]
+    },
+    "bin": "Tessera.exe",
+    "shortcuts": [["Tessera.exe", "Tessera"]],
+    "checkver": "github",
+    "autoupdate": {
+        "url": "https://github.com/rishabhx29/tessera/releases/download/v$version/Tessera_$version_x64-setup.exe",
+        "hash": {
+            "url": "https://github.com/rishabhx29/tessera/releases/download/v$version/SHA256SUMS.txt",
+            "find": "^([a-fA-F0-9]{64})\\s+\\*?Tessera_$underscoreVersion_x64-setup\\.exe$"
+        }
+    }
+}
