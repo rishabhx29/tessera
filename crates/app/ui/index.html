@@ -14,14 +14,17 @@
           <span class="brand-name">Tessera</span>
         </div>
         <nav class="rail-nav">
-          <button class="rail-item" data-view="search" aria-current="page">
+          <button class="rail-item" data-view="search" aria-label="Search" aria-keyshortcuts="Control+1" aria-current="page">
+            <svg class="rail-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5"></circle><path d="M13.2 13.2 17.5 17.5"></path></svg>
             <span>Search</span><kbd>Ctrl 1</kbd>
           </button>
-          <button class="rail-item" data-view="activity">
+          <button class="rail-item" data-view="activity" aria-label="Activity" aria-keyshortcuts="Control+2">
+            <svg class="rail-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10h3.2L8 4.5l3.7 11L13.5 10h4"></path></svg>
             <span>Activity</span>
-            <span class="rail-end"><kbd>Ctrl 2</kbd><span class="dot" id="activity-dot" hidden></span></span>
+            <span class="rail-end"><kbd>Ctrl 2</kbd><span class="dot" id="activity-dot" aria-hidden="true" hidden></span></span>
           </button>
-          <button class="rail-item" data-view="settings">
+          <button class="rail-item" data-view="settings" aria-label="Settings" aria-keyshortcuts="Control+3">
+            <svg class="rail-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 6h13M3.5 10h13M3.5 14h13"></path><circle cx="7.5" cy="6" r="1.7"></circle><circle cx="12" cy="10" r="1.7"></circle><circle cx="6.5" cy="14" r="1.7"></circle></svg>
             <span>Settings</span><kbd>Ctrl 3</kbd>
           </button>
         </nav>
@@ -45,13 +48,16 @@
               spellcheck="false"
               placeholder="Search words, meaning, or what a picture shows"
               aria-label="Search your files"
+              aria-controls="results"
+              aria-autocomplete="list"
+              aria-keyshortcuts="Control+K"
               autofocus
             />
             <kbd class="search-hint" id="search-hint">Ctrl K</kbd>
           </form>
           <div class="search-meta" id="search-meta" role="status"></div>
           <div class="notes" id="notes" role="status"></div>
-          <div class="results" id="results" role="listbox" aria-label="Results" tabindex="0"></div>
+          <div class="results" id="results" role="listbox" aria-label="Results" tabindex="-1"></div>
           <div class="home" id="home" hidden>
             <svg class="home-mark" viewBox="0 0 44 44" aria-hidden="true">
               <g>
@@ -93,15 +99,19 @@
             </p>
             <button class="primary" id="first-run-add">Add a folder to index</button>
           </div>
-          <div class="empty" id="empty" hidden>
-            <p id="empty-title">No matches</p>
+          <div class="empty" id="empty" role="status" hidden>
+            <p class="empty-title" id="empty-title">No matches</p>
             <p class="dim" id="empty-hint">Try a different word, or a filter like <code>type:pdf</code>.</p>
+            <button class="ghost" id="empty-clear" type="button">Clear the search</button>
           </div>
         </section>
 
         <section class="view" id="view-activity" aria-label="Activity" hidden>
           <header class="view-head">
-            <h1>Activity</h1>
+            <div>
+              <h1>Activity</h1>
+              <p class="view-sub">What the index holds, and what the watcher is doing right now.</p>
+            </div>
             <button class="ghost" id="refresh-activity">Refresh</button>
           </header>
           <div class="cards">
@@ -133,7 +143,10 @@
 
         <section class="view" id="view-settings" aria-label="Settings" hidden>
           <header class="view-head">
-            <h1>Settings</h1>
+            <div>
+              <h1>Settings</h1>
+              <p class="view-sub">Folders, models, startup, and the index itself.</p>
+            </div>
             <button class="ghost" id="refresh-settings">Refresh</button>
           </header>
           <div class="cards">

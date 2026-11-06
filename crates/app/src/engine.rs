@@ -19,6 +19,19 @@ use tessera_core::ocr::OcrChoice;
 use tessera_core::store::Store;
 use tessera_core::vectors::{QueryEmbedder, TextEmbedder};
 
+/// Longest edge of a result thumbnail, in pixels. The list draws these at
+/// 44 px, so 320 leaves detail for a 2x display and for the preview pane's
+/// first frame without holding a screenshot in memory.
+const THUMBNAIL_EDGE: u32 = 320;
+
+/// JPEG quality for a thumbnail. 82 is visually clean at this size and keeps a
+/// screenshot near 20 KB, which matters when forty rows load at once.
+const THUMBNAIL_QUALITY: u8 = 82;
+
+/// A decode guard, independent of the index's 50 MB admission cap (a row
+/// indexed before that cap could name a larger file).
+const MAX_THUMBNAIL_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
+
 /// The query arms' embedders, loaded once and shared by every query.
 ///
 /// Both constructors verify their model set by hashing it (~1.47 GB) and build
@@ -141,6 +154,10 @@ pub struct AppService {
     /// observable that proves a second query reuses them.
     #[cfg(test)]
     search_loads: Arc<std::sync::atomic::AtomicUsize>,
+    /// How many times a thumbnail was decoded rather than read from the cache.
+    /// Test-only, for the same reason as `search_loads`.
+    #[cfg(test)]
+    thumbnail_decodes: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl AppService {
@@ -152,6 +169,8 @@ impl AppService {
             search_embedders: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             search_loads: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            #[cfg(test)]
+            thumbnail_decodes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -325,6 +344,73 @@ impl AppService {
         std::fs::read(path).map_err(|err| format!("reading {path}: {err}"))
     }
 
+    /// A small cached picture of an indexed image, for the result list.
+    ///
+    /// Same reach as [`AppService::image_bytes`] — the index must know the
+    /// path as an image — but a different job: a 40-row list cannot hold 40
+    /// full screenshots in memory, so this decodes once, shrinks the longest
+    /// edge to [`THUMBNAIL_EDGE`] px, and keeps the JPEG under
+    /// `<data_dir>/thumbs/`. A later request for the same file version is a
+    /// file read, not a decode.
+    ///
+    /// The key is the file id plus the mtime of the bytes on disk, so an edit
+    /// that lands before the watcher re-indexes it cannot serve the old
+    /// picture. This is deliberately not on the search path: the list renders
+    /// from the payload first and asks for pictures afterwards.
+    ///
+    /// Errors are the three facts the user can act on — not an image, not on
+    /// disk, or not decodable — plus the no-index first-run case.
+    pub fn thumbnail(&self, path: &str) -> Result<Vec<u8>, String> {
+        if !self.index_exists() {
+            return Err("no index yet: add a folder to start indexing".into());
+        }
+        let store = Store::open(&self.data_dir).map_err(|err| format!("{err:#}"))?;
+        let source = store
+            .thumb_source(Path::new(path))
+            .map_err(|err| format!("{err:#}"))?
+            .ok_or_else(|| "that file is not in the index".to_string())?;
+        if source.kind != "image" {
+            return Err("thumbnails are only made for image hits".into());
+        }
+        let target = Path::new(path);
+        let meta = std::fs::metadata(target).map_err(|err| format!("reading {path}: {err}"))?;
+        if !meta.is_file() {
+            return Err(format!("{path} is not a file"));
+        }
+        // The index stops at 50 MB; this is a wider guard for a row indexed
+        // before that cap, and it refuses before a byte is read.
+        if meta.len() > MAX_THUMBNAIL_SOURCE_BYTES {
+            return Err(format!(
+                "that image is larger than {} MB; open it in its own app",
+                MAX_THUMBNAIL_SOURCE_BYTES / (1024 * 1024)
+            ));
+        }
+        let mtime = disk_mtime_nanos(&meta).unwrap_or(source.indexed_mtime as u128);
+        let key = format!("{}-{mtime}.jpg", source.file_id);
+        let cache_dir = self.data_dir.join("thumbs");
+        let cache_file = cache_dir.join(&key);
+        if let Ok(bytes) = std::fs::read(&cache_file) {
+            if !bytes.is_empty() {
+                return Ok(bytes);
+            }
+        }
+
+        let bytes = render_thumbnail(target)?;
+        #[cfg(test)]
+        self.thumbnail_decodes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // Both of these describe work already done: a cache that cannot be
+        // written still has an answer to return, so neither failure denies the
+        // user their picture.
+        if let Err(err) = write_cache(&cache_dir, &cache_file, &bytes) {
+            eprintln!("the thumbnail cache could not be written: {err}");
+        }
+        if let Err(err) = store.set_thumb(source.file_id, Some(&key)) {
+            eprintln!("the thumbnail record could not be written: {err:#}");
+        }
+        Ok(bytes)
+    }
+
     pub fn status(&self) -> Result<StatusPayload, String> {
         let index_path = self.data_dir.join("index.sqlite");
         let index_mb = std::fs::metadata(&index_path)
@@ -410,6 +496,14 @@ impl AppService {
     #[cfg(test)]
     fn search_loads(&self) -> usize {
         self.search_loads.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// How many thumbnails this process decoded (as opposed to re-read from
+    /// the cache).
+    #[cfg(test)]
+    fn thumbnail_decodes(&self) -> usize {
+        self.thumbnail_decodes
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Whether the query embedders are cached.
@@ -513,6 +607,56 @@ impl AppService {
     }
 }
 
+/// The mtime of the bytes on disk, in nanoseconds since the Unix epoch.
+///
+/// `None` when the platform will not report it; the caller then falls back to
+/// the mtime the index recorded rather than collapsing every version onto one
+/// cache key.
+fn disk_mtime_nanos(meta: &std::fs::Metadata) -> Option<u128> {
+    meta.modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since| since.as_nanos())
+}
+
+/// Decode an image, shrink its longest edge to [`THUMBNAIL_EDGE`], and encode
+/// it as JPEG.
+///
+/// The decode itself is the engine's (`tessera_core::thumb`), which caps the
+/// pixels one file may allocate; this function only fixes the size and quality
+/// the list wants and makes the error text name the file.
+fn render_thumbnail(path: &Path) -> Result<Vec<u8>, String> {
+    tessera_core::thumb::render_jpeg(path, THUMBNAIL_EDGE, THUMBNAIL_QUALITY)
+        .map_err(|err| format!("{err:#}"))
+}
+
+/// Write a cache entry through a temp file and a rename.
+///
+/// Two rows can ask for the same thumbnail at once (a double render, two
+/// windows); writing in place would let one reader observe half a file. The
+/// rename replaces atomically enough for a cache: a reader sees the old entry
+/// or the new one, never a mix.
+fn write_cache(dir: &Path, target: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static WRITES: AtomicU64 = AtomicU64::new(0);
+    std::fs::create_dir_all(dir)?;
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "thumb".to_string());
+    let temp = dir.join(format!(
+        ".{name}.{}-{}.tmp",
+        std::process::id(),
+        WRITES.fetch_add(1, Ordering::SeqCst)
+    ));
+    std::fs::write(&temp, bytes)?;
+    if let Err(err) = std::fs::rename(&temp, target) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(err);
+    }
+    Ok(())
+}
+
 /// A fused hit as the result list wants it.
 fn row_from_hit(hit: &tessera_core::fusion::FusedHit, terms: &[String]) -> Row {
     Row {
@@ -609,6 +753,7 @@ pub fn highlight(text: &str, terms: &[String]) -> Vec<Segment> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tessera_core::index::Kind;
 
     #[test]
     fn a_match_is_highlighted_and_the_rest_is_not() {
@@ -734,6 +879,165 @@ mod tests {
         drop(Store::open(temp.path()).unwrap());
         let error = service.image_bytes(r"C:\secret\notes.png").unwrap_err();
         assert!(error.contains("not in the index"), "{error}");
+    }
+
+    // -- thumbnails -------------------------------------------------------
+
+    fn facts(path: &Path) -> tessera_core::index::skip::FileFacts {
+        let meta = std::fs::metadata(path).expect("the fixture exists");
+        tessera_core::index::skip::FileFacts {
+            size: meta.len(),
+            mtime: 1_000,
+            placeholder: false,
+        }
+    }
+
+    /// Put a file in the service's index the way an index run would.
+    fn index_as(service: &AppService, root: &Path, path: &Path, kind: Kind) {
+        let store = Store::open(service.data_dir()).unwrap();
+        store
+            .index_file(root, path, kind, &facts(path), None, &[])
+            .unwrap();
+    }
+
+    fn png(path: &Path, width: u32, height: u32) {
+        image::RgbImage::from_pixel(width, height, image::Rgb([200, 120, 60]))
+            .save(path)
+            .expect("write the fixture");
+    }
+
+    #[test]
+    fn a_thumbnail_is_only_made_for_an_indexed_image_that_is_still_on_disk() {
+        let temp = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let service = AppService::new(temp.path(), temp.path().join("models"));
+        let image_path = corpus.path().join("shot.png");
+        png(&image_path, 40, 20);
+        let not_an_image = corpus.path().join("notes.txt");
+        std::fs::write(&not_an_image, b"words").unwrap();
+
+        // No index at all is the first-run state, not a miss.
+        let error = service
+            .thumbnail(&image_path.to_string_lossy())
+            .unwrap_err();
+        assert!(error.contains("no index yet"), "{error}");
+
+        index_as(&service, corpus.path(), &not_an_image, Kind::Text);
+        let error = service
+            .thumbnail(&not_an_image.to_string_lossy())
+            .unwrap_err();
+        assert!(error.contains("only made for image"), "{error}");
+
+        // A path the index has never seen is refused before the filesystem is
+        // consulted, so the command cannot read arbitrary files.
+        let outside = corpus.path().join("outside.png");
+        png(&outside, 10, 10);
+        let error = service.thumbnail(&outside.to_string_lossy()).unwrap_err();
+        assert!(error.contains("not in the index"), "{error}");
+
+        // A row whose file has been deleted since indexing names the fact.
+        let gone = corpus.path().join("gone.png");
+        let store = Store::open(temp.path()).unwrap();
+        store
+            .index_file(
+                corpus.path(),
+                &gone,
+                Kind::Image,
+                &tessera_core::index::skip::FileFacts {
+                    size: 3,
+                    mtime: 1_000,
+                    placeholder: false,
+                },
+                None,
+                &[],
+            )
+            .unwrap();
+        drop(store);
+        let error = service.thumbnail(&gone.to_string_lossy()).unwrap_err();
+        assert!(error.contains("reading"), "{error}");
+    }
+
+    #[test]
+    fn a_thumbnail_is_bounded_and_decoded_once_or_read_from_the_cache() {
+        let temp = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let service = AppService::new(temp.path(), temp.path().join("models"));
+        let path = corpus.path().join("shot.png");
+        png(&path, 1200, 800);
+        index_as(&service, corpus.path(), &path, Kind::Image);
+        let path_str = path.to_string_lossy().into_owned();
+
+        let first = service.thumbnail(&path_str).unwrap();
+        assert_eq!(service.thumbnail_decodes(), 1);
+        assert!(
+            first.starts_with(&[0xFF, 0xD8]),
+            "a thumbnail is a JPEG, so the list can trust one MIME type"
+        );
+        let decoded = image::load_from_memory(&first).unwrap();
+        assert_eq!(
+            (decoded.width(), decoded.height()),
+            (THUMBNAIL_EDGE, 213),
+            "the longest edge is capped and the aspect ratio is kept"
+        );
+
+        // The second request answers from the cache: the same bytes, one
+        // decode, one file under the cache directory.
+        let second = service.thumbnail(&path_str).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(
+            service.thumbnail_decodes(),
+            1,
+            "the second request re-decoded the picture instead of reading the cache"
+        );
+        let entries: Vec<_> = std::fs::read_dir(temp.path().join("thumbs"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert!(entries[0].ends_with(".jpg"), "{entries:?}");
+
+        // And the index records the entry that now exists, so a future sweep
+        // can tell which files still refer to it.
+        let store = Store::open(temp.path()).unwrap();
+        let source = store.thumb_source(&path).unwrap().unwrap();
+        assert_eq!(source.thumb.as_deref(), Some(entries[0].as_str()));
+    }
+
+    #[test]
+    fn a_corrupt_image_is_an_error_and_never_a_panic() {
+        let temp = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let service = AppService::new(temp.path(), temp.path().join("models"));
+        let path = corpus.path().join("broken.png");
+        // A PNG header followed by noise: enough to be claimed as an image,
+        // not enough to decode.
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\n not really a picture").unwrap();
+        index_as(&service, corpus.path(), &path, Kind::Image);
+        let path_str = path.to_string_lossy().into_owned();
+
+        let error = service.thumbnail(&path_str).unwrap_err();
+        assert!(error.contains("could not be decoded"), "{error}");
+        // A second ask is still an error — the failure is not cached as bytes
+        // and does not take the process with it.
+        assert!(service.thumbnail(&path_str).is_err());
+        assert_eq!(service.thumbnail_decodes(), 0);
+    }
+
+    #[test]
+    fn an_oversized_source_is_refused_before_it_is_read() {
+        let temp = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let service = AppService::new(temp.path(), temp.path().join("models"));
+        let path = corpus.path().join("huge.png");
+        let file = std::fs::File::create(&path).unwrap();
+        // Sparse on NTFS and ext4, so the test writes no gigabytes.
+        file.set_len(MAX_THUMBNAIL_SOURCE_BYTES + 1).unwrap();
+        drop(file);
+        index_as(&service, corpus.path(), &path, Kind::Image);
+
+        let error = service.thumbnail(&path.to_string_lossy()).unwrap_err();
+        assert!(error.contains("larger than"), "{error}");
+        assert_eq!(service.thumbnail_decodes(), 0);
     }
 
     #[test]

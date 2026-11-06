@@ -248,6 +248,26 @@ pub struct MatchedFile {
     pub tiles: Vec<MatchedTile>,
 }
 
+/// What a thumbnail cache needs from a file row: which file it is, what kind
+/// it is, the mtime the index recorded, and the cache entry the last
+/// generation wrote.
+///
+/// The cache *key* is derived (file id plus the file's on-disk mtime, falling
+/// back to [`ThumbSource::indexed_mtime`]) rather than read from
+/// [`ThumbSource::thumb`], because a file edited before the watcher catches up
+/// must not serve the previous picture. The column is the record of what was
+/// written, which a later sweep can use to drop entries no current file
+/// version refers to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThumbSource {
+    pub file_id: i64,
+    pub kind: String,
+    /// Nanoseconds since the Unix epoch, as the last index run saw it.
+    pub indexed_mtime: i64,
+    /// The cache file name last written for this row, if any.
+    pub thumb: Option<String>,
+}
+
 fn row_to_ref(row: &rusqlite::Row<'_>) -> rusqlite::Result<FileRowRef> {
     Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
 }
@@ -1394,6 +1414,42 @@ impl Store {
             .map_err(Into::into)
     }
 
+    /// The identity a thumbnail cache keys on, or `None` when the index has
+    /// never seen the path.
+    ///
+    /// Deliberately not [`Store::files_by_ids`]: that query joins tiles, and a
+    /// screenshot whose OCR produced nothing has no tile but still has a
+    /// picture worth showing.
+    pub fn thumb_source(&self, path: &Path) -> Result<Option<ThumbSource>> {
+        self.conn
+            .query_row(
+                "SELECT id, kind, mtime, thumb FROM files WHERE path = ?1",
+                rusqlite::params![path.to_string_lossy()],
+                |row| {
+                    Ok(ThumbSource {
+                        file_id: row.get(0)?,
+                        kind: row.get(1)?,
+                        indexed_mtime: row.get(2)?,
+                        thumb: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
+    }
+
+    /// Record the cache entry a thumbnail generation wrote for `file_id`.
+    ///
+    /// Best-effort by contract: the bytes have already been produced, so a
+    /// caller that cannot record the name must still return them.
+    pub fn set_thumb(&self, file_id: i64, thumb: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE files SET thumb = ?2 WHERE id = ?1",
+            rusqlite::params![file_id, thumb],
+        )?;
+        Ok(())
+    }
+
     /// Whether the image arm holds any vector at all.
     ///
     /// One indexed probe, for the hot path: asking `COUNT(*)` here reads every
@@ -1834,6 +1890,32 @@ mod tests {
             )
             .expect("index it");
         store.file_id(&path).expect("and find its id")
+    }
+
+    #[test]
+    fn a_thumb_source_round_trips_and_never_invents_a_file() {
+        // The cache keys on the id and kind the index holds, and records the
+        // entry it wrote; a path the index has not seen is `None`, not an id
+        // guessed from the filesystem.
+        let (_dir, store) = tmp_store();
+        let corpus = tempfile::tempdir().unwrap();
+        let file_id = indexed_image(&store, corpus.path(), "shot.png");
+        let path = corpus.path().join("shot.png");
+
+        let source = store.thumb_source(&path).unwrap().expect("indexed");
+        assert_eq!(source.file_id, file_id);
+        assert_eq!(source.kind, "image");
+        assert_eq!(source.indexed_mtime, 1_000);
+        assert_eq!(source.thumb, None);
+
+        store.set_thumb(file_id, Some("1-1000.jpg")).unwrap();
+        let source = store.thumb_source(&path).unwrap().unwrap();
+        assert_eq!(source.thumb.as_deref(), Some("1-1000.jpg"));
+
+        assert!(store
+            .thumb_source(&corpus.path().join("never-seen.png"))
+            .unwrap()
+            .is_none());
     }
 
     #[test]

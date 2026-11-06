@@ -27,6 +27,52 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
+// ---- thumbnails ------------------------------------------------------------
+//
+// Image hits show the picture itself. The engine owns the pixels (a 320 px
+// JPEG per file version); this side owns when to ask. Three rules keep the
+// list honest and cheap:
+//   - never on the search path: rows render from the payload first, and only
+//     a row near the viewport asks for its thumbnail;
+//   - one request per path, shared by every row that names it (and by a
+//     re-render while it is in flight);
+//   - a bounded cache of object URLs, so a long idle session does not leak.
+const THUMB_CACHE_LIMIT = 160;
+const thumbCache = new Map(); // path -> { url } | { failed: true }
+const thumbInflight = new Map(); // path -> Promise<string | null>
+let thumbObserver = null;
+
+function rememberThumb(path, entry) {
+  thumbCache.delete(path);
+  thumbCache.set(path, entry);
+  while (thumbCache.size > THUMB_CACHE_LIMIT) {
+    const [oldest, value] = thumbCache.entries().next().value;
+    if (value?.url) URL.revokeObjectURL(value.url);
+    thumbCache.delete(oldest);
+  }
+}
+
+function requestThumb(path) {
+  const pending = thumbInflight.get(path);
+  if (pending) return pending;
+  const promise = call("thumbnail", { path })
+    .then((bytes) => {
+      const url = URL.createObjectURL(new Blob([bytes], { type: "image/jpeg" }));
+      rememberThumb(path, { url });
+      return url;
+    })
+    .catch((error) => {
+      // A row whose picture cannot be made keeps its kind glyph and stays
+      // useful: the name, folder and text are the search answer.
+      console.debug("thumbnail unavailable", path, error);
+      rememberThumb(path, { failed: true });
+      return null;
+    })
+    .finally(() => thumbInflight.delete(path));
+  thumbInflight.set(path, promise);
+  return promise;
+}
+
 // ---- toast -----------------------------------------------------------------
 
 function toast(message, kind = "info") {
@@ -211,11 +257,129 @@ const KIND_ICONS = {
 };
 
 function kindGroup(kind) {
-  const extension = String(kind || "").toLowerCase();
-  if (["png", "jpg", "jpeg", "webp", "bmp", "gif", "tiff"].includes(extension)) return "image";
-  if (extension === "pdf") return "pdf";
-  if (extension === "docx") return "doc";
+  const name = String(kind || "").toLowerCase();
+  // The engine's own vocabulary is image/pdf/docx/text; the extension set
+  // keeps a payload from an older shape (or the dev mock) honest.
+  if (name === "image" || IMAGE_EXTENSIONS.has(name)) return "image";
+  if (name === "pdf") return "pdf";
+  if (name === "docx" || name === "doc") return "doc";
   return "text";
+}
+
+const IMAGE_EXTENSIONS = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "webp",
+  "bmp",
+  "gif",
+  "tif",
+  "tiff",
+]);
+
+function isImageRow(row) {
+  return kindGroup(row.kind) === "image";
+}
+
+function kindGlyph(kind) {
+  const icon = document.createElement("span");
+  icon.className = "result-icon";
+  icon.innerHTML = KIND_ICONS[kindGroup(kind)];
+  return icon;
+}
+
+// The square tile an image row leads with. The glyph underneath is both the
+// skeleton (dimmed while the picture loads) and the fallback (full strength
+// when it cannot be shown), so a failed or missing picture never leaves a
+// hole in the row.
+function thumbTile(row) {
+  const tile = document.createElement("span");
+  tile.className = "result-thumb";
+  tile.dataset.path = row.path;
+  tile.dataset.state = "idle";
+  tile.innerHTML = KIND_ICONS.image;
+  return tile;
+}
+
+function paintThumb(tile, url) {
+  if (!url) {
+    tile.dataset.state = "failed";
+    return;
+  }
+  let img = tile.querySelector("img");
+  if (!img) {
+    img = document.createElement("img");
+    img.alt = "";
+    img.decoding = "async";
+    img.draggable = false;
+    img.addEventListener(
+      "load",
+      () => {
+        if (tile.isConnected) tile.dataset.state = "ready";
+      },
+      { once: true },
+    );
+    img.addEventListener("error", () => {
+      if (tile.isConnected) tile.dataset.state = "failed";
+    });
+    tile.prepend(img);
+  }
+  if (img.dataset.url === url) {
+    if (img.complete && img.naturalWidth > 0) tile.dataset.state = "ready";
+    return;
+  }
+  img.dataset.url = url;
+  img.src = url;
+}
+
+function paintThumbsFor(path) {
+  const entry = thumbCache.get(path);
+  for (const tile of document.querySelectorAll(".result-thumb")) {
+    if (tile.dataset.path !== path) continue;
+    if (entry?.url) paintThumb(tile, entry.url);
+    else tile.dataset.state = "failed";
+  }
+}
+
+// Ask for the pictures of the rows the user can actually reach. The observer
+// is recreated per render (the list is rebuilt per keystroke) but the URL
+// cache and in-flight map survive, so re-rendering does not re-request.
+function attachThumbnails() {
+  const list = $("results");
+  const tiles = list.querySelectorAll(".result-thumb");
+  if (thumbObserver) thumbObserver.disconnect();
+  if (!tiles.length) return;
+  if (!thumbObserver) {
+    thumbObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const tile = entry.target;
+          thumbObserver.unobserve(tile);
+          const path = tile.dataset.path;
+          if (!path) continue;
+          const known = thumbCache.get(path);
+          if (known?.url) {
+            paintThumb(tile, known.url);
+            continue;
+          }
+          if (known?.failed) {
+            tile.dataset.state = "failed";
+            continue;
+          }
+          tile.dataset.state = "loading";
+          requestThumb(path).then(() => paintThumbsFor(path));
+        }
+      },
+      { root: list, rootMargin: "280px 0px" },
+    );
+  }
+  for (const tile of tiles) {
+    const known = thumbCache.get(tile.dataset.path);
+    if (known?.url) paintThumb(tile, known.url);
+    else if (known?.failed) tile.dataset.state = "failed";
+    else thumbObserver.observe(tile);
+  }
 }
 
 function renderResults() {
@@ -223,9 +387,15 @@ function renderResults() {
   list.replaceChildren();
   const showEmpty = Boolean(state.query) && state.results.length === 0 && $("first-run").hidden;
   $("empty").hidden = !showEmpty;
+  if (showEmpty) {
+    const query = state.query.length > 60 ? `${state.query.slice(0, 57)}…` : state.query;
+    $("empty-title").textContent = `No matches for “${query}”`;
+  }
   $("home").hidden = Boolean(state.query) || state.results.length > 0 || !$("first-run").hidden;
   list.setAttribute("aria-activedescendant", "");
+  $("query").setAttribute("aria-activedescendant", "");
   state.results.forEach((row, index) => {
+    const image = isImageRow(row);
     const button = document.createElement("button");
     button.type = "button";
     button.className = "result";
@@ -233,11 +403,14 @@ function renderResults() {
     button.setAttribute("role", "option");
     button.setAttribute("aria-selected", index === state.selected ? "true" : "false");
     button.dataset.index = String(index);
+    button.dataset.kind = image ? "image" : "document";
+    // Roving tabindex: the list is one tab stop, not forty.
+    button.tabIndex = index === (state.selected >= 0 ? state.selected : 0) ? 0 : -1;
 
-    const icon = document.createElement("span");
-    icon.className = "result-icon";
-    icon.setAttribute("aria-hidden", "true");
-    icon.innerHTML = KIND_ICONS[kindGroup(row.kind)];
+    const lead = document.createElement("span");
+    lead.className = "result-lead";
+    lead.setAttribute("aria-hidden", "true");
+    lead.append(image ? thumbTile(row) : kindGlyph(row.kind));
 
     const name = document.createElement("span");
     name.className = "result-name";
@@ -272,13 +445,15 @@ function renderResults() {
     snippet.className = "result-snippet";
     appendSegments(snippet, row.snippet);
 
-    button.append(icon, name, folder, badges, snippet);
+    button.append(lead, name, folder, badges, snippet);
     button.addEventListener("click", () => select(index, true));
     list.append(button);
   });
   if (state.selected >= 0) {
     list.setAttribute("aria-activedescendant", `result-${state.selected}`);
+    $("query").setAttribute("aria-activedescendant", `result-${state.selected}`);
   }
+  attachThumbnails();
 }
 
 function appendSegments(target, segments) {
@@ -297,8 +472,12 @@ function select(index, open) {
   if (index < 0 || index >= state.results.length) return;
   state.selected = index;
   for (const button of document.querySelectorAll(".result")) {
-    button.setAttribute("aria-selected", button.dataset.index === String(index) ? "true" : "false");
+    const selected = button.dataset.index === String(index);
+    button.setAttribute("aria-selected", selected ? "true" : "false");
+    button.tabIndex = selected ? 0 : -1;
   }
+  $("results").setAttribute("aria-activedescendant", `result-${index}`);
+  $("query").setAttribute("aria-activedescendant", `result-${index}`);
   const row = state.results[index];
   if (open) openPreview(row);
   const active = $(`result-${index}`);
@@ -307,8 +486,21 @@ function select(index, open) {
 
 function move(delta) {
   if (!state.results.length) return;
-  const next = Math.min(Math.max(state.selected + delta, 0), state.results.length - 1);
+  const from = state.selected < 0 ? 0 : state.selected;
+  const next = Math.min(Math.max(from + delta, 0), state.results.length - 1);
+  // If focus already sits on a row, it travels with the selection. Without
+  // this, the next Enter would activate the row the user just left.
+  const keyboard = document.activeElement?.classList?.contains("result");
   select(next, true);
+  if (keyboard) $(`result-${next}`)?.focus();
+}
+
+function moveToEdge(last) {
+  if (!state.results.length) return;
+  const keyboard = document.activeElement?.classList?.contains("result");
+  const next = last ? state.results.length - 1 : 0;
+  select(next, true);
+  if (keyboard) $(`result-${next}`)?.focus();
 }
 
 // ---- preview ---------------------------------------------------------------
@@ -349,17 +541,25 @@ async function openPreview(row) {
     .join(" · ");
 
   if (preview.image_path) {
+    // Put the cached thumbnail up first: it is already decoded, so the pane
+    // is a picture from the first frame and sharpens when the full file
+    // arrives. A preview that starts blank reads as slower than it is.
+    const known = thumbCache.get(preview.path);
+    const img = document.createElement("img");
+    img.alt = preview.name;
+    img.dataset.quality = "thumbnail";
+    if (known?.url) img.src = known.url;
+    body.prepend(img);
     try {
       const bytes = await call("preview_image", { path: preview.path });
       if (seq !== state.previewSeq) return;
       const url = URL.createObjectURL(new Blob([bytes]));
       state.previewUrl = url;
-      const img = document.createElement("img");
-      img.alt = preview.name;
+      img.dataset.quality = "full";
       img.src = url;
-      body.prepend(img);
     } catch (error) {
-      if (seq === state.previewSeq) {
+      if (seq === state.previewSeq && !known?.url) {
+        img.remove();
         textBox.textContent = `The image could not be read: ${error}`;
       }
     }
@@ -377,6 +577,9 @@ function closePreview() {
   state.previewSeq++;
   releaseImage();
   state.previewPath = null;
+  // Drop the picture too: a hidden pane holding a full-size image is memory
+  // the next search does not need.
+  $("preview-body").querySelector("img")?.remove();
   $("preview").hidden = true;
   $("app").classList.remove("preview-open");
 }
@@ -401,62 +604,80 @@ async function refreshActivity(quiet = false) {
   $("watch-summary").textContent = watch.summary ?? (watch.running ? "Files saved now are indexed within seconds." : "");
 
   const log = $("watch-log");
-  const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
-  log.textContent = (watch.log ?? []).slice(-60).join("\n");
-  if (atBottom) log.scrollTop = log.scrollHeight;
-
-  $("folders").replaceChildren(
-    ...status.folders.map((folder) => {
-      const li = document.createElement("li");
-      li.textContent = folder;
-      return li;
-    }),
-  );
-  if (!status.folders.length) {
-    const li = document.createElement("li");
-    li.className = "dim";
-    li.textContent = "No folders indexed yet.";
-    $("folders").append(li);
+  const logText = (watch.log ?? []).slice(-60).join("\n");
+  // The pane polls every 1.8 s. Rewriting an unchanged log would re-announce
+  // it to a screen reader and move the scroll position for no reason.
+  if (log.textContent !== logText) {
+    const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
+    log.textContent = logText;
+    if (atBottom) log.scrollTop = log.scrollHeight;
   }
 
+  const folders = $("folders");
+  setIfChanged(folders, status.folders.join("\u0000"), (list) => {
+    for (const folder of status.folders) {
+      const li = document.createElement("li");
+      li.textContent = folder;
+      list.append(li);
+    }
+    if (!status.folders.length) {
+      const li = document.createElement("li");
+      li.className = "dim";
+      li.textContent = "No folders indexed yet.";
+      list.append(li);
+    }
+  });
+
   const facts = $("index-facts");
-  facts.replaceChildren();
   const counts = Object.fromEntries(status.counts ?? []);
-  for (const [label, value] of [
+  const factRows = [
     ["Files indexed", counts.indexed ?? 0],
     ["Awaiting OCR", counts.awaiting_ocr ?? 0],
     ["Failed", status.failures.length],
     ["Image vectors", status.image_vectors],
     ["Text vectors", status.text_vectors],
     ["Index size", `${status.index_mb.toFixed(1)} MB`],
-  ]) {
-    facts.append(term(label), detail(value));
-  }
+  ];
+  setIfChanged(facts, JSON.stringify(factRows), (dl) => {
+    for (const [label, value] of factRows) dl.append(term(label), detail(value));
+  });
 
   const failures = $("failures");
-  failures.replaceChildren();
   $("failure-count").textContent = String(status.failures.length);
   $("failure-empty").hidden = status.failures.length > 0;
-  for (const failure of status.failures.slice(0, 40)) {
-    const li = document.createElement("li");
-    const path = document.createElement("div");
-    path.className = "path";
-    path.textContent = failure.path;
-    const error = document.createElement("div");
-    error.className = "error";
-    error.textContent = failure.error;
-    li.append(path, error);
-    failures.append(li);
-  }
+  setIfChanged(failures, JSON.stringify(status.failures.slice(0, 40)), (list) => {
+    for (const failure of status.failures.slice(0, 40)) {
+      const li = document.createElement("li");
+      const path = document.createElement("div");
+      path.className = "path";
+      path.textContent = failure.path;
+      const error = document.createElement("div");
+      error.className = "error";
+      error.textContent = failure.error;
+      li.append(path, error);
+      list.append(li);
+    }
+  });
 
   const skips = $("skip-facts");
-  skips.replaceChildren();
   $("skip-empty").hidden = status.skip_reasons.length > 0;
-  for (const [reason, count] of status.skip_reasons) {
-    skips.append(term(reason), detail(count));
-  }
+  setIfChanged(skips, JSON.stringify(status.skip_reasons), (dl) => {
+    for (const [reason, count] of status.skip_reasons) dl.append(term(reason), detail(count));
+  });
 
   $("activity-dot").hidden = status.failures.length === 0;
+}
+
+// Replace an element's children only when the data behind them changed.
+//
+// The Activity and Settings panes poll; rebuilding a list on every tick
+// destroys focus inside it (a Download button mid-click) and re-announces
+// unchanged content. Keyed by a signature, the DOM follows the data.
+function setIfChanged(el, signature, build) {
+  if (el.dataset.signature === signature) return;
+  el.dataset.signature = signature;
+  el.replaceChildren();
+  build(el);
 }
 
 function term(text) {
@@ -482,58 +703,59 @@ async function refreshSettings(quiet = false) {
     return;
   }
   state.folders = status.folders;
-  $("settings-folders").replaceChildren(
-    ...status.folders.map((folder) => {
+  setIfChanged($("settings-folders"), status.folders.join("\u0000"), (list) => {
+    for (const folder of status.folders) {
       const li = document.createElement("li");
       li.textContent = folder;
-      return li;
-    }),
-  );
-  if (!status.folders.length) {
-    const li = document.createElement("li");
-    li.className = "dim";
-    li.textContent = "No folders yet. Add one to begin.";
-    $("settings-folders").append(li);
-  }
+      list.append(li);
+    }
+    if (!status.folders.length) {
+      const li = document.createElement("li");
+      li.className = "dim";
+      li.textContent = "No folders yet. Add one to begin.";
+      list.append(li);
+    }
+  });
 
   const table = $("models");
-  table.replaceChildren();
-  const head = document.createElement("tr");
-  for (const label of ["Set", "State", ""]) {
-    const th = document.createElement("th");
-    th.textContent = label;
-    head.append(th);
-  }
-  table.append(head);
-  for (const set of status.models ?? []) {
-    const tr = document.createElement("tr");
-    const name = document.createElement("td");
-    name.textContent = set.name;
-    const stateCell = document.createElement("td");
-    stateCell.className = set.complete ? "state" : "state missing";
-    stateCell.textContent = set.complete ? "installed" : `${set.missing.length} file(s) missing`;
-    const action = document.createElement("td");
-    if (!set.complete) {
-      const button = document.createElement("button");
-      button.className = "ghost";
-      button.textContent = "Download";
-      button.addEventListener("click", () => installModels([set.name], button));
-      action.append(button);
+  setIfChanged(table, JSON.stringify(status.models ?? []), (el) => {
+    const head = document.createElement("tr");
+    for (const label of ["Set", "State", ""]) {
+      const th = document.createElement("th");
+      th.textContent = label;
+      head.append(th);
     }
-    tr.append(name, stateCell, action);
-    table.append(tr);
-  }
+    el.append(head);
+    for (const set of status.models ?? []) {
+      const tr = document.createElement("tr");
+      const name = document.createElement("td");
+      name.textContent = set.name;
+      const stateCell = document.createElement("td");
+      stateCell.className = set.complete ? "state" : "state missing";
+      stateCell.textContent = set.complete ? "installed" : `${set.missing.length} file(s) missing`;
+      const action = document.createElement("td");
+      if (!set.complete) {
+        const button = document.createElement("button");
+        button.className = "ghost";
+        button.textContent = "Download";
+        button.addEventListener("click", () => installModels([set.name], button));
+        action.append(button);
+      }
+      tr.append(name, stateCell, action);
+      el.append(tr);
+    }
+  });
 
   const facts = $("data-facts");
-  facts.replaceChildren();
-  for (const [label, value] of [
+  const dataRows = [
     ["Index", status.index_path],
     ["Index size", `${status.index_mb.toFixed(1)} MB`],
     ["Image vectors", status.image_vectors],
     ["Text vectors", status.text_vectors],
-  ]) {
-    facts.append(term(label), detail(value));
-  }
+  ];
+  setIfChanged(facts, JSON.stringify(dataRows), (dl) => {
+    for (const [label, value] of dataRows) dl.append(term(label), detail(value));
+  });
 
   try {
     $("autostart").checked = await call("autostart_enabled");
@@ -710,6 +932,15 @@ document.addEventListener("keydown", (event) => {
     }
     return;
   }
+  // Home/End belong to the caret while the query has focus; they jump the
+  // list only when the user is not typing.
+  if ((event.key === "Home" || event.key === "End") && document.activeElement !== $("query")) {
+    if (state.results.length) {
+      event.preventDefault();
+      moveToEdge(event.key === "End");
+    }
+    return;
+  }
   if (event.key === "Enter") {
     const target = document.activeElement;
     // The input's Enter is the form submit; a focused result button clicks
@@ -723,6 +954,12 @@ document.addEventListener("keydown", (event) => {
 });
 
 $("preview-close").addEventListener("click", closePreview);
+// The miss state names its cause; this is the action that follows from it.
+$("empty-clear").addEventListener("click", () => {
+  $("query").value = "";
+  $("query").focus();
+  runSearch();
+});
 $("watch-toggle").addEventListener("click", async () => {
   try {
     await call("set_paused", { paused: !state.paused });
