@@ -63,18 +63,53 @@ Type: the site's three stacks — **Charter** serif for display headings only
 8. **Hovers are gated behind `@media (hover: hover) and (pointer: fine)`** so
    touch devices don't get sticky hover states.
 
+## Accessibility rules
+
+- **The list is one tab stop.** `#results` is a labelled listbox; the selected
+  row carries `aria-selected` and the roving `tabindex="0"`, every other row
+  is `-1`. The input points at the selection with `aria-activedescendant`,
+  so arrow keys from the field move the selection without moving focus.
+- **Pictures are decoration, names are the answer.** A thumbnail tile is
+  `aria-hidden` and its `<img>` has `alt=""`: the row's name, folder, badges
+  and snippet already say what the file is and why it matched. A picture
+  never becomes the only label for a result.
+- **Focus is always visible and never trapped.** One `:focus-visible` style
+  (2px accent, drawn inside a result row so the scrolling list cannot clip
+  it). The preview is a non-modal complementary pane; `Esc` closes it, and
+  no overlay ever swallows Tab.
+- **State is never colour-only.** Selection adds a background wash and an
+  accent file name; failure states say so in words; the watcher pill is
+  labelled "watching"/"paused".
+- **Live regions are quiet.** Search meta, notes and the watcher log only
+  rewrite when their text actually changed, so a polling pane does not
+  re-announce unchanged content every 1.8 s.
+
 ## Component standards
 
 - **Search bar**: 48px pill-adjacent field, hairline border that turns
-  terracotta with a soft focus wash when focused. Latency readout lives
-  inside the field's right edge, mono, tabular — and honest: total wall time
-  first, engine time called out separately.
-- **Results**: one row per file, name → folder → modality badges → snippet
-  with terracotta match runs. Rows are dense (this is a list, not cards);
-  the selected row is unmistakable. Arm badges say *why* a file surfaced —
-  that is the product's honesty promise, so they are never decorative.
+  terracotta with a soft focus wash when focused. The latency readout is a
+  quiet mono status line under the field — total wall time first, engine time
+  called out separately. It sits outside the input so the query and the
+  numbers never compete for the same space.
+- **Results**: one row per file — lead → name → folder → modality badges →
+  snippet with terracotta match runs. Rows are dense (this is a list, not
+  cards); the selected row is unmistakable. Arm badges say *why* a file
+  surfaced — that is the product's honesty promise, so they are never
+  decorative.
+- **Image rows**: the lead is the picture itself, a 44px square tile cropped
+  with `object-fit: cover` so mixed answers keep one alignment and one
+  density. The tile is asked for only when it is near the viewport (lazy,
+  via `IntersectionObserver`), shows the image glyph dimmed while it loads,
+  and keeps that glyph at full strength if the thumbnail cannot be made.
+  Documents keep their kind glyph. There is deliberately no second grid for
+  image-heavy answers: a search answer is one list, and the lead column is
+  the only difference between a picture and a document row. The full-size
+  picture belongs in the preview pane, never in a 44px row.
 - **Preview pane**: the file at left, its evidence at right. Image previews
-  sit on the inset surface; OCR/page text highlights matches. Meta is mono.
+  put the cached 320px thumbnail up first, then swap in the full file; they
+  sit on the inset surface. OCR/page text highlights matches. Meta is mono.
+  The pane is not modal — no focus trap — and `Esc` or the close button
+  returns to the list.
 - **Empty states**: every empty state states a cause ("no matches", "no
   folders yet", "models need download") and, where one exists, the next
   action. An empty state that only says "empty" is a bug.

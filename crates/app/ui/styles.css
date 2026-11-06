@@ -45,7 +45,7 @@
     --ink: #f2ece0;
     --ink-2: #d6cdbc;
     --muted: #9c9385;
-    --faint: #8a8175;
+    --faint: #948b7e;
     --line: #302b22;
     --line-strong: #464035;
     --accent: #e08a6d;
@@ -206,6 +206,7 @@ code {
   justify-content: space-between;
   gap: 8px;
   width: 100%;
+  min-height: 34px;
   padding: 8px 10px;
   border: 0;
   border-radius: var(--radius-sm);
@@ -227,6 +228,19 @@ code {
   color: var(--ink);
   box-shadow: inset 0 0 0 1px var(--line);
   font-weight: 600;
+}
+
+/* The icon is the collapsed rail's label; at full width the words are. */
+.rail-icon {
+  display: none;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* Hover states live behind a pointer check: a touch device would otherwise
@@ -322,10 +336,18 @@ code {
 
 .view-head {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 18px;
+  margin-bottom: 20px;
+}
+
+.view-sub {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+  max-width: 56ch;
 }
 
 h1 {
@@ -347,6 +369,13 @@ h2 {
 
 /* ---- search -------------------------------------------------------- */
 
+/* The search view does not scroll as a page: the bar stays put and the
+   result list owns the scroll, which is what a launcher does. The teaching
+   states are short enough to fit even at the minimum window height. */
+#view-search {
+  overflow: hidden;
+}
+
 .search-bar {
   display: flex;
   align-items: center;
@@ -357,7 +386,9 @@ h2 {
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-tile);
-  transition: border-color var(--dur-1) ease, box-shadow var(--dur-1) ease;
+  /* Focus is a keyboard action: it answers instantly, like every other
+     keyboard action in this window. Color only, no movement. */
+  transition: border-color var(--dur-1) ease;
 }
 
 .search-bar:focus-within {
@@ -446,25 +477,39 @@ h2 {
 }
 
 .results {
+  flex: 1 1 auto;
+  min-height: 0;
   margin-top: 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
   overflow: hidden auto;
-  min-height: 0;
+  overscroll-behavior: contain;
 }
 
 .results:empty {
   display: none;
 }
 
+/* One row per file, whatever the file is. An image row leads with the
+   picture; a document row leads with its kind glyph. Same grid, same
+   alignment, so a mixed answer still reads as one list.
+
+   lead | name   | badges
+   lead | folder | badges
+   lead | snippet (spans to the right edge) */
 .result {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 2px 12px;
-  align-items: center;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  grid-template-areas:
+    "lead name badges"
+    "lead folder badges"
+    "lead snippet snippet";
+  align-items: start;
+  column-gap: 14px;
+  row-gap: 1px;
   width: 100%;
-  padding: 10px 14px;
+  padding: 8px 14px;
   border: 0;
   border-bottom: 1px solid var(--line);
   background: transparent;
@@ -476,6 +521,13 @@ h2 {
   border-bottom: 0;
 }
 
+/* The outline would be clipped by the list's rounded, scrolling box; drawn
+   just inside the row it stays visible on every edge. */
+.result:focus-visible {
+  outline-offset: -2px;
+  border-radius: 0;
+}
+
 @media (hover: hover) and (pointer: fine) {
   .result:hover {
     background: var(--surface-2);
@@ -484,13 +536,24 @@ h2 {
 
 .result[aria-selected="true"] {
   background: var(--accent-soft);
-  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.result[aria-selected="true"] .result-name {
+  color: var(--accent-strong);
+}
+
+.result-lead {
+  grid-area: lead;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  width: 44px;
+  height: 44px;
 }
 
 .result-icon {
-  grid-row: 1 / span 2;
-  width: 17px;
-  height: 17px;
+  width: 18px;
+  height: 18px;
   color: var(--faint);
 }
 
@@ -504,30 +567,90 @@ h2 {
   height: 100%;
 }
 
+/* The picture itself. Square and cropped (object-fit: cover) so forty rows
+   line up whatever the source aspect ratio; the glyph underneath is the
+   skeleton while it loads and the fallback when it cannot be shown. */
+.result-thumb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--inset);
+  color: var(--faint);
+  overflow: hidden;
+}
+
+.result-thumb svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+.result-thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+}
+
+.result-thumb[data-state="ready"] img {
+  opacity: 1;
+}
+
+.result-thumb[data-state="ready"] svg {
+  opacity: 0;
+}
+
+.result-thumb[data-state="loading"] svg {
+  opacity: 0.4;
+}
+
+.result-thumb[data-state="failed"] {
+  color: var(--muted);
+}
+
+.result[aria-selected="true"] .result-thumb {
+  border-color: color-mix(in oklab, var(--accent) 30%, var(--line));
+}
+
 .result-name {
-  grid-column: 2;
+  grid-area: name;
   font-weight: 600;
+  font-size: 13.5px;
+  line-height: 1.35;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .result-folder {
-  grid-column: 2;
+  grid-area: folder;
   color: var(--muted);
-  font: 10.5px/1.6 var(--mono);
+  font: 10.5px/1.45 var(--mono);
   font-variant-numeric: tabular-nums;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* A definite cap, not a percentage: an auto grid track resolves a percentage
+   against an indefinite size, which used to wrap three short badges onto
+   three lines and make one row taller than its neighbours. */
 .result-badges {
+  grid-area: badges;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 5px;
-  grid-row: 1 / span 2;
-  grid-column: 3;
+  justify-self: end;
+  align-self: center;
+  max-width: 300px;
 }
 
 .badge {
@@ -547,10 +670,11 @@ h2 {
 }
 
 .result-snippet {
-  grid-column: 1 / -1;
-  margin-top: 4px;
+  grid-area: snippet;
+  margin-top: 3px;
   color: var(--ink-2);
   font-size: 12.5px;
+  line-height: 1.55;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -576,7 +700,7 @@ mark {
 .empty {
   margin: 0 auto;
   max-width: 560px;
-  padding-top: 14vh;
+  padding-top: clamp(44px, 13vh, 120px);
   text-align: center;
 }
 
@@ -616,6 +740,7 @@ mark {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-height: 44px;
   padding: 9px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -651,18 +776,28 @@ mark {
 }
 
 .first-run {
-  padding-top: 18vh;
+  padding-top: clamp(60px, 17vh, 160px);
+}
+
+.empty {
+  padding-top: clamp(52px, 15vh, 140px);
 }
 
 .empty-title {
-  font-weight: 600;
-  font-size: 15px;
+  font: 600 20px/1.35 var(--serif);
+  letter-spacing: -0.01em;
   margin: 0 0 6px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
 }
 
 .empty .dim {
   font-size: 13px;
   margin: 0;
+}
+
+.empty .ghost {
+  margin-top: 20px;
 }
 
 .dim {
@@ -676,6 +811,7 @@ mark {
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 16px;
   align-content: start;
+  align-items: start;
 }
 
 .card {
@@ -838,7 +974,10 @@ mark {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 32px;
+  padding: 4px 0;
   font-size: 13px;
+  cursor: pointer;
 }
 
 .check input {
@@ -852,6 +991,7 @@ mark {
 button.primary,
 button.ghost,
 button.danger-button {
+  min-height: 32px;
   border-radius: var(--radius-sm);
   padding: 7px 12px;
   border: 1px solid var(--line-strong);
@@ -898,6 +1038,13 @@ button:disabled {
   gap: 10px;
   padding: 18px 18px 12px;
   border-bottom: 1px solid var(--line);
+}
+
+/* The name and path column must be allowed to shrink: without min-width: 0 a
+   long Windows path pushes the close button out and clips its own ellipsis. */
+.preview-head > div {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .preview-head h2 {
@@ -989,21 +1136,27 @@ button:disabled {
   #app {
     grid-template-columns: 64px minmax(0, 1fr);
   }
+  /* 64px cannot hold a word: the rail becomes icons, the accessible name
+     stays on the button via aria-label, and the tooltip still says the name. */
+  .rail {
+    padding: 18px 8px 12px;
+  }
   .brand-name,
-  .rail-end kbd,
   .rail-item > span:not(.rail-end),
+  .rail-item kbd,
   #engine-label {
     display: none;
+  }
+  .rail-icon {
+    display: block;
   }
   .rail-end {
     display: flex;
   }
   .rail-item {
     justify-content: center;
-  }
-  .rail-item::before {
-    content: attr(data-view);
-    text-transform: capitalize;
+    gap: 6px;
+    padding: 8px;
   }
   #app.preview-open {
     grid-template-columns: 64px minmax(0, 1fr);
@@ -1039,6 +1192,14 @@ button:disabled {
      reads as the list acknowledging the click. */
   button:active {
     transform: scale(0.97);
+  }
+
+  /* A thumbnail resolves into place: the glyph recedes and the picture
+     arrives. Opacity only, so it costs no layout and reads as a decode
+     rather than a transition. */
+  .result-thumb img,
+  .result-thumb svg {
+    transition: opacity 140ms ease;
   }
 
   .toast {
