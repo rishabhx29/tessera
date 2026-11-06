@@ -29,3 +29,7 @@ __pycache__/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Agent working state (worktrees, screenshots) and browser tooling output
+.qoder/
+.playwright-mcp/
