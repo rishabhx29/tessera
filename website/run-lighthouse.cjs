@@ -1,6 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 const { chromium } = require('playwright');
 
 const DIST_DIR = path.join(__dirname, 'dist');
@@ -37,8 +38,25 @@ const server = http.createServer((req, res) => {
     if (err) {
       res.writeHead(500);
       res.end('Server error: ' + err.code);
+      return;
+    }
+
+    // Real static hosts compress text. Without this the audit charges every
+    // byte at full size and reports a slower site than anyone downloads.
+    const accepts = req.headers['accept-encoding'] || '';
+    const text = /\.(html|js|css|json|svg|vtt)$/.test(ext);
+    const headers = { 'Content-Type': contentType, Vary: 'Accept-Encoding' };
+
+    if (text && /\bbr\b/.test(accepts)) {
+      headers['Content-Encoding'] = 'br';
+      res.writeHead(200, headers);
+      res.end(zlib.brotliCompressSync(content));
+    } else if (text && /\bgzip\b/.test(accepts)) {
+      headers['Content-Encoding'] = 'gzip';
+      res.writeHead(200, headers);
+      res.end(zlib.gzipSync(content));
     } else {
-      res.writeHead(200, { 'Content-Type': contentType });
+      res.writeHead(200, headers);
       res.end(content);
     }
   });

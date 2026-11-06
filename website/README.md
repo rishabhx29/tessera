@@ -1,7 +1,8 @@
 # Tessera marketing website
 
 The public site for Tessera, a local search bar for screenshots, PDFs and
-documents. Warm paper, ink, one terracotta accent, and hairline structure.
+documents. Warm paper, ink, one terracotta accent, Instrument Serif headings,
+and a tile field behind the hero.
 
 ## Quick start
 
@@ -17,47 +18,32 @@ npm run build
 npm run lint
 ```
 
-## Demo video: where the real recording goes
+The build prerenders the page. `vite build` writes the client bundle, a second
+`vite build --ssr` pass compiles `src/entry-server.tsx`, and
+`scripts/prerender.mjs` renders the markup into `dist/index.html` and adds
+preloads for the three fonts used above the fold. `src/main.tsx` hydrates that
+markup; `npm run dev` has no prerender and mounts the app normally.
 
-The site ships with an honest placeholder slate, not app footage. The player is
-already wired for a real recording. Replace three files and flip one flag.
+## What is on the page
 
-| Asset | Path | Format |
-| --- | --- | --- |
-| Video | `public/media/demo.mp4` | MP4, H.264, `yuv420p`, 1280x720 or 1920x1080, no audio needed, under ~30 MB |
-| Poster | `public/media/demo-poster.png` | PNG or JPG still from the recording, 1280x720 or 1920x1080 |
-| Captions | `public/media/demo.en.vtt` | WebVTT, English, cues timed to the new video |
+`Nav`, `Hero`, `Problem`, `ProductStory`, `Demo`, `Numbers`, `Privacy`,
+`Install`, `Faq`, `Footer`. Page-wide smooth scroll and reveals live in
+`src/lib/motion.ts`. The hero tile field is `src/components/HeroTiles.tsx`.
+The hero intro is a CSS animation in `src/index.css` so it starts at first
+paint and does not wait for hydration.
 
-Replace the files in place and keep the names. The player reads the paths from
-`src/demo.ts`:
+## The sample demo
 
-```ts
-export const DEMO_IS_PLACEHOLDER = true;
-export const DEMO_VIDEO = {
-  src: '/media/demo.mp4',
-  poster: '/media/demo-poster.png',
-  captions: '/media/demo.en.vtt',
-  captionsLabel: 'English',
-} as const;
-```
+The demo is a fixed set of ten rows in `src/components/Demo.tsx`. Five are
+sample photos in `public/media/corpus/`, five are documents. Typing filters
+file names, snippets and keyword lists in the page.
 
-When the recording is real, set `DEMO_IS_PLACEHOLDER = false`. That removes the
-placeholder badge and switches the caption note and the player's accessible
-label. No layout change is needed.
+There is no engine, no network request and no simulated timing. The panel says
+so, and the comparison table beside it separates this sample from the app. Keep
+both notes in place.
 
-Regenerate the poster after replacing the video:
-
-```bash
-ffmpeg -i public/media/demo.mp4 -ss 00:00:08 -frames:v 1 -y public/media/demo-poster.png
-```
-
-The recording should show three beats, in this order: summon with Alt+Space, one
-query returning a screenshot, a PDF page and a Word paragraph, and a freshly
-saved file becoming searchable. Do not substitute a mockup or a screen recording
-of an illustration. If the footage is not real, keep the slate.
-
-Captions mirror what is said and shown. They are on by default. Do not remove
-the track: the player relies on it for viewers who cannot hear the recording.
+To edit the sample, change `ROWS`. Thumbnails use `alt=""` because the file name
+sits right next to the image.
 
 ## Verification
 
@@ -67,43 +53,46 @@ node take-screenshots.cjs
 node run-lighthouse.cjs
 ```
 
-`take-screenshots.cjs` serves the production build, then captures:
+`take-screenshots.cjs` serves the production build on port 4188, then captures:
 
 - `desktop-1440x900-hero.png` and `desktop-1440x900-full.png`
-- `desktop-section-{problem,demo,how-it-works,measured,privacy,download,faq}.png`
-- `desktop-focus-skip-link.png` and `desktop-interactive-pdf-tab.png`
+- `desktop-section-{problem,product,demo,numbers,privacy,install,faq}.png`
+- `desktop-focus-skip-link.png` and `desktop-interactive-search.png`
 - `mobile-390x844-hero.png`, `mobile-390x844-full.png`, `mobile-390x844-menu.png`
-- `mobile-section-{demo,measured,download}.png`
+- `mobile-section-{demo,numbers,privacy,install}.png`
 - `desktop-reduced-motion-hero.png` and `desktop-reduced-motion-demo.png`
 
 It also writes `.preview/checks.json` with console and page errors, horizontal
-overflow, keyboard focus order, the skip link, focus ring styles, accessible
-button names, video and caption state, and reduced-motion behavior. Everything
-is written to `website/.preview/`, which is gitignored.
+overflow, first Tab, focus ring styles, the live demo result count, the mobile
+menu state, accessible button names, missing image alt text, small hit targets,
+reduced-motion behavior and a no-JavaScript load. Output goes to
+`website/.preview/`, which is gitignored.
 
-## Current measured numbers
+`run-lighthouse.cjs` sends brotli or gzip when the browser asks for it, the way
+a static host does. Without that the audit charges every byte at full size and
+reports a slower site than anyone downloads.
 
-From the latest local production build and audit (headless Chromium, this
-machine):
+## Current build numbers
 
-- JavaScript: 288.51 kB, 86.97 kB gzipped
-- CSS: 24.61 kB, 6.08 kB gzipped
-- HTML: 1.84 kB, 0.83 kB gzipped
-- Lighthouse: performance 94, accessibility 100, best practices 100, SEO 100
-- FCP 2.3 s, LCP 2.6 s, CLS 0, TBT 20 ms
+From a local production build on 2026-11-07:
 
-These are local numbers, not a guarantee. Re-run the scripts before quoting
-them.
+- HTML after prerender: 131.24 kB, 19.76 kB gzipped
+- Entry JS: 440.43 kB, 143.31 kB gzipped
+- Three.js chunk: 742.80 kB, 187.69 kB gzipped, loaded on desktop only, after idle
+- CSS: 41.18 kB, 10.84 kB gzipped
+- Largest self-hosted font file: 89.80 kB
+
+These are local numbers. Re-run the build before quoting them.
 
 ## Rules for this directory
 
-1. No runtime network requests. System font stacks only, no analytics, no
-   third-party scripts.
-2. No fabricated app screenshots or footage. Illustrations are labelled as
-   illustrations.
+1. No runtime network requests. Fonts are self-hosted woff2 files from
+   `@fontsource`, not a CDN. No analytics and no third-party scripts.
+2. No fabricated app stills or footage. Illustrations are labelled as
+   illustrations, and the demo is labelled as a fixed sample.
 3. Every performance number comes from `docs/performance.md`, with the machine
    and sample size that make it honest. The 50,000-file query row is a miss and
-   is presented as one.
+   is shown first.
 4. There is no public release yet. Copy points at GitHub Releases and says the
    first release is being prepared.
 

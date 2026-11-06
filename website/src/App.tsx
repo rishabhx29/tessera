@@ -1,33 +1,34 @@
 import React from 'react';
-import { Navbar } from './components/Navbar';
+import { Nav } from './components/Nav';
 import { Hero } from './components/Hero';
-import { ProblemSection } from './components/ProblemSection';
-import { DemoSection } from './components/DemoSection';
-import { HowItWorks } from './components/HowItWorks';
-import { ProofSection } from './components/ProofSection';
-import { PrivacySection } from './components/PrivacySection';
-import { DownloadSection } from './components/DownloadSection';
-import { FAQSection } from './components/FAQSection';
+import { Problem } from './components/Problem';
+import { ProductStory } from './components/ProductStory';
+import { Demo } from './components/Demo';
+import { Numbers } from './components/Numbers';
+import { Privacy } from './components/Privacy';
+import { Install } from './components/Install';
+import { Faq } from './components/Faq';
 import { Footer } from './components/Footer';
+import { usePageMotion } from './lib/motion';
 
 export const App: React.FC = () => {
+  usePageMotion();
+
   return (
-    <div
-      className="flex min-h-screen flex-col bg-canvas font-sans text-ink-primary selection:bg-accent/15 selection:text-ink-primary"
-    >
+    <div className="flex min-h-screen flex-col bg-paper font-sans text-ink">
       <a href="#main" className="skip-link">
         Skip to content
       </a>
-      <Navbar />
+      <Nav />
       <main id="main" tabIndex={-1} className="flex-grow focus:outline-none">
         <Hero />
-        <ProblemSection />
-        <DemoSection />
-        <HowItWorks />
-        <ProofSection />
-        <PrivacySection />
-        <DownloadSection />
-        <FAQSection />
+        <Problem />
+        <ProductStory />
+        <Demo />
+        <Numbers />
+        <Privacy />
+        <Install />
+        <Faq />
       </main>
       <Footer />
     </div>

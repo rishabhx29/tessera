@@ -60,6 +60,17 @@ const checks = {
 function watchPage(page, bucket) {
   bucket.consoleErrors = [];
   bucket.pageErrors = [];
+  page.addInitScript(() => {
+    window.__perf = { lcp: null, cls: 0 };
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) window.__perf.lcp = entry.startTime;
+    }).observe({ type: 'largest-contentful-paint', buffered: true });
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        if (!entry.hadRecentInput) window.__perf.cls += entry.value;
+      }
+    }).observe({ type: 'layout-shift', buffered: true });
+  });
   page.on('console', (message) => {
     if (message.type() === 'error') {
       bucket.consoleErrors.push(message.text());
@@ -73,12 +84,17 @@ function watchPage(page, bucket) {
 // Fixed UI (sticky header, skip link) appears at odd offsets in element
 // screenshots. Hide it only while a section is captured, then restore it.
 async function shootSection(page, selector, file) {
+  const section = page.locator(selector);
+  await section.scrollIntoViewIfNeeded();
+  // Lenis animates the scroll, so reveals start late. Wait them out so the
+  // capture is never mid-stagger.
+  await page.waitForTimeout(1800);
   const style = await page.addStyleTag({
     content:
       'header{position:static!important}.skip-link{display:none!important}',
   });
   try {
-    await page.locator(selector).screenshot({ path: file });
+    await section.screenshot({ path: file });
   } finally {
     await style.evaluate((node) => node.remove());
   }
@@ -176,6 +192,15 @@ async function run() {
     const paint = performance.getEntriesByType('paint');
     const fcp = paint.find((p) => p.name === 'first-contentful-paint');
     return {
+      lcp: window.__perf.lcp ? Math.round(window.__perf.lcp) : null,
+      cls: Math.round(window.__perf.cls * 1000) / 1000,
+      hydrated: document.querySelectorAll('#root > *').length > 0,
+      headPreloads: Array.from(
+        document.head.querySelectorAll('link[rel="preload"]')
+      ).map((link) => link.getAttribute('href')),
+      rootPreloads: Array.from(
+        document.querySelectorAll('#root link[rel="preload"]')
+      ).length,
       domContentLoaded: nav
         ? Math.round(nav.domContentLoadedEventEnd - nav.startTime)
         : null,
@@ -195,11 +220,11 @@ async function run() {
 
   for (const [name, selector] of [
     ['problem', '#problem'],
+    ['product', '#product'],
     ['demo', '#demo'],
-    ['how-it-works', '#how-it-works'],
-    ['measured', '#measured'],
+    ['numbers', '#numbers'],
     ['privacy', '#privacy'],
-    ['download', '#download'],
+    ['install', '#install'],
     ['faq', '#faq'],
   ]) {
     const section = desktopPage.locator(selector);
@@ -247,19 +272,24 @@ async function run() {
     };
   });
 
-  // Exercise the illustration filter and read the resulting announcement.
-  const filterButton = desktopPage.getByRole('button', { name: /^PDF$/i });
-  if (await filterButton.count()) {
-    await filterButton.first().click();
+  // Exercise the sample search and read the live result count.
+  const demoInput = desktopPage.locator('#demo-query');
+  if (await demoInput.count()) {
+    await demoInput.fill('invoice');
     await desktopPage.waitForTimeout(250);
-    checks.desktop.illustrationFilter = await desktopPage
-      .getByRole('status')
-      .first()
-      .textContent()
-      .catch(() => null);
-    await desktopPage.screenshot({
-      path: path.join(PREVIEW_DIR, 'desktop-interactive-pdf-tab.png'),
+    checks.desktop.demoSearch = await demoInput.evaluate((input) => {
+      const status = input
+        .closest('section')
+        ?.querySelector('[aria-live="polite"]');
+      return {
+        value: input.value,
+        announced: status ? status.textContent.trim() : null,
+      };
     });
+    await desktopPage.screenshot({
+      path: path.join(PREVIEW_DIR, 'desktop-interactive-search.png'),
+    });
+    await demoInput.fill('');
   }
 
   checks.desktop.dom = await inspect(desktopPage);
@@ -290,8 +320,9 @@ async function run() {
 
   for (const [name, selector] of [
     ['demo', '#demo'],
-    ['measured', '#measured'],
-    ['download', '#download'],
+    ['numbers', '#numbers'],
+    ['privacy', '#privacy'],
+    ['install', '#install'],
   ]) {
     const section = mobilePage.locator(selector);
     if (await section.count()) {
@@ -354,6 +385,24 @@ async function run() {
   );
   checks.reducedMotion.dom = await inspect(reducedPage);
   await reducedContext.close();
+
+  // 4. No JavaScript: the build prerenders, so the page must still read.
+  const noJsContext = await browser.newContext({
+    javaScriptEnabled: false,
+    viewport: { width: 1280, height: 900 },
+  });
+  const noJsPage = await noJsContext.newPage();
+  await noJsPage.goto(`http://localhost:${PORT}`, { waitUntil: 'load' });
+  checks.noJs = await noJsPage.evaluate(() => ({
+    h1: document.querySelector('h1')?.textContent.replace(/\s+/g, ' ').trim(),
+    sections: document.querySelectorAll('main section').length,
+    rootChildren: document.getElementById('root')?.children.length ?? 0,
+    faqTriggers: document.querySelectorAll('[aria-expanded]').length,
+  }));
+  await noJsPage.screenshot({
+    path: path.join(PREVIEW_DIR, 'desktop-no-js-hero.png'),
+  });
+  await noJsContext.close();
 
   await browser.close();
   server.close();

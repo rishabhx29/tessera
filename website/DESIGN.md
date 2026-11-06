@@ -2,163 +2,190 @@
 
 ## 1. Direction
 
-An editorial, light theme built for trust and reading. The site is mostly paper,
-ink and hairlines. Structure comes from rules and spacing, not from a stack of
-cards.
+Warm editorial. Paper, ink and one terracotta accent. Structure comes from
+hairlines, spacing and type, not from a stack of cards.
 
-- Canvas: warm paper (`#FAF9F5`).
-- Ink: near-black (`#181715`) for headings, warm grey for body text.
-- Accent: one terracotta (`#C2410C`), used for action and emphasis, never as
-  decoration.
-- Surfaces: white only where a panel needs to lift, such as the result grid or
-  the code block.
-- Honesty: no fabricated app screenshots. The result grid is labelled as an
-  illustration. The video is a labelled placeholder until real footage exists.
+- Canvas: warm paper, with a slightly deeper paper for quiet bands.
+- Display: Instrument Serif at 400, roman and italic. It carries the voice.
+- Body: Inter Tight Variable. Mono: JetBrains Mono Variable for numbers,
+  labels and command lines.
+- Accent: terracotta `#C2410C` for action and emphasis only.
+- One dark band: the install section, where the page stops describing and
+  starts asking for a command.
+- Honesty: the hero still is the real app window. The demo is a fixed sample
+  and says so. The illustration panels are labelled by their content, not
+  passed off as footage.
 
 ## 2. References studied
 
 | Reference | What was taken |
 | --- | --- |
-| [gyotaku.app](https://gyotaku.app/) and [xevrion/gyotaku](https://github.com/xevrion/gyotaku) | A demo video in the hero, quiet product framing, and an open-source proof story instead of marketing claims. |
-| Daylight Computer (Awwwards SOTD) | Warm paper canvas and charcoal ink. |
+| [gyotaku.app](https://gyotaku.app/) | The shape of the proof: real app stills, quiet framing, a demo you can try, and measured numbers instead of claims. |
+| [xevrion/gyotaku](https://github.com/xevrion/gyotaku) | Open-source proof story, install notes, and the reminder that the search box is the product. |
+| Awwwards SOTD editorial sites | Warm paper canvases, large serif display, generous section rhythm. |
 | Stripe Press | Serif display type with plain technical copy. |
 | Linear | Hairline structure, keyboard badges, compact status pills. |
 | Raycast | The search result pattern: one box, mixed result types, visible match reasons. |
-| Shift 5 (Non-Linear Studio, Awwwards SOTD) | Proof blocks with units, sample sizes and caveats. |
-| Reflect | Calm local-first privacy language. |
 | Resend | A developer build block that does not pretend to be a product download. |
+| Gallery references (`minimal.gallery`, `component.gallery`, `navbar.gallery`, `footer.design`, `cta.gallery`) | Navigation, footer and call to action patterns. |
+| Motion references (`kinetics.colorion.co`, `animejs.com`, `motion-primitives.com`) | Scroll pacing, reveal timing and how much motion is enough. |
 
 Awwwards tools were used for reference: `search_sites`, `analyze_page_structure`,
-`capture_live_site`, `capture_component`, and `search_motion`. Their output
-informed pacing and hierarchy, not any copied layout.
+`capture_live_site`, `capture_component` and `search_motion`. They informed
+pacing and hierarchy, not any copied layout.
 
 ## 3. Palette
 
-All text colors were checked against the canvas with WCAG contrast in mind.
-Primary and secondary text exceed AAA. Muted and faint text are used only for
-metadata at 11 to 13 px and should not carry essential copy alone.
+Tokens are declared in `tailwind.config.js` and mirrored as CSS variables for
+the few raw uses. Contrast figures below are computed against paper `#F6F2EA`.
 
-| Token | Hex | Role |
-| --- | --- | --- |
-| `canvas` | `#FAF9F5` | Page background |
-| `surface` | `#FFFFFF` | Lifted panel |
-| `subtle` | `#F3F1EB` | Quiet fill, badge background |
-| `inset` | `#EBE8E0` | Bar tracks, video frame background |
-| `line` | `#E5E2D9` | Hairline rules |
-| `line-strong` | `#D1CDC0` | Stronger border, control edge |
-| `ink.primary` | `#181715` | Headings and essential text (15.4:1) |
-| `ink.secondary` | `#45423D` | Body copy (8.8:1) |
-| `ink.muted` | `#59554E` | Captions and metadata (6.6:1) |
-| `ink.faint` | `#6B665E` | Small labels (5.0:1) |
-| `accent` | `#C2410C` | Primary action and emphasis (5.1:1) |
-| `accent.hover` | `#9A3412` | Primary action hover (7.3:1) |
-| `accent.subtle` | `#FFF7ED` | Badge and notice fill |
+| Token | Hex | Role | Contrast |
+| --- | --- | --- | --- |
+| `paper` | `#F6F2EA` | Page background | |
+| `paper.deep` | `#EDE6D8` | Quiet band fill | |
+| `paper.card` | `#FCFAF6` | Lifted panel | |
+| `ink` | `#16140F` | Headings and essential text | 16.5:1 |
+| `ink.soft` | `#3E392F` | Body copy | 10.3:1 |
+| `ink.muted` | `#6B6557` | Metadata at 11 to 13 px | 5.2:1 |
+| `accent` | `#C2410C` | Primary action, small emphasis | 4.6:1 |
+| `accent.deep` | `#8E2D06` | Accent text on tinted fills | 7.4:1 |
+| `accent.soft` | `#F7E6D8` | Tinted fill behind accent text | |
+| `line` | `#DFD7C8` | Hairline rules | |
+| `line.strong` | `#C6BDAB` | Stronger edge | |
+| `night` | `#12110E` | Install band | |
+| `night.soft` | `#1B1915` | Panel inside the night band | |
+| `night.ink` | `#F2EDE3` | Text on night | 16.2:1 |
+| `night.muted` | `#A69E8D` | Secondary text on night | 7.1:1 |
+| `sage` | `#5E7358` | "Nothing" in the data table | 4.6:1 |
+| `slate` | `#4C5A66` | Reserved | |
+
+Accent on accent.soft measures 4.3:1, so accent text on a tinted surface uses
+`accent.deep` instead. Night body copy never goes below `night.muted`.
 
 ## 4. Typography
 
-System stacks only. No font requests, no loading shift.
+Fonts are self-hosted through `@fontsource`, so there is no runtime request to a
+font CDN and no layout shift while a webfont arrives.
 
-- Serif: `Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif`
-- Sans: `-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`
-- Mono: `ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace`
+- Display: `Instrument Serif` 400, roman and italic.
+- Body: `Inter Tight Variable`, with `ss01`, `cv05` and `cv11` enabled.
+- Mono: `JetBrains Mono Variable`.
 
 | Level | Size | Use |
 | --- | --- | --- |
-| Hero | `clamp(2.5rem, 1.4rem + 3.9vw, 4.35rem)` | One per page |
-| Section heading | `clamp(1.85rem, 1.15rem + 2.15vw, 3rem)` | `SectionHeading` |
-| Feature heading | 21 to 24 px serif | Privacy pillars, stage headings |
-| Body | 14 to 17 px sans | Explanations |
-| Metadata | 10 to 13 px mono or sans | Units, labels, captions |
+| Hero | `clamp(2.9rem, 7.2vw, 6rem)` | One per page |
+| Section heading, large | `clamp(2.6rem, 5.4vw, 4.9rem)` | `SectionHead`, size `large` |
+| Section heading | `clamp(2.2rem, 4.1vw, 3.7rem)` | `SectionHead`, default size |
+| Stage heading | `clamp(2.1rem, 3.6vw, 3.2rem)` | Product story |
+| Body | 15 to 17 px sans | Explanations |
+| Metadata | 9 to 13 px mono or sans | Units, labels, captions |
 
-Headings use `text-wrap: balance`; paragraphs use `text-wrap: pretty`.
+Display tracking is `-0.02em`, never tighter. Headings use `text-wrap: balance`;
+paragraphs use `text-wrap: pretty`. Body line length stays under about 44ch in
+the hero and 65ch elsewhere.
 
 ## 5. Layout and spacing
 
-- One content column: `max-w-6xl` (1152 px) with visible `border-x` hairlines.
-- Every section closes with a full-width `border-b`.
-- Section padding: `py-16` mobile, `py-24` desktop.
-- Grids use rules (`border-t`, `border-b`, `divide-y`) instead of card gaps.
-  The exceptions are the hero illustration, the video frame, and the code
-  block, which are panels with a real edge.
-- Mobile breakpoint is checked at 390 px. The page must not scroll sideways.
-- No card shadow is used for hierarchy. `shadow-elevated` belongs only to the
-  hero illustration.
+- One shell: `max-width: 1280px`, centered, `20px` inline padding that grows to
+  `32px` at 640 and `48px` at 1024.
+- The shell can carry `border-x` hairlines, so the page reads as a bounded
+  column on wide screens.
+- Section padding: `py-20`, `py-24` at 640, `py-32` at 768.
+- Sticky nav height is `4.5rem`; anchors land 76 px down.
+- Grids use rules (`border-t`, `border-b`, `divide-y`) before they use cards.
+  Cards, where they exist, are 8 to 12 px radius with a single hairline border.
+- Mobile checkpoints: 320, 390 and 1440 px. The page must not scroll sideways at
+  any of them. Tables become stacked lists below `md`; the install platform list
+  is a definition-style grid at every width.
 
 ## 6. Motion
 
-- One easing token: `--ease-out: cubic-bezier(0.23, 1, 0.32, 1)`.
-- Interface transitions: 140 to 160 ms. Nothing decorative runs longer.
-- Press feedback: 0.98 scale on buttons, no movement on focus.
-- `swap-in` (160 ms opacity and 3 px rise) is used only when illustration
-  results change.
-- Hover styles are gated behind `@media (hover: hover) and (pointer: fine)` by a
-  Tailwind variant plugin, so a touch device cannot leave a stuck hover state.
-- Under `prefers-reduced-motion: reduce`, scroll behavior becomes instant and
-  animation and transition durations collapse. Colour feedback remains.
-- No autoplay video. The demo is click to play, with controls and captions.
+- Lenis drives the page: `lerp 0.09`, wheel `0.9`, touch `1.15`, anchors at a
+  `-76px` offset. GSAP ScrollTrigger updates from the Lenis scroll event.
+- Reveals use `[data-reveal]` and `[data-reveal-group]`: 26 px rise for single
+  blocks, 22 px with a `0.07s` stagger for groups, `expo.out`, once.
+- The from-state is applied only when the trigger fires (`immediateRender:
+  false`). Content is visible by default, so a missed trigger, a hidden tab or a
+  headless render can never leave a section blank. Blocks already on screen when
+  the page hydrates keep their prerendered state instead of replaying.
+- The hero intro is CSS: two clipped lines rise, the lede and buttons fade up,
+  the app window settles, all from the first paint. It never waits for
+  hydration, and `backwards` fill means no animation style is left behind.
+- The hero tile field is one Three.js shader on one plane, lazily imported
+  after idle on desktop only. It clamps device pixel ratio, stops drawing when
+  it leaves the viewport and renders one still frame when reduced motion is set.
+  Below 1024 px, or on a coarse pointer, three.js is never fetched.
+- Under `prefers-reduced-motion: reduce`, Lenis and GSAP never start, the tile
+  field draws a still, and CSS transitions and animations collapse to their end
+  state. The page scrolls natively.
+- Interface transitions stay at 140 to 200 ms. Buttons scale to `0.98` on press.
+  There are no marquees, parallax text layers or autoplaying video.
 
-## 7. Video and proof
+## 7. Proof and numbers
 
-The demo section is built to receive a real recording without a redesign:
+- The hero still is a screenshot of the real app, captioned as such. The same
+  image appears in the product story.
+- The demo is ten fixed files, five of them sample photos, filtered in the
+  page by typed words. It is labelled as a fixed sample with no engine and no
+  simulated timings.
 
-- Video: `public/media/demo.mp4`, H.264 MP4, 1280x720 or 1920x1080.
-- Poster: `public/media/demo-poster.png`.
-- Captions: `public/media/demo.en.vtt`, WebVTT, on by default.
-- The player is `<video controls playsInline preload="metadata">` with a poster,
-  width and height, and a captions track.
-- `src/demo.ts` holds the paths and `DEMO_IS_PLACEHOLDER`. While the flag is
-  true, the player carries a placeholder badge and the caption says there is no
-  app footage. Set it to false only after real footage and a real poster are in
-  place.
-- The current slate is a generated title card. It is not app footage and must
-  never be described as such.
-- Full drop-in instructions, including the ffmpeg poster command, are in
-  [`README.md`](./README.md).
-
-Measured numbers are presented with their context:
+Numbers come from `docs/performance.md` and carry their machine and sample:
 
 - 5,000 files: 65 ms p50, 80 ms p95, target met.
-- 50,000 files: 457 ms p50, 523 ms p95, target missed. Shown with a miss badge
-  and a dark bar, never as a win.
-- OCR: 34.4 ms p50, labelled as a single sample on a different machine.
+- 50,000 files: 457 ms p50, 523 ms p95, target missed. Shown first, with a miss
+  badge. Never presented as a win.
+- OCR: 34.4 ms p50, labelled as one sample on a different machine.
 - Description search: 0.7015 R@1 at 300 photos and 0.3552 at 5,000, with the
   caption-library caveat.
 - Index size: 22.7 MB per 1,000 at 5,000 files and 13.7 MB at 50,000.
 
 ## 8. Components
 
-1. **`Navbar`**: hairline header, section links, release status pill, GitHub
-   link, Releases action, accessible mobile menu with Escape to close.
-2. **`Hero`**: status line, one headline, plain sub-line, two actions, honest
-   release note, and a result-grid illustration marked "Illustration, not a
-   screenshot".
-3. **`ProblemSection`**: three named failure modes, each paired with what
-   Tessera does, then a comparison table that works on mobile.
-4. **`DemoSection`**: video player, placeholder badge, honest caption,
-   recording beats, and an interactive illustration with two scenarios and
-   format filters.
-5. **`HowItWorks`**: five accessible tabs (Watch, Extract, Embed, Fuse, Answer)
-   with arrow, Home and End key support, plus a spec panel per stage.
-6. **`ProofSection`**: the 65 ms result, a shared-scale bar chart with a 100 ms
-   target line, five stat rows including the 50,000-file miss, and a caveats
-   panel.
-7. **`PrivacySection`**: four pillars in a 2x2 hairline grid, and a clearly
-   labelled "Planned, not built" MCP note.
-8. **`DownloadSection`**: "Not published yet" status, Follow releases action,
-   installer and model facts, per-platform status, and a build block with an
-   `aria-live` copy confirmation.
-9. **`FAQSection`**: eight accessible disclosures, with the download question
-   open first.
-10. **`Footer`**: short description, documentation and project links, and the
-    privacy line.
+1. **`Nav`**: hairline header, section links, release pill, GitHub link, a
+   scroll progress rule, and a mobile menu with `aria-expanded` and Escape to
+   close.
+2. **`Hero`**: status pill, serif headline with an italic accent line, plain
+   lede, two actions, a shortcut hint, and the real app still. The tile field
+   sits behind it.
+3. **`Problem`**: two contrasting file cards, three named failure modes, and a
+   comparison table that becomes stacked rows below `md`.
+4. **`ProductStory`**: five stages from watch to answer, a sticky stage rail on
+   desktop with `aria-current`, and one illustration per stage.
+5. **`Demo`**: a fixed ten-file sample with real thumbnails, a typed query,
+   query chips, match highlighting, a live result count and arm badges.
+6. **`Numbers`**: the miss first, then OCR, description search and index size,
+   with fixed bars and visible targets. Bars never animate in, so they cannot
+   be missed.
+7. **`Privacy`**: a data table that becomes a list below `md`, plus four
+   promises on hairline rules.
+8. **`Install`**: the night band. Release status, source commands with a copy
+   button, first-run steps and a platform table. It says no installer is hosted
+   on the page.
+9. **`Faq`**: a button accordion with `aria-expanded`, `aria-controls` and a
+   pinned region. One item starts open.
+10. **`Footer`**: product, project and document columns, a closing display line
+    and the plain bottom strip.
 
-## 9. Rules
+## 9. Accessibility
+
+- The skip link is the first tab stop.
+- Focus is visible everywhere: 2 px accent outline, 3 px offset.
+- The mobile menu reports state and closes on Escape.
+- The demo result count sits in a polite live region. Query chips report
+  `aria-pressed`. Thumbnails are decorative because the file name is adjacent.
+- Tables carry captions, and their mobile replacements keep the reading order.
+- Images either have a real description or `alt=""` plus adjacent text.
+- Every text pair used for body copy meets 4.5:1. Metadata that does not carry
+  essential copy stays at `ink.muted` or above.
+
+## 10. Rules
 
 | Do | Don't |
 | --- | --- |
-| Use paper, ink, hairlines and one terracotta accent. | Use neon gradients, glassmorphism or a dark mode. |
-| Label illustrations and placeholders as such. | Present a mockup or slate as app footage. |
+| Use paper, ink, hairlines and one terracotta accent. | Use neon gradients, glassmorphism or a decorative dark section. |
+| Keep the night band for install only. | Flip the whole page dark for style. |
+| Label the sample demo and the illustrations as such. | Present a sample or a mockup as app footage. |
 | Quote `docs/performance.md` with machine, sample and caveat. | Round up, project, or turn a target into a result. |
 | Say the first release is being prepared. | Claim a shipped v0.1 or a downloadable build. |
-| Keep controls at least 44 px high on primary actions. | Hide focus rings or animate keyboard actions. |
+| Keep primary controls at least 44 px high. | Hide focus rings or animate keyboard actions. |
 | Keep hover behind a hover-capable pointer check. | Let touch taps stick in hover states. |
