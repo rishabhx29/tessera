@@ -32,3 +32,7 @@ tessera-core = { path = "../core" }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+# The thumbnail tests write real PNGs and decode the JPEG that comes back.
+# Same version and features as `tessera-core`'s dependency, so this adds no
+# build: cargo unifies them.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

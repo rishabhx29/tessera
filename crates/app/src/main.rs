@@ -98,6 +98,22 @@ async fn preview_image(
         .map(tauri::ipc::Response::new)
 }
 
+/// A cached list thumbnail for an image the index knows.
+///
+/// Separate from `preview_image` because the two have different budgets: a
+/// preview is one picture at full size, while a result list asks for up to
+/// forty at once. The work runs on the blocking pool so a row of 4K
+/// screenshots never holds the IPC runtime, and the decode happens after the
+/// search has already rendered — it is never on the query path.
+#[tauri::command]
+async fn thumbnail(shell: State<'_, Shell>, path: String) -> Result<tauri::ipc::Response, String> {
+    let service = shell.service.clone();
+    let bytes = tauri::async_runtime::spawn_blocking(move || service.thumbnail(&path))
+        .await
+        .map_err(|err| format!("the thumbnail task did not finish: {err}"))??;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 #[tauri::command]
 async fn status(shell: State<'_, Shell>) -> Result<StatusPayload, String> {
     shell.service.status()
@@ -276,6 +292,7 @@ fn main() {
             search,
             preview,
             preview_image,
+            thumbnail,
             status,
             watch_status,
             set_paused,
