@@ -128,8 +128,28 @@ releases begin.
 - `scripts/measure-watch.ps1` commits the harness that produced the watch-mode
   numbers in `docs/performance.md`, so they can be reproduced rather than
   trusted.
+- Image hits now lead with their own picture. `AppService::thumbnail` returns
+  a 320 px JPEG for an indexed image, caches it under `<data dir>/thumbs/` by
+  file id and mtime, and decodes on a blocking thread under a 256 MB
+  allocation limit. A row asks only when it nears the viewport, one request
+  serves every row with that path, and the object-URL cache is bounded. A
+  picture that cannot be made falls back to the kind glyph, so the row never
+  becomes a hole.
 
 ### Changed
+
+- Result rows: image hits lead with a 44 px square thumbnail cropped to one
+  alignment, documents keep their kind glyph. The preview paints the cached
+  tile first and then swaps in the full file, so the pane is a picture from
+  the first frame. The rail carries an icon beside each view; the result list
+  is one tab stop with a roving tabindex and `aria-activedescendant`; empty
+  states name their cause and offer the next action. Selection reads as a
+  background wash and an accent file name, with no coloured edge.
+- The website is a proof-first page: every claim carries a measurement or says
+  it does not exist yet. A demo section holds a captioned placeholder at the
+  exact path the real recording will take, the hero's result grid is an
+  interactive illustration labelled as one, and the measured block keeps the
+  50k target that was missed beside the ones that were met.
 
 - The window adopts the website's brand palette and type stacks, replacing
   its ad-hoc warm scheme; they are one product now. Scrollbars are quiet
@@ -170,6 +190,13 @@ releases begin.
 
 ### Fixed
 
+- Binary IPC now works under the app's content security policy. The policy
+  had no `connect-src`, so the web view blocked Tauri's custom-protocol fetch
+  and silently fell back to postMessage, where raw response bytes arrived
+  mangled. Every text command still worked, which is why it surfaced only as a
+  broken preview image and empty thumbnail tiles; `connect-src 'self' ipc:
+  http://ipc.localhost` restores the fast channel. Verified in the real
+  window.
 - Uninstalling the app no longer threatens the index and models. The silent-
   install test found that the NSIS installer's per-user default installs to
   `%LOCALAPPDATA%\Tessera` — exactly the engine's data dir — so the
