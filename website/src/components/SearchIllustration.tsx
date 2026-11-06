@@ -196,6 +196,7 @@ export const SearchIllustration: React.FC = () => {
             spellCheck={false}
           />
           <span className="absolute right-3 top-1/2 hidden -translate-y-1/2 items-center gap-1 sm:flex">
+            <kbd className="kbd">Ctrl</kbd>
             <kbd className="kbd">Alt</kbd>
             <kbd className="kbd">Space</kbd>
           </span>

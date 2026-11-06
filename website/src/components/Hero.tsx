@@ -68,6 +68,7 @@ const SearchSpecimen: React.FC = () => (
             the invoice from the airline
           </span>
           <span className="hidden items-center gap-1 sm:flex">
+            <kbd className="kbd">Ctrl</kbd>
             <kbd className="kbd">Alt</kbd>
             <kbd className="kbd">Space</kbd>
           </span>

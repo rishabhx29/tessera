@@ -8,7 +8,7 @@ const RECORDING_BEATS = [
   {
     number: '01',
     title: 'Summon it anywhere',
-    body: 'Alt+Space opens the search window over whatever you are doing.',
+    body: 'Ctrl+Alt+Space opens the search window over whatever you are doing.',
   },
   {
     number: '02',
@@ -29,8 +29,8 @@ export const DemoSection: React.FC = () => (
       title={<>One query. A screenshot, a PDF, a Word document.</>}
       lede={
         <>
-          Press Alt+Space, type what you remember, and read the answer in one
-          grid. Each hit shows which part of the engine found it.
+          Press Ctrl+Alt+Space, type what you remember, and read the answer in
+          one grid. Each hit shows which part of the engine found it.
         </>
       }
       aside={
