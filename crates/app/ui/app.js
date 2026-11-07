@@ -16,6 +16,7 @@ const state = {
   paused: false,
   folders: [],
   searchTimer: null,
+  pendingTimer: null,
   pollTimer: null,
   toastTimer: null,
   // The query an in-flight search is computing, if any. The engine call
@@ -155,6 +156,39 @@ function scheduleSearch() {
   state.searchTimer = setTimeout(runSearch, 140);
 }
 
+// A first search in a session loads and verifies the on-device models inside
+// the call, which can take seconds in a debug build. Without this the window
+// just sat on the previous state, which reads as a miss. The text appears only
+// if the call outlives the debounce (a warm search finishes first), and the
+// second line names the real reason for the wait instead of spinning at
+// "Searching" for ten seconds.
+function beginSearchPending(seq) {
+  clearTimeout(state.pendingTimer);
+  state.pendingTimer = setTimeout(() => {
+    if (state.searchSeq !== seq) return;
+    renderPendingMeta("Searching\u2026");
+    state.pendingTimer = setTimeout(() => {
+      if (state.searchSeq !== seq) return;
+      renderPendingMeta(
+        "Loading the on-device models. The first search in a session takes longer.",
+      );
+    }, 1200);
+  }, 160);
+}
+
+function clearSearchPending() {
+  clearTimeout(state.pendingTimer);
+  state.pendingTimer = null;
+}
+
+function renderPendingMeta(text) {
+  const meta = $("search-meta");
+  const span = document.createElement("span");
+  span.className = "pending";
+  span.textContent = text;
+  meta.replaceChildren(span);
+}
+
 async function runSearch() {
   const query = $("query").value.trim();
   state.query = query;
@@ -162,6 +196,7 @@ async function runSearch() {
     // Bump the sequence: a search still in flight for the cleared query must
     // not come back from the dead and render after the user hit Esc.
     state.searchSeq++;
+    clearSearchPending();
     state.results = [];
     state.selected = -1;
     state.inflightQuery = null;
@@ -175,12 +210,14 @@ async function runSearch() {
   if (query === state.inflightQuery) return;
   const seq = ++state.searchSeq;
   state.inflightQuery = query;
+  beginSearchPending(seq);
   let payload;
   try {
     payload = await call("search", { query, limit: 40 });
   } catch (error) {
     if (seq !== state.searchSeq) return;
     state.inflightQuery = null;
+    clearSearchPending();
     renderNotes([{ text: String(error), error: true }]);
     state.results = [];
     state.selected = -1;
@@ -190,6 +227,7 @@ async function runSearch() {
   }
   if (seq !== state.searchSeq) return;
   state.inflightQuery = null;
+  clearSearchPending();
   state.results = payload.rows ?? [];
   state.selected = state.results.length ? 0 : -1;
   renderNotes((payload.notes ?? []).map((text) => ({ text, error: false })));

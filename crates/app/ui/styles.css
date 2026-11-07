@@ -445,6 +445,10 @@ h2 {
   opacity: 0.6;
 }
 
+.search-meta .pending {
+  color: var(--muted);
+}
+
 .notes {
   display: flex;
   flex-wrap: wrap;
