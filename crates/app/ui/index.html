@@ -56,19 +56,21 @@
             />
             <kbd class="search-hint" id="search-hint">Ctrl K</kbd>
           </form>
-          <div class="search-meta" id="search-meta" role="status"></div>
-          <div class="notes" id="notes" role="status"></div>
-          <div class="filters" id="filters" role="group" aria-label="Filter results" hidden>
-            <button type="button" class="filter" data-filter="all" aria-pressed="true">
-              All <span class="filter-count">0</span>
-            </button>
-            <button type="button" class="filter" data-filter="image" aria-pressed="false">
-              Images <span class="filter-count">0</span>
-            </button>
-            <button type="button" class="filter" data-filter="document" aria-pressed="false">
-              Docs <span class="filter-count">0</span>
-            </button>
+          <div class="search-status">
+            <div class="search-meta" id="search-meta" role="status"></div>
+            <div class="filters" id="filters" role="group" aria-label="Filter results" hidden>
+              <button type="button" class="filter" data-filter="all" aria-pressed="true">
+                All <span class="filter-count">0</span>
+              </button>
+              <button type="button" class="filter" data-filter="image" aria-pressed="false">
+                Images <span class="filter-count">0</span>
+              </button>
+              <button type="button" class="filter" data-filter="document" aria-pressed="false">
+                Docs <span class="filter-count">0</span>
+              </button>
+            </div>
           </div>
+          <div class="notes" id="notes" role="status"></div>
           <div class="results" id="results" role="listbox" aria-label="Results" tabindex="-1"></div>
           <div class="home" id="home" hidden>
             <div class="home-head" id="home-head">
@@ -107,30 +109,42 @@
             </div>
             <button class="ghost" id="refresh-activity">Refresh</button>
           </header>
-          <div class="cards">
-            <article class="card" id="card-index">
-              <h2>Index</h2>
-              <dl class="facts" id="index-facts"></dl>
-              <ul class="folders" id="folders"></ul>
-            </article>
-            <article class="card" id="card-watch">
-              <h2>Watcher <span class="pill" id="watch-state">…</span></h2>
-              <p class="dim" id="watch-summary"></p>
-              <div class="row-actions">
-                <button id="watch-toggle" class="ghost">Pause indexing</button>
+          <div class="groups">
+            <section class="group" id="card-index">
+              <h2 class="group-label">Index</h2>
+              <div class="group-box">
+                <dl class="facts" id="index-facts"></dl>
+                <ul class="folders" id="folders"></ul>
               </div>
-              <pre class="log" id="watch-log" aria-live="polite"></pre>
-            </article>
-            <article class="card">
-              <h2>Failures <span class="count" id="failure-count">0</span></h2>
-              <p class="dim" id="failure-empty">Nothing has failed.</p>
-              <ul class="failures" id="failures"></ul>
-            </article>
-            <article class="card">
-              <h2>Skipped</h2>
-              <p class="dim" id="skip-empty">Nothing skipped.</p>
-              <dl class="facts" id="skip-facts"></dl>
-            </article>
+            </section>
+            <section class="group" id="card-watch">
+              <h2 class="group-label">
+                Watcher <span class="pill" id="watch-state">…</span>
+              </h2>
+              <div class="group-box">
+                <p class="group-note" id="watch-summary"></p>
+                <div class="row-actions">
+                  <button id="watch-toggle" class="ghost">Pause indexing</button>
+                </div>
+                <pre class="log" id="watch-log" aria-live="polite"></pre>
+              </div>
+            </section>
+            <section class="group">
+              <h2 class="group-label">
+                Failures <span class="count" id="failure-count">0</span>
+              </h2>
+              <div class="group-box">
+                <p class="dim" id="failure-empty">Nothing has failed.</p>
+                <ul class="failures" id="failures"></ul>
+              </div>
+            </section>
+            <section class="group">
+              <h2 class="group-label">Skipped</h2>
+              <div class="group-box">
+                <p class="dim" id="skip-empty">Nothing skipped.</p>
+                <dl class="facts" id="skip-facts"></dl>
+              </div>
+            </section>
           </div>
         </section>
 
@@ -142,44 +156,56 @@
             </div>
             <button class="ghost" id="refresh-settings">Refresh</button>
           </header>
-          <div class="cards">
-            <article class="card">
-              <h2>Folders</h2>
-              <ul class="folders" id="settings-folders"></ul>
-              <div class="row-actions">
-                <button class="primary" id="add-folder">Add folder</button>
-                <span class="dim" id="indexing-note" role="status"></span>
+          <div class="groups">
+            <section class="group">
+              <h2 class="group-label">Folders</h2>
+              <div class="group-box">
+                <ul class="folders" id="settings-folders"></ul>
+                <div class="row-actions">
+                  <button class="primary" id="add-folder">Add folder</button>
+                  <span class="dim" id="indexing-note" role="status"></span>
+                </div>
               </div>
-            </article>
-            <article class="card">
-              <h2>Models</h2>
-              <p class="dim">
-                Downloaded once, verified against pinned checksums, then never
-                fetched again unless you ask.
-              </p>
-              <table class="models" id="models"></table>
-              <p class="note" id="models-note" role="status"></p>
-            </article>
-            <article class="card">
-              <h2>Startup</h2>
-              <label class="check">
-                <input type="checkbox" id="autostart" />
-                <span>Start Tessera when I sign in</span>
-              </label>
-              <p class="dim">The watcher runs at idle priority and pauses on battery.</p>
-            </article>
-            <article class="card danger">
-              <h2>Rebuild index</h2>
-              <p class="dim">
-                Deletes the index and reads every folder again. Searches are empty
-                until it finishes. Your files are never touched.
-              </p>
-              <button class="danger-button" id="rebuild">Rebuild index…</button>
-            </article>
-            <article class="card">
-              <h2>Data</h2>
-              <dl class="facts" id="data-facts"></dl>
-            </article>
+            </section>
+            <section class="group">
+              <h2 class="group-label">Models</h2>
+              <div class="group-box">
+                <p class="group-note">
+                  Downloaded once, verified against pinned checksums, then never
+                  fetched again unless you ask.
+                </p>
+                <table class="models" id="models"></table>
+                <p class="note" id="models-note" role="status"></p>
+              </div>
+            </section>
+            <section class="group">
+              <h2 class="group-label">Startup</h2>
+              <div class="group-box">
+                <label class="check">
+                  <span class="check-text">
+                    <span class="row-title">Start Tessera when I sign in</span>
+                    <span class="dim">The watcher runs at idle priority and pauses on battery.</span>
+                  </span>
+                  <input type="checkbox" id="autostart" />
+                </label>
+              </div>
+            </section>
+            <section class="group">
+              <h2 class="group-label">Data</h2>
+              <div class="group-box">
+                <dl class="facts" id="data-facts"></dl>
+                <div class="group-row group-row-split">
+                  <div>
+                    <p class="row-title">Rebuild the index</p>
+                    <p class="dim">
+                      Deletes the index and reads every folder again. Searches are empty
+                      until it finishes. Your files are never touched.
+                    </p>
+                  </div>
+                  <button class="danger-button" id="rebuild">Rebuild…</button>
+                </div>
+              </div>
+            </section>
           </div>
         </section>
       </main>

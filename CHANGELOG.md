@@ -21,16 +21,17 @@ releases begin.
   number; the scaffold's 0.0.0 never shipped anything.
 - The window's design direction, written down where the UI lives
   (`crates/app/ui/DESIGN.md`): a launcher-class instrument rather than a page.
-  The chrome is neutral graphite and true white with one cobalt accent
-  (`#2F5FE3` light, `#7AA2FF` dark), one system sans, mono only for paths and
-  numbers, 12px panels — plus the interaction rules the window follows:
-  keyboard actions never animate, hovers change color only, presses answer
-  with a 0.97 scale, and everything else stays under 200 ms and gated on
-  reduced-motion.
+  The chrome is Apple-neutral — system greys, true surfaces and one blue
+  accent (`#0071E3` light, `#0A84FF` dark) — with one system sans family and
+  mono only for the watcher log and inline code — plus the interaction rules
+  the window follows: keyboard actions never animate, hovers change color
+  only, presses answer with a 0.98 scale, and everything else stays under
+  200 ms and gated on reduced-motion.
 - The app icon is the same mosaic on the instrument's graphite plate: three
-  light tiles and one cobalt, with a vector source (`crates/app/icons/icon.svg`)
-  and 16–256 px entries in `icon.ico`. The taskbar, title bar and installer
-  carry the mark instead of the old magnifier.
+  near-white tiles and one blue (`#F5F5F7` / `#0071E3` on `#1D1D1F`), with a
+  vector source (`crates/app/icons/icon.svg`) and 16–256 px entries in
+  `icon.ico`. The taskbar, title bar and installer carry the mark instead of
+  the old magnifier.
 - `dev-mock.js`, a stand-in for the Tauri IPC that exists only in a plain
   browser (inert under the real app), mirroring the payload shapes in
   `engine.rs`. It exists because every QA round correctly noted that the
@@ -150,7 +151,7 @@ releases begin.
 - Results: image hits are a gallery of 4:3 tiles, each picture contained so
   the part that matched is never cropped, the strongest carrying a Best match
   chip and the selection ring drawn outside the frame. Documents keep a dense
-  row — 40 px lead tile with the kind glyph, name, mono folder, arm chips and
+  row — 44 px lead tile with the kind glyph, name, folder, arm chips and
   a two-line snippet with accent match runs. The preview paints the cached
   tile first and then swaps in the full file, so the pane is a picture from
   the first frame. The rail is 64 px and icon-only at every width; the result
@@ -163,21 +164,28 @@ releases begin.
   interactive illustration labelled as one, and the measured block keeps the
   50k target that was missed beside the ones that were met.
 
-- The window's palette now deliberately parts with the website's: the site is
-  the publication, the app is the instrument, so the chrome is neutral
-  graphite and true white and the content carries every bit of colour. One
-  cobalt accent marks selection, matches, the primary action, focus and live
-  state, and nothing else; the mark is four rounded tiles in a 2×2 mosaic,
-  three ink and one accent. Scrollbars are quiet (thin, hairline thumb),
-  `::selection` gets the accent wash, and the dark theme keeps the same
-  structure with a lifted accent.
+- The window was rebuilt around one Apple-neutral system: a `#F5F5F7` /
+  `#1D1D1F` canvas and surface, system-grey text ramps, and one blue accent
+  (`#0071E3` light, `#0A84FF` dark) that marks selection, matches, the
+  primary action, focus and live state, and nothing else. Every page shares a
+  single 720 px column. The search bar is a 52 px field above one status row
+  — count and latency at left, segmented filters at right, wrapping instead
+  of squeezing. Results are borderless 10 px rows with 44 px lead tiles, and
+  Activity and Settings are grouped macOS-Settings sheets instead of a card
+  grid. The preview is a third column above 1040 px and a full overlay below
+  it, so the list never compresses. The mark is four rounded tiles in a 2×2
+  mosaic, three ink and one accent, on a `#1D1D1F` plate. Numbers, times and
+  paths are sans with tabular numerals; mono is reserved for the watcher log
+  and inline code. Scrollbars are quiet (thin, hairline thumb), `::selection`
+  gets the accent wash, and the dark theme keeps the same structure with a
+  lifted accent.
 - The search readout moved out of the input — where it fought the query for
-  the line — into a mono status line under the bar: results, total wall
-  time, engine time, arms, reserved at one line so the list never jumps.
+  the line — into a quiet status line under the bar: results, total wall
+  time, engine time, arms, in sans with tabular numerals so the list never
+  jumps.
 - Result rows carry one file-kind glyph each (image, PDF, doc, text) in the
-  search icon's stroke, so forty rows are scanned by shape; the folder line
-  and every path, identifier and number in Activity and Settings is mono,
-  with tabular numerals.
+  search icon's stroke, so forty rows are scanned by shape; every path,
+  identifier and number in Activity and Settings uses tabular numerals.
 - Arrow keys now work wherever focus is on the search view — from the input,
   from the list, from nowhere — instead of ignoring the input's focus; one
   keydown handler owns the view. Esc walks back: preview, then query, and
@@ -206,6 +214,15 @@ releases begin.
 
 ### Fixed
 
+- The first-run card no longer paints over the home state. Its author
+  `display: flex` beat the user agent's `[hidden]` rule, so the panel stayed
+  on screen after setup; an explicit `[hidden]` rule withdraws it now.
+- Text on tinted fills clears WCAG AA again: filter counts, keyboard hints
+  and home counts moved off `faint` onto `muted`, and accent text on tinted
+  and raised fills uses a dedicated `accent-text` token, because the old
+  pairs sat at 3.5–4.4:1. The `prefers-contrast: more` query no longer forces
+  light-theme greys into the dark theme, and the Activity failure dot is
+  amber rather than accent blue, which reads as selection.
 - Binary IPC now works under the app's content security policy. The policy
   had no `connect-src`, so the web view blocked Tauri's custom-protocol fetch
   and silently fell back to postMessage, where raw response bytes arrived
