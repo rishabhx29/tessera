@@ -49,7 +49,7 @@ latency and sizes all read as interface, not as code. Mono (Cascadia) is
 reserved for the watcher log and inline `code`, the two places where character
 alignment is the point.
 
-**Shape.** 14px for the search bar and result rows, 10px for lead tiles and
+**Shape.** 14px for the search bar, 10px for result rows, lead tiles and
 image frames, 8px for buttons and segmented controls, 6px for chips, full pill
 only for status and the filter track. Nothing above 16px.
 
@@ -89,9 +89,9 @@ icon.
    tiles `scale(0.985)` on `:active` at 120ms ease-out. Result rows, home rows
    and tiles are excluded: a full-width row dipping under the pointer reads as
    the list jumping.
-4. **Motion budget under 300 ms, usually under 200.** Only the toast and
-   hover colour on chrome animate. There is no page-load choreography and no
-   view transition.
+4. **Motion budget under 300 ms, usually under 200.** Only the toast, a
+   thumbnail resolving, the press scale and hover colour on chrome animate.
+   There is no page-load choreography and no view transition.
 5. **Ease-out, never ease-in.** `--ease-out: cubic-bezier(0.23, 1, 0.32, 1)`
    for the press and the toast; `ease` for colour changes.
 6. **Only transform, opacity and colour transition.** Never width, height or
@@ -198,7 +198,7 @@ so the result list never compresses into a sliver. The rail is fixed at 64px.
   number; status pills for watcher state; the log is the one mono well.
 - **Toast**: a bottom-centre surface card, hairline, 10px radius,
   `--shadow-float` and a 20px backdrop blur; errors swap to the `bad` fill
-  with `on-accent` text. It slides 6px and fades over 180ms, gated on reduced
+  with `on-accent` text. It slides 8px and fades over 180ms, gated on reduced
   motion.
 
 ## The dev mock
