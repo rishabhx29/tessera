@@ -132,6 +132,35 @@ pub struct ModelSetRow {
     pub missing: Vec<String>,
 }
 
+/// The empty-query state's answer: the newest files the index holds, with the
+/// counts that describe the index behind them.
+///
+/// Kept apart from [`StatusPayload`] because the two are asked at different
+/// rates and for different panes: the home state refreshes while a folder is
+/// being indexed, while `status` collects failures, skip reasons and model
+/// verification for Activity and Settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RecentPayload {
+    pub rows: Vec<HomeRow>,
+    /// Rows whose content was extracted. Skipped and failed rows are work
+    /// still waiting, not files the user can open.
+    pub indexed: i64,
+    pub folders: usize,
+}
+
+/// One newest file as the home list renders it. No snippet and no arms: this
+/// list answers "what changed lately", not "why did this match".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HomeRow {
+    pub path: String,
+    pub name: String,
+    pub folder: String,
+    pub kind: String,
+    /// Nanoseconds since the Unix epoch, as the last index run saw it. The
+    /// window formats this; the engine does not know the user's locale.
+    pub mtime: i64,
+}
+
 /// The engine as the shell sees it. Cheap to clone: two paths.
 #[derive(Debug, Clone)]
 pub struct AppService {
@@ -454,6 +483,47 @@ impl AppService {
             .map_err(|err| format!("{err:#}"))?;
         payload.models = self.model_rows();
         Ok(payload)
+    }
+
+    /// The newest files in the index, for the window's empty-query state.
+    ///
+    /// `limit` is clamped here as well as in the window: a caller cannot turn
+    /// the home list into a full-index read. Counts come from the same
+    /// connection, so the list and "N files" describe one consistent index.
+    pub fn recent(&self, limit: usize) -> Result<RecentPayload, String> {
+        if !self.index_exists() {
+            return Ok(RecentPayload {
+                rows: Vec::new(),
+                indexed: 0,
+                folders: 0,
+            });
+        }
+        let store = Store::open(&self.data_dir).map_err(|err| format!("{err:#}"))?;
+        let folders = store.roots().map_err(|err| format!("{err:#}"))?.len();
+        let indexed = store
+            .stats()
+            .map_err(|err| format!("{err:#}"))?
+            .into_iter()
+            .find(|(status, _)| status == "indexed")
+            .map(|(_, count)| count)
+            .unwrap_or(0);
+        let rows = store
+            .recent_files(limit.clamp(1, 24))
+            .map_err(|err| format!("{err:#}"))?
+            .into_iter()
+            .map(|file| HomeRow {
+                name: file_name(&file.path),
+                folder: folder_of(&file.path),
+                path: file.path,
+                kind: file.kind,
+                mtime: file.mtime,
+            })
+            .collect();
+        Ok(RecentPayload {
+            rows,
+            indexed,
+            folders,
+        })
     }
 
     fn model_rows(&self) -> Vec<ModelSetRow> {

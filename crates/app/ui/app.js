@@ -18,6 +18,14 @@ const state = {
   previewUrl: null,
   paused: false,
   folders: [],
+  // The empty-query state answers from the index, not from invented examples:
+  // the newest files it has read, and how much there is. `firstRunChecked`
+  // marks the slow status answer that can tell "no folders yet" from a pending
+  // check; a `recent` payload with roots already proves an index exists.
+  recent: { rows: [], indexed: 0, folders: 0 },
+  recentError: null,
+  homeSeq: 0,
+  firstRunChecked: false,
   searchTimer: null,
   pendingTimer: null,
   pollTimer: null,
@@ -133,6 +141,8 @@ function showView(view) {
     startPolling();
   } else {
     stopPolling();
+    updateHomeVisibility();
+    if (!$("home").hidden) refreshHome(true);
     $("query").focus();
   }
 }
@@ -578,7 +588,7 @@ function renderResults() {
     const query = state.query.length > 60 ? `${state.query.slice(0, 57)}…` : state.query;
     $("empty-title").textContent = `No matches for “${query}”`;
   }
-  $("home").hidden = Boolean(state.query) || state.results.length > 0 || !$("first-run").hidden;
+  updateHomeVisibility();
   list.setAttribute("aria-activedescendant", "");
   $("query").setAttribute("aria-activedescendant", "");
   renderFilters();
@@ -603,6 +613,191 @@ function appendSegments(target, segments) {
       target.append(document.createTextNode(segment.text));
     }
   }
+}
+
+// ---- home ------------------------------------------------------------------
+
+// The empty-query state. No example queries and no marketing: the newest
+// files the index has read, opening the same preview a search hit opens. The
+// order is the file's own mtime, not `indexed_at` (a rescanned folder rewrites
+// that on every unchanged file and would shuffle the list for no reason).
+const HOME_LIMIT = 8;
+
+function relativeTime(mtimeNs) {
+  const then = mtimeNs / 1e6;
+  if (!Number.isFinite(then)) return "";
+  const seconds = Math.max(0, (Date.now() - then) / 1000);
+  if (seconds < 60) return "now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+  if (seconds < 604800) return `${Math.floor(seconds / 86400)}d`;
+  return new Date(then).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+async function refreshHome(quiet = false) {
+  const seq = ++state.homeSeq;
+  let payload;
+  try {
+    payload = await call("recent", { limit: HOME_LIMIT });
+  } catch (error) {
+    if (seq !== state.homeSeq) return;
+    state.recentError = String(error);
+    renderHome();
+    updateHomeVisibility();
+    if (!quiet) console.debug("recent files unavailable", error);
+    return;
+  }
+  if (seq !== state.homeSeq) return;
+  state.recentError = null;
+  state.recent = payload;
+  renderHome();
+  updateHomeVisibility();
+}
+
+function renderHome() {
+  const { rows, indexed, folders } = state.recent;
+  const files = `${indexed.toLocaleString()} ${indexed === 1 ? "file" : "files"}`;
+  $("home-counts").textContent = folders
+    ? `${files} · ${folders} ${folders === 1 ? "folder" : "folders"}`
+    : "";
+
+  const note = $("home-note");
+  if (state.recentError) {
+    note.textContent = `The index could not be read: ${state.recentError}`;
+  } else if (!rows.length) {
+    note.textContent = folders
+      ? "Nothing indexed yet. Files appear here as the index reads them."
+      : "";
+  } else {
+    note.textContent = "";
+  }
+  note.hidden = !note.textContent;
+
+  const list = $("home-files");
+  const signature = JSON.stringify([indexed, folders, rows.map((row) => [row.path, row.mtime])]);
+  if (list.dataset.signature === signature) {
+    updateHomeTimes();
+    attachHomeThumbs();
+    return;
+  }
+  // Polls re-render only when the data changed; when it does, focus stays
+  // with its row instead of falling back to the document.
+  const focusedPath = document.activeElement?.closest?.(".home-file")?.dataset.path;
+  list.dataset.signature = signature;
+  list.replaceChildren();
+  for (const row of rows) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "home-file";
+    button.dataset.path = row.path;
+    button.dataset.mtime = String(row.mtime);
+
+    if (kindGroup(row.kind) === "image") {
+      button.append(thumbTile(row, "thumb home-thumb"));
+    } else {
+      const lead = document.createElement("span");
+      lead.className = "home-lead";
+      lead.setAttribute("aria-hidden", "true");
+      lead.append(kindGlyph(row.kind));
+      button.append(lead);
+    }
+
+    const name = document.createElement("span");
+    name.className = "home-name";
+    name.textContent = row.name;
+
+    const folder = document.createElement("span");
+    folder.className = "home-folder";
+    folder.textContent = row.folder;
+
+    const when = document.createElement("time");
+    when.className = "home-when";
+    const at = new Date(row.mtime / 1e6);
+    if (!Number.isNaN(at.getTime())) {
+      when.dateTime = at.toISOString();
+      when.title = at.toLocaleString();
+    }
+    when.textContent = relativeTime(row.mtime);
+
+    button.append(name, folder, when);
+    button.addEventListener("click", () => openPreview(row));
+    item.append(button);
+    list.append(item);
+  }
+  attachHomeThumbs();
+  if (focusedPath) {
+    for (const row of list.querySelectorAll(".home-file")) {
+      if (row.dataset.path === focusedPath) {
+        row.focus();
+        break;
+      }
+    }
+  }
+}
+
+// The relative labels age between data changes; the signature-skip path
+// refreshes them without rebuilding the rows.
+function updateHomeTimes() {
+  for (const row of $("home-files").querySelectorAll(".home-file")) {
+    const when = row.querySelector(".home-when");
+    if (when) when.textContent = relativeTime(Number(row.dataset.mtime));
+  }
+}
+
+// Eight rows, one request each, shared with any result row naming the same
+// file. The observer that gates result thumbnails is rooted at #results, so
+// the home list asks directly rather than opening a second observer.
+function attachHomeThumbs() {
+  for (const tile of $("home-files").querySelectorAll(".home-thumb")) {
+    const path = tile.dataset.path;
+    const known = thumbCache.get(path);
+    if (known?.url) {
+      paintThumb(tile, known.url);
+      continue;
+    }
+    if (known?.failed) {
+      tile.dataset.state = "failed";
+      continue;
+    }
+    tile.dataset.state = "loading";
+    requestThumb(path).then(() => paintThumbsFor(path));
+  }
+}
+
+function updateHomeVisibility() {
+  // `status` verifies the model files and can spend a minute hashing them on a
+  // cold start. The home list only needs the index, so once `recent` reports a
+  // root it can stand on its own and the first-run screen stays a no-roots
+  // answer rather than a loading placeholder.
+  const known = state.firstRunChecked || state.recent.folders > 0;
+  const visible =
+    known &&
+    state.view === "search" &&
+    !state.query &&
+    state.results.length === 0 &&
+    $("first-run").hidden;
+  $("home").hidden = !visible;
+}
+
+function homeRows() {
+  return Array.from($("home-files").querySelectorAll(".home-file"));
+}
+
+// The empty query is still a launcher: ArrowDown walks into the latest files
+// without a Tab, and Escape returns to the box.
+function moveHome(delta) {
+  const rows = homeRows();
+  if (!rows.length) return;
+  const at = rows.indexOf(document.activeElement);
+  const next =
+    at < 0
+      ? delta > 0
+        ? 0
+        : rows.length - 1
+      : Math.min(Math.max(at + delta, 0), rows.length - 1);
+  rows[next].focus();
+  rows[next].scrollIntoView({ block: "nearest" });
 }
 
 function selectionFocused() {
@@ -1002,31 +1197,44 @@ async function rebuildIndex() {
 
 // ---- engine state / first run ---------------------------------------------
 
+function setEngine(label, tone) {
+  $("engine-dot").className = `engine-dot ${tone}`;
+  $("engine-dot").title = `Engine: ${label}`;
+  // The label is a live region polled every six seconds; only a real change
+  // should be announced.
+  const live = $("engine-label");
+  if (live.textContent !== label) live.textContent = label;
+}
+
 async function checkFirstRun() {
   let status;
   try {
     status = await call("status");
-  } catch {
-    $("engine-dot").className = "engine-dot bad";
-    $("engine-label").textContent = "engine unavailable";
+  } catch (error) {
+    setEngine("engine unavailable", "bad");
+    state.recentError = String(error);
+    state.firstRunChecked = true;
+    renderHome();
+    updateHomeVisibility();
     return;
   }
   const hasFolders = (status.folders ?? []).length > 0;
   $("first-run").hidden = hasFolders;
+  state.firstRunChecked = true;
   if (!hasFolders) {
     state.results = [];
     renderResults();
-  } else if (!$("first-run").hidden) {
-    state.results = [];
-    renderResults();
+  } else {
+    updateHomeVisibility();
+    // The home list follows the watcher on the same six-second cadence as the
+    // engine state, so a file saved now appears without its own timer.
+    if (!$("home").hidden) refreshHome(true);
   }
   const modelsMissing = (status.models ?? []).some((set) => !set.complete);
-  $("engine-dot").className = `engine-dot ${modelsMissing ? "warn" : "ok"}`;
-  $("engine-label").textContent = modelsMissing
-    ? "models need download"
-    : hasFolders
-      ? "ready"
-      : "no folders yet";
+  setEngine(
+    modelsMissing ? "models need download" : hasFolders ? "ready" : "no folders yet",
+    modelsMissing ? "warn" : "ok",
+  );
   return status;
 }
 
@@ -1038,17 +1246,6 @@ document.querySelectorAll(".rail-item").forEach((button) => {
 
 document.querySelectorAll(".filter").forEach((button) => {
   button.addEventListener("click", () => setFilter(button.dataset.filter));
-});
-
-// The home state's example queries are real searches, not decoration: each
-// fills the box and runs, so the three arms demonstrate themselves.
-document.querySelectorAll(".example").forEach((button) => {
-  button.addEventListener("click", () => {
-    const input = $("query");
-    input.value = button.dataset.query;
-    input.focus();
-    runSearch();
-  });
 });
 
 $("query").addEventListener("input", () => {
@@ -1092,6 +1289,8 @@ document.addEventListener("keydown", (event) => {
       closePreview();
     } else if (state.view !== "search") {
       showView("search");
+    } else if (document.activeElement?.closest?.("#home-files")) {
+      $("query").focus();
     } else if ($("query").value) {
       $("query").value = "";
       runSearch();
@@ -1099,10 +1298,25 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   if (state.view !== "search") return;
+  // A launcher is always ready for a query. If a home row holds focus after
+  // an arrow, the next character belongs in the box, not nowhere.
+  if (
+    event.key.length === 1 &&
+    !mod &&
+    !event.altKey &&
+    document.activeElement?.closest?.("#home-files")
+  ) {
+    $("query").focus();
+    return;
+  }
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    const delta = event.key === "ArrowDown" ? 1 : -1;
     if (visibleRows().length) {
       event.preventDefault();
-      moveVertical(event.key === "ArrowDown" ? 1 : -1);
+      moveVertical(delta);
+    } else if (!$("home").hidden && homeRows().length) {
+      event.preventDefault();
+      moveHome(delta);
     }
     return;
   }
@@ -1174,7 +1388,12 @@ $("autostart").addEventListener("change", async (event) => {
 
 (async function boot() {
   renderResults();
-  await checkFirstRun();
+  // Both requests go out together: `recent` is one index query, `status`
+  // verifies the models. Waiting for the model check before showing the home
+  // list would leave the window blank for the length of that hash.
+  const firstRun = checkFirstRun();
+  refreshHome();
+  await firstRun;
   setInterval(checkFirstRun, 6000);
   $("query").focus();
 })();

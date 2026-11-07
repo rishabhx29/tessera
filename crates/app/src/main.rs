@@ -21,7 +21,7 @@ use tauri::{AppHandle, Manager, State, WindowEvent};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt as _, ShortcutState};
-use tessera_app::engine::{AppService, Preview, SearchPayload, StatusPayload};
+use tessera_app::engine::{AppService, Preview, RecentPayload, SearchPayload, StatusPayload};
 use tessera_app::watcher::{WatchHandle, WatchStatus};
 
 /// The hotkey, in the one place it is written down.
@@ -117,6 +117,14 @@ async fn thumbnail(shell: State<'_, Shell>, path: String) -> Result<tauri::ipc::
 #[tauri::command]
 async fn status(shell: State<'_, Shell>) -> Result<StatusPayload, String> {
     shell.service.status()
+}
+
+/// The newest files for the empty-query state. Reads the index only; it never
+/// touches the model files, which is why the window can refresh it on a timer
+/// while a folder is being indexed.
+#[tauri::command]
+async fn recent(shell: State<'_, Shell>, limit: usize) -> Result<RecentPayload, String> {
+    shell.service.recent(limit)
 }
 
 #[tauri::command]
@@ -294,6 +302,7 @@ fn main() {
             preview_image,
             thumbnail,
             status,
+            recent,
             watch_status,
             set_paused,
             index_folder,

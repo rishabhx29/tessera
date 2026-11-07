@@ -310,6 +310,17 @@ pub struct FileDisplay {
     pub first_tile: Option<(i64, Option<u32>, String)>,
 }
 
+/// One row for the window's empty-query state: a file with content behind it,
+/// and the time the index last saw the file change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentFile {
+    pub path: String,
+    pub kind: String,
+    /// Nanoseconds since the Unix epoch, as the last index run saw it. The
+    /// file's own mtime, not `indexed_at` — see [`Store::recent_files`].
+    pub mtime: i64,
+}
+
 /// One `?n` per row, numbered from 1: the shape every `IN (...)` in this file
 /// needs, written once.
 fn holes(n: usize) -> String {
@@ -1226,6 +1237,34 @@ impl Store {
         Ok(out)
     }
 
+    /// The newest indexed files, for the window's empty-query state.
+    ///
+    /// Ordered by the file's own mtime, not by `indexed_at`: a rescan rewrites
+    /// `indexed_at` for every unchanged file, so that column says "last
+    /// walked", not "newest file". Only `indexed` rows have content behind
+    /// them; a skipped or failed row is work still waiting and would offer the
+    /// user a file that cannot be previewed.
+    pub fn recent_files(&self, limit: usize) -> Result<Vec<RecentFile>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT path, kind, mtime FROM files
+             WHERE status = 'indexed'
+             ORDER BY mtime DESC, path
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit as i64], |row| {
+            Ok(RecentFile {
+                path: row.get(0)?,
+                kind: row.get(1)?,
+                mtime: row.get(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     /// The image arm's order: every embedded image, most similar first. Only
     /// ids — fusion fuses ranks, and the display row is fetched once, for the
     /// survivors. The scan borrows each blob straight out of SQLite: images are
@@ -1855,7 +1894,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::skip::FileFacts;
+    use crate::index::skip::{FileFacts, SkipReason};
     use crate::vectors::cosine;
 
     fn tmp_store() -> (tempfile::TempDir, Store) {
@@ -1890,6 +1929,65 @@ mod tests {
             )
             .expect("index it");
         store.file_id(&path).expect("and find its id")
+    }
+
+    #[test]
+    fn recent_files_are_newest_first_and_skip_rows_without_content() {
+        let (_dir, store) = tmp_store();
+        let corpus = tempfile::tempdir().unwrap();
+
+        let write = |name: &str| {
+            let path = corpus.path().join(name);
+            std::fs::write(&path, b"x").unwrap();
+            path
+        };
+        let older = write("older.txt");
+        let newest = write("newest.txt");
+        let skipped = write("placeholder.txt");
+
+        store
+            .index_file(
+                corpus.path(),
+                &older,
+                Kind::Text,
+                &facts_at(1, 1_000),
+                Some("a"),
+                &tiles(&["older"]),
+            )
+            .unwrap();
+        store
+            .index_file(
+                corpus.path(),
+                &newest,
+                Kind::Text,
+                &facts_at(1, 3_000),
+                Some("b"),
+                &tiles(&["newest"]),
+            )
+            .unwrap();
+        store
+            .skip_file(
+                corpus.path(),
+                &skipped,
+                Kind::Text,
+                &facts_at(1, 9_000),
+                SkipReason::CloudPlaceholder,
+            )
+            .unwrap();
+
+        let recent = store.recent_files(10).unwrap();
+        let paths: Vec<&str> = recent.iter().map(|file| file.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                newest.to_string_lossy().as_ref(),
+                older.to_string_lossy().as_ref(),
+            ],
+            "newest mtime first, and a skipped row is not a file the user can open"
+        );
+        assert_eq!(recent[0].kind, "text");
+        assert_eq!(recent[0].mtime, 3_000);
+        assert_eq!(store.recent_files(1).unwrap().len(), 1);
     }
 
     #[test]
@@ -2354,9 +2452,13 @@ mod tests {
     }
 
     fn facts(size: u64) -> FileFacts {
+        facts_at(size, 1_000)
+    }
+
+    fn facts_at(size: u64, mtime: i64) -> FileFacts {
         FileFacts {
             size,
-            mtime: 1_000,
+            mtime,
             placeholder: false,
         }
     }

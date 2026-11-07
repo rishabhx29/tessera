@@ -9,33 +9,29 @@
   <body>
     <div id="app" data-view="search">
       <aside class="rail" aria-label="Sections">
-        <div class="brand" aria-label="Tessera">
-          <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+        <div class="brand" aria-hidden="true">
+          <svg class="brand-mark" viewBox="0 0 24 24">
             <rect x="2" y="2" width="9" height="9" rx="2.6" />
             <rect x="13" y="2" width="9" height="9" rx="2.6" />
             <rect x="2" y="13" width="9" height="9" rx="2.6" />
             <rect class="mark-accent" x="13" y="13" width="9" height="9" rx="2.6" />
           </svg>
-          <span class="brand-name">Tessera</span>
         </div>
         <nav class="rail-nav">
           <button class="rail-item" data-view="search" aria-label="Search" aria-keyshortcuts="Control+1" aria-current="page" title="Search (Ctrl 1)">
             <svg class="rail-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5"></circle><path d="M13.2 13.2 17.5 17.5"></path></svg>
-            <span>Search</span><kbd>Ctrl 1</kbd>
           </button>
           <button class="rail-item" data-view="activity" aria-label="Activity" aria-keyshortcuts="Control+2" title="Activity (Ctrl 2)">
             <svg class="rail-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10h3.2L8 4.5l3.7 11L13.5 10h4"></path></svg>
-            <span>Activity</span>
-            <span class="rail-end"><kbd>Ctrl 2</kbd><span class="dot" id="activity-dot" aria-hidden="true" hidden></span></span>
+            <span class="dot" id="activity-dot" aria-hidden="true" hidden></span>
           </button>
           <button class="rail-item" data-view="settings" aria-label="Settings" aria-keyshortcuts="Control+3" title="Settings (Ctrl 3)">
             <svg class="rail-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 6h13M3.5 10h13M3.5 14h13"></path><circle cx="7.5" cy="6" r="1.7"></circle><circle cx="12" cy="10" r="1.7"></circle><circle cx="6.5" cy="14" r="1.7"></circle></svg>
-            <span>Settings</span><kbd>Ctrl 3</kbd>
           </button>
         </nav>
         <div class="rail-foot">
-          <span class="engine-dot" id="engine-dot" title="Engine state"></span>
-          <span id="engine-label">checking…</span>
+          <span class="engine-dot" id="engine-dot" title="Engine state" aria-hidden="true"></span>
+          <span id="engine-label" class="sr-only" role="status">checking…</span>
         </div>
       </aside>
 
@@ -75,39 +71,26 @@
           </div>
           <div class="results" id="results" role="listbox" aria-label="Results" tabindex="-1"></div>
           <div class="home" id="home" hidden>
-            <svg class="home-mark" viewBox="0 0 24 24" aria-hidden="true">
+            <div class="home-head" id="home-head">
+              <p class="home-label" id="home-label">Latest files</p>
+              <p class="home-counts" id="home-counts"></p>
+            </div>
+            <ul class="home-files" id="home-files" aria-labelledby="home-label"></ul>
+            <p class="home-note" id="home-note" hidden></p>
+          </div>
+          <div class="first-run" id="first-run" hidden>
+            <svg class="first-run-mark" viewBox="0 0 24 24" aria-hidden="true">
               <rect x="2" y="2" width="9" height="9" rx="2.6" />
               <rect x="13" y="2" width="9" height="9" rx="2.6" />
               <rect x="2" y="13" width="9" height="9" rx="2.6" />
               <rect class="mark-accent" x="13" y="13" width="9" height="9" rx="2.6" />
             </svg>
-            <p class="home-title">Find it again.</p>
-            <p class="home-line">
-              One search bar for everything the file system can't search — the
-              words inside screenshots and documents, and what pictures show.
-            </p>
-            <div class="home-examples" aria-label="Example searches">
-              <button type="button" class="example" data-query="type:pdf quarterly report">
-                <span class="tag">words</span>
-                <span class="q">type:pdf quarterly report</span>
-              </button>
-              <button type="button" class="example" data-query="the contract that stops me working for a competitor">
-                <span class="tag">meaning</span>
-                <span class="q">the contract that stops me working for a competitor</span>
-              </button>
-              <button type="button" class="example" data-query="a dog on grass">
-                <span class="tag">picture</span>
-                <span class="q">a dog on grass</span>
-              </button>
-            </div>
-          </div>
-          <div class="first-run" id="first-run" hidden>
-            <h1>Your files, findable by anything you remember.</h1>
+            <h1>Add a folder to begin.</h1>
             <p>
               Tessera reads the words inside screenshots, PDFs and documents, and
               remembers what images look like. Nothing leaves this machine.
             </p>
-            <button class="primary" id="first-run-add">Add a folder to index</button>
+            <button class="primary" id="first-run-add">Choose a folder</button>
           </div>
           <div class="empty" id="empty" role="status" hidden>
             <p class="empty-title" id="empty-title">No matches</p>

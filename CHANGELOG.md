@@ -38,10 +38,13 @@ releases begin.
   preview, first-run, no-match, activity, settings, dark theme — can now be
   rendered and screenshotted without building the shell. The mock paints a
   corner badge so its screenshots are never mistaken for the real window.
-- A home state for the empty search box: the mosaic mark, one line, and three
-  example queries that teach the three arms by running them. The miss state
-  names its cause and suggests a filter. An empty models note no longer
-  renders as a stray bordered pill.
+- The empty-query state is real index content: a "Latest files" list of the
+  newest indexed files — kind thumbnail or glyph, name, mono folder, relative
+  time — with mono file and folder counts, served by the new `recent`
+  command. A row opens the same preview as a search hit; a click or
+  `ArrowDown` from the box reaches it. The miss state names its cause and
+  suggests a filter. An empty models note no longer renders as a stray
+  bordered pill.
 - CI now also runs on Linux and macOS. Linux is where the non-Windows paths are
   compiled at all; macOS is the only place `ocr/vision.rs` exists, since it is
   `#[cfg(target_os = "macos")]` and no other runner can see that code. The
@@ -150,10 +153,10 @@ releases begin.
   row — 40 px lead tile with the kind glyph, name, mono folder, arm chips and
   a two-line snippet with accent match runs. The preview paints the cached
   tile first and then swaps in the full file, so the pane is a picture from
-  the first frame. The rail is icon-only; the result list is one tab stop with
-  a roving tabindex and `aria-activedescendant`; empty states name their cause
-  and offer the next action. Selection reads as a background wash and an
-  accent file name, with no coloured edge.
+  the first frame. The rail is 64 px and icon-only at every width; the result
+  list is one tab stop with a roving tabindex and `aria-activedescendant`;
+  empty states name their cause and offer the next action. Selection reads as
+  a background wash and an accent file name, with no coloured edge.
 - The website is a proof-first page: every claim carries a measurement or says
   it does not exist yet. A demo section holds a captioned placeholder at the
   exact path the real recording will take, the hero's result grid is an

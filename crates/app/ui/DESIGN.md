@@ -48,8 +48,8 @@ frames, 6px for chips, full pill only for status. No radius above 12px.
 
 Four rounded tiles in a 2×2 mosaic; three are ink and one is accent. A tessera
 is a mosaic piece, and the accent tile is the one that was found. The same SVG
-serves the 20px rail mark and the 40px home mark; no wordmark in the home
-state beyond the small lockup in the rail.
+serves the 24px rail mark and the 28px first-run mark; there is no wordmark
+anywhere in the window.
 
 **The app icon** is the same mark on the instrument's plate: a graphite
 rounded square (the dark `surface`, 21% corner) carrying three `#ECF0F5`
@@ -105,10 +105,10 @@ icon.
   pane; `Esc` closes it, and no overlay ever swallows Tab.
 - **State is never colour-only.** Selection adds a background wash and an
   accent file name; image selection adds a ring; failure states say so in
-  words; the watcher pill is labelled "watching"/"paused". In the 64px rail
-  the engine keeps its words under the dot (wrapped, 9.5px) instead of
-  collapsing to a coloured dot, and the icon-only buttons carry `title`
-  tooltips so a sighted mouse user still gets the name.
+  words; the watcher pill is labelled "watching"/"paused". The rail's engine
+  dot keeps its state in a tooltip and an `sr-only` live label, and the
+  icon-only rail buttons carry `aria-label`, `aria-keyshortcuts` and `title`
+  so a sighted mouse user still gets the name.
 - **Status messages keep their shape.** A note is a full bordered message with
   a status dot, never a coloured side stripe.
 - **Live regions are quiet.** Search meta, notes and the watcher log only
@@ -151,11 +151,17 @@ icon.
   sit on the inset surface. OCR/page text highlights matches. Meta is mono.
   The pane is not modal — no focus trap — and `Esc` or the close button
   returns to the list.
-- **Home state**: the 40px mark, one short title ("Find it again."), one
-  explanatory line, then three example queries as a single bordered list with
-  hairline separators. Each example is a real search, not decoration. The
-  panel belongs to an empty query and leaves the moment one exists, including
-  while a cold search is still loading the models.
+- **Home state**: what the index actually holds, not sample content. A
+  "Latest files" head with mono counts (files · folders), then up to eight
+  real rows ordered by the file's own mtime — kind glyph or thumbnail lead,
+  name, folder (mono), relative time. A row opens the same preview as a
+  search hit; `ArrowDown` from the empty box walks the list and `Esc`
+  returns to it. An empty index says so in words. The panel belongs to an
+  empty query and leaves the moment one exists, including while a cold
+  search is still loading the models.
+- **Rail**: 64px, icon-only, 40px targets. The 24px mark at the head, three
+  view icons, the engine dot at the foot. No label text: the window spends
+  its width on content, and the names live in `aria-label` and `title`.
 - **Empty states**: every empty state states a cause ("no matches", "no
   folders yet", "models need download") and, where one exists, the next
   action. An empty state that only says "empty" is a bug.

@@ -32,7 +32,7 @@
 
   --radius: 12px;
   --radius-sm: 8px;
-  --rail: 208px;
+  --rail: 64px;
   --preview: minmax(340px, 32vw);
 
   --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont,
@@ -97,6 +97,20 @@ button,
 input {
   font: inherit;
   color: inherit;
+}
+
+/* Words for assistive technology only. The 64px rail keeps the engine state
+   in a dot, and that dot must still say what it means. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 kbd {
@@ -175,8 +189,9 @@ code {
 .rail {
   display: flex;
   flex-direction: column;
-  gap: 24px;
-  padding: 20px 14px 14px;
+  align-items: center;
+  gap: 20px;
+  padding: 18px 12px 14px;
   border-right: 1px solid var(--line);
   background: var(--canvas);
   -webkit-app-region: drag;
@@ -189,76 +204,63 @@ code {
 .brand {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 0 8px;
+  justify-content: center;
 }
 
 /* Three tiles and the one that was found: a tessera is a mosaic piece, and
-   the accent tile is the result. It reads at 20px and at 40px. */
+   the accent tile is the result. It reads at 24px and at 40px. */
 .brand-mark {
   flex: none;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   color: var(--ink);
 }
 
 .brand-mark rect,
-.home-mark rect {
+.first-run-mark rect {
   fill: currentColor;
 }
 
 .brand-mark .mark-accent,
-.home-mark .mark-accent {
+.first-run-mark .mark-accent {
   fill: var(--accent);
-}
-
-.brand-name {
-  font: 600 16px/1 var(--sans);
-  letter-spacing: -0.02em;
 }
 
 .rail-nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-}
-
-.rail-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  min-height: 34px;
-  padding: 8px 10px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--ink-2);
-  text-align: left;
-  cursor: pointer;
-}
-
-/* The rail's active item is a state, not a hover — it stays where it is. */
-.rail-end {
-  display: flex;
   align-items: center;
   gap: 6px;
 }
 
+.rail-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+/* The rail's active item is a state, not a hover — it stays where it is. */
 .rail-item[aria-current="page"] {
   background: var(--surface);
   color: var(--ink);
   box-shadow: inset 0 0 0 1px var(--line);
-  font-weight: 600;
 }
 
-/* The icon is the collapsed rail's label; at full width the words are. */
+/* The icon is the label; the tooltip and the accessible name carry the word. */
 .rail-icon {
-  display: none;
+  display: block;
   flex: none;
-  width: 18px;
-  height: 18px;
+  width: 19px;
+  height: 19px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.5;
@@ -266,20 +268,22 @@ code {
   stroke-linejoin: round;
 }
 
+.rail-item .dot {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+}
+
 /* Hover states live behind a pointer check: a touch device would otherwise
-   stick the first tapped row, button or example in its hover style. */
+   stick the first tapped row or button in its hover style. */
 @media (hover: hover) and (pointer: fine) {
   .rail-item:hover {
     background: var(--surface-2);
     color: var(--ink);
   }
 
-  .example:hover {
+  .home-file:hover {
     background: var(--surface-2);
-  }
-
-  .example:hover .q {
-    color: var(--ink);
   }
 
   button.primary:hover {
@@ -318,12 +322,11 @@ code {
 .rail-foot {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  width: 100%;
   margin-top: auto;
-  padding: 10px 8px 0;
+  padding: 12px 0 0;
   border-top: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 11.5px;
 }
 
 .engine-dot,
@@ -895,102 +898,170 @@ mark {
   font-weight: 600;
 }
 
-/* The three states of an answered (or unanswered) box: the home state that
-   teaches the arms, the miss state that names its cause, and the first run
-   that offers the one action that fixes everything. */
+/* The two states of an empty box: the home state, which shows what the index
+   actually holds, and the miss state, which names its cause. Neither is a
+   landing page — the search bar is the hero, and these sit under it. */
 
-.home,
-.first-run,
-.empty {
-  margin: 0 auto;
-  max-width: 560px;
-  padding-top: clamp(44px, 13vh, 120px);
-  text-align: center;
+.home {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 24px;
+  padding-bottom: 16px;
+  overflow-y: auto;
 }
 
-.home-mark {
-  width: 40px;
-  height: 40px;
-  margin-bottom: 20px;
-  color: var(--ink);
+.home[hidden] {
+  display: none;
 }
 
-.home-title {
-  margin: 0 0 8px;
-  font: 600 21px/1.25 var(--sans);
-  letter-spacing: -0.02em;
-  color: var(--ink);
-}
-
-.home-line,
-.first-run p {
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1.6;
-  margin: 0 auto 24px;
-  max-width: 44ch;
-}
-
-.home-examples {
+.home-head {
   display: flex;
-  flex-direction: column;
-  max-width: 460px;
-  margin: 0 auto;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  overflow: hidden;
-  text-align: left;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 8px 8px;
+  border-bottom: 1px solid var(--line);
 }
 
-.example {
+.home-label {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.home-counts {
+  margin: 0;
+  color: var(--faint);
+  font: 10.5px/1.4 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.home-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* lead | name   | when
+   lead | folder | when */
+.home-file {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  grid-template-areas:
+    "lead name when"
+    "lead folder when";
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 1px;
+  width: 100%;
+  padding: 10px 8px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.home-files li:last-child .home-file {
+  border-bottom: 0;
+}
+
+/* The outline would be clipped by the scroller; inside the row it stays
+   visible on every edge. */
+.home-file:focus-visible {
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+
+.home-lead {
+  grid-area: lead;
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 46px;
-  padding: 10px 14px;
-  border: 0;
-  border-top: 1px solid var(--line);
-  border-radius: 0;
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 9px;
+  background: var(--surface-2);
 }
 
-.example:first-child {
-  border-top: 0;
+.home-thumb {
+  grid-area: lead;
+  width: 40px;
+  height: 40px;
+  border-radius: 9px;
 }
 
-.example .tag {
-  flex: none;
-  width: 58px;
-  font: 500 11px/1.4 var(--sans);
-  color: var(--faint);
-}
-
-.example .q {
-  color: var(--ink-2);
+.home-name {
+  grid-area: name;
+  font-weight: 600;
   font-size: 13px;
+  line-height: 1.35;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.first-run h1 {
-  font-size: 27px;
-  margin-bottom: 10px;
+.home-folder {
+  grid-area: folder;
+  color: var(--muted);
+  font: 10.5px/1.45 var(--mono);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.first-run {
-  padding-top: clamp(56px, 16vh, 150px);
+/* A file list, so the time is data: mono, tabular, never a sentence. */
+.home-when {
+  grid-area: when;
+  justify-self: end;
+  align-self: center;
+  padding-left: 12px;
+  color: var(--faint);
+  font: 10.5px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.first-run .primary {
-  margin-top: 2px;
+.home-note {
+  margin: 14px 8px 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
 }
 
+.home-note[hidden] {
+  display: none;
+}
+
+/* First run and the miss state: one calm column under the bar, aligned with
+   it, not a centred splash. */
+.first-run,
 .empty {
-  padding-top: clamp(52px, 15vh, 140px);
+  max-width: 460px;
+  padding-top: clamp(44px, 14vh, 120px);
+}
+
+.first-run-mark {
+  width: 28px;
+  height: 28px;
+  margin-bottom: 16px;
+  color: var(--ink);
+}
+
+.first-run h1 {
+  margin: 0 0 8px;
+  font-size: 22px;
+}
+
+.first-run p {
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.6;
+  margin: 0 0 20px;
+  max-width: 42ch;
 }
 
 .empty-title {
@@ -1355,50 +1426,9 @@ button:disabled {
   display: none;
 }
 
+/* A narrow window keeps the 64px rail; the preview stops being a third
+   column and becomes an overlay beside the rail. */
 @media (max-width: 900px) {
-  #app {
-    grid-template-columns: 64px minmax(0, 1fr);
-  }
-  /* 64px cannot hold a word: the rail becomes icons, the accessible name
-     stays on the button via aria-label, and the tooltip still says the name. */
-  .rail {
-    padding: 16px 8px 12px;
-  }
-  .brand {
-    justify-content: center;
-    padding: 0;
-  }
-  .brand-name,
-  .rail-item > span:not(.rail-end),
-  .rail-item kbd {
-    display: none;
-  }
-  .rail-icon {
-    display: block;
-  }
-  .rail-end {
-    display: flex;
-  }
-  .rail-item {
-    justify-content: center;
-    gap: 6px;
-    padding: 8px;
-  }
-  /* The engine state must not collapse to a coloured dot: there is room for
-     the words under it, wrapped, at the bottom of the rail. */
-  .rail-foot {
-    flex-direction: column;
-    gap: 4px;
-    justify-content: center;
-    padding: 10px 0 0;
-  }
-  #engine-label {
-    max-width: 52px;
-    font-size: 9.5px;
-    line-height: 1.25;
-    text-align: center;
-    overflow-wrap: anywhere;
-  }
   #app.preview-open {
     grid-template-columns: 64px minmax(0, 1fr);
   }
@@ -1423,7 +1453,6 @@ button:disabled {
    movement. */
 
 .rail-item,
-.example,
 .filter,
 button.primary,
 button.ghost,

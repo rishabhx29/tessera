@@ -414,6 +414,21 @@
     status() {
       return Promise.resolve(STATUS);
     },
+    // The home state's newest-files list. The fixtures become the six newest
+    // rows, spread from a minute ago to over a week, so the relative labels
+    // exercise every form the real window can print. Counts match STATUS.
+    recent({ limit }) {
+      const now = Date.now() / 1000;
+      const ages = [40, 22 * 60, 3.2 * 3600, 29 * 3600, 4 * 86400, 11 * 86400, 16 * 86400, 23 * 86400];
+      const rows = ROWS.slice(0, limit ?? 6).map((row, index) => ({
+        path: row.path,
+        name: row.name,
+        folder: row.folder,
+        kind: row.kind,
+        mtime: (now - ages[index % ages.length]) * 1e9,
+      }));
+      return wait(20).then(() => ({ rows, indexed: 4998, folders: 2 }));
+    },
     watch_status() {
       return Promise.resolve({
         running: true,
