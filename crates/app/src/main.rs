@@ -346,9 +346,9 @@ fn main() {
 
             // Reading the roots and verifying the model files is I/O the first
             // frame must not wait for: the window paints, then the watcher
-            // appears in the activity pane. The verification is cached in the
-            // service, so the window's first status call reuses the answer
-            // instead of hashing ~1.3 GB of model files itself.
+            // starts behind it. The verification is cached in the service, so
+            // the window's first status call reuses the answer instead of
+            // hashing ~1.3 GB of model files itself.
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 handle.state::<Shell>().restart_watch();

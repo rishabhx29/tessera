@@ -16,7 +16,6 @@ const state = {
   previewSeq: 0,
   previewPath: null,
   previewUrl: null,
-  paused: false,
   folders: [],
   // The empty-query state answers from the index, not from invented examples:
   // the newest files it has read, and how much there is. `firstRunChecked`
@@ -120,10 +119,10 @@ async function call(command, args = {}) {
 function showView(view) {
   state.view = view;
   $("app").dataset.view = view;
-  // The preview belongs to a search answer; carrying it into Activity or
-  // Settings leaves a pane answering a question this view no longer asks.
+  // The preview belongs to a search answer; carrying it into Settings leaves
+  // a pane answering a question this view no longer asks.
   if (view !== "search") closePreview();
-  for (const section of ["search", "activity", "settings"]) {
+  for (const section of ["search", "settings"]) {
     $(`view-${section}`).hidden = section !== view;
   }
   for (const button of document.querySelectorAll(".rail-item")) {
@@ -133,10 +132,7 @@ function showView(view) {
       button.removeAttribute("aria-current");
     }
   }
-  if (view === "activity") {
-    refreshActivity();
-    startPolling();
-  } else if (view === "settings") {
+  if (view === "settings") {
     refreshSettings();
     startPolling();
   } else {
@@ -150,7 +146,6 @@ function showView(view) {
 function startPolling() {
   stopPolling();
   state.pollTimer = setInterval(() => {
-    if (state.view === "activity") refreshActivity(true);
     if (state.view === "settings") refreshSettings(true);
   }, 1800);
 }
@@ -949,95 +944,11 @@ function closePreview() {
   $("app").classList.remove("preview-open");
 }
 
-// ---- activity --------------------------------------------------------------
-
-async function refreshActivity(quiet = false) {
-  let status;
-  let watch;
-  try {
-    [status, watch] = await Promise.all([call("status"), call("watch_status")]);
-  } catch (error) {
-    if (!quiet) fail("Could not read the index", error);
-    return;
-  }
-
-  state.paused = watch.paused;
-  $("watch-state").textContent = watch.running ? (watch.paused ? "paused" : "watching") : "stopped";
-  $("watch-state").className = `pill ${watch.running ? (watch.paused ? "paused" : "live") : ""}`;
-  $("watch-toggle").textContent = watch.paused ? "Resume indexing" : "Pause indexing";
-  $("watch-toggle").disabled = !watch.running;
-  $("watch-summary").textContent = watch.summary ?? (watch.running ? "Files saved now are indexed within seconds." : "");
-
-  const log = $("watch-log");
-  const logText = (watch.log ?? []).slice(-60).join("\n");
-  // The pane polls every 1.8 s. Rewriting an unchanged log would re-announce
-  // it to a screen reader and move the scroll position for no reason.
-  if (log.textContent !== logText) {
-    const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
-    log.textContent = logText;
-    if (atBottom) log.scrollTop = log.scrollHeight;
-  }
-
-  const folders = $("folders");
-  setIfChanged(folders, status.folders.join("\u0000"), (list) => {
-    for (const folder of status.folders) {
-      const li = document.createElement("li");
-      li.textContent = folder;
-      list.append(li);
-    }
-    if (!status.folders.length) {
-      const li = document.createElement("li");
-      li.className = "dim";
-      li.textContent = "No folders indexed yet.";
-      list.append(li);
-    }
-  });
-
-  const facts = $("index-facts");
-  const counts = Object.fromEntries(status.counts ?? []);
-  const factRows = [
-    ["Files indexed", counts.indexed ?? 0],
-    ["Awaiting OCR", counts.awaiting_ocr ?? 0],
-    ["Failed", status.failures.length],
-    ["Image vectors", status.image_vectors],
-    ["Text vectors", status.text_vectors],
-    ["Index size", `${status.index_mb.toFixed(1)} MB`],
-  ];
-  setIfChanged(facts, JSON.stringify(factRows), (dl) => {
-    for (const [label, value] of factRows) dl.append(term(label), detail(value));
-  });
-
-  const failures = $("failures");
-  $("failure-count").textContent = String(status.failures.length);
-  $("failure-empty").hidden = status.failures.length > 0;
-  setIfChanged(failures, JSON.stringify(status.failures.slice(0, 40)), (list) => {
-    for (const failure of status.failures.slice(0, 40)) {
-      const li = document.createElement("li");
-      const path = document.createElement("div");
-      path.className = "path";
-      path.textContent = failure.path;
-      const error = document.createElement("div");
-      error.className = "error";
-      error.textContent = failure.error;
-      li.append(path, error);
-      list.append(li);
-    }
-  });
-
-  const skips = $("skip-facts");
-  $("skip-empty").hidden = status.skip_reasons.length > 0;
-  setIfChanged(skips, JSON.stringify(status.skip_reasons), (dl) => {
-    for (const [reason, count] of status.skip_reasons) dl.append(term(reason), detail(count));
-  });
-
-  $("activity-dot").hidden = status.failures.length === 0;
-}
-
 // Replace an element's children only when the data behind them changed.
 //
-// The Activity and Settings panes poll; rebuilding a list on every tick
-// destroys focus inside it (a Download button mid-click) and re-announces
-// unchanged content. Keyed by a signature, the DOM follows the data.
+// The Settings pane polls; rebuilding a list on every tick destroys focus
+// inside it (a Download button mid-click) and re-announces unchanged content.
+// Keyed by a signature, the DOM follows the data.
 function setIfChanged(el, signature, build) {
   if (el.dataset.signature === signature) return;
   el.dataset.signature = signature;
@@ -1276,11 +1187,6 @@ document.addEventListener("keydown", (event) => {
   }
   if (mod && event.key === "2") {
     event.preventDefault();
-    showView("activity");
-    return;
-  }
-  if (mod && event.key === "3") {
-    event.preventDefault();
     showView("settings");
     return;
   }
@@ -1358,21 +1264,12 @@ $("empty-clear").addEventListener("click", () => {
   $("query").focus();
   runSearch();
 });
-$("watch-toggle").addEventListener("click", async () => {
-  try {
-    await call("set_paused", { paused: !state.paused });
-    refreshActivity(true);
-  } catch (error) {
-    fail("Could not change the watcher", error);
-  }
-});
 $("add-folder").addEventListener("click", addFolder);
 $("first-run-add").addEventListener("click", async () => {
   showView("settings");
   await addFolder();
 });
 $("rebuild").addEventListener("click", rebuildIndex);
-$("refresh-activity").addEventListener("click", () => refreshActivity());
 $("refresh-settings").addEventListener("click", () => refreshSettings());
 $("autostart").addEventListener("change", async (event) => {
   try {

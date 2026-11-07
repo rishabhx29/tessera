@@ -23,7 +23,7 @@ releases begin.
   (`crates/app/ui/DESIGN.md`): a launcher-class instrument rather than a page.
   The chrome is Apple-neutral — system greys, true surfaces and one blue
   accent (`#0071E3` light, `#0A84FF` dark) — with one system sans family and
-  mono only for the watcher log and inline code — plus the interaction rules
+  mono only for inline code — plus the interaction rules
   the window follows: keyboard actions never animate, hovers change color
   only, presses answer with a 0.98 scale, and everything else stays under
   200 ms and gated on reduced-motion.
@@ -36,7 +36,7 @@ releases begin.
   browser (inert under the real app), mirroring the payload shapes in
   `engine.rs`. It exists because every QA round correctly noted that the
   window's UI was read, never run; every visual state — home, results,
-  preview, first-run, no-match, activity, settings, dark theme — can now be
+  preview, first-run, no-match, settings, dark theme — can now be
   rendered and screenshotted without building the shell. The mock paints a
   corner badge so its screenshots are never mistaken for the real window.
 - The empty-query state is real index content: a "Latest files" list of the
@@ -212,6 +212,14 @@ releases begin.
   that could not be recorded, failed index updates and files waiting for their
   retry, so a run that did less than it looks like cannot end on a clean line.
 
+### Removed
+
+- The Activity view. The rail is now Search and Settings only, and `Ctrl 2`
+  opens Settings. The index facts and watcher log went with it; the pause
+  control, failure list and skip breakdown were the only things living there
+  that Settings did not already show, and the app is smaller without a second
+  diagnostics page. The watcher still runs and still reports through the toast.
+
 ### Fixed
 
 - The first-run card no longer paints over the home state. Its author
@@ -221,8 +229,7 @@ releases begin.
   and home counts moved off `faint` onto `muted`, and accent text on tinted
   and raised fills uses a dedicated `accent-text` token, because the old
   pairs sat at 3.5–4.4:1. The `prefers-contrast: more` query no longer forces
-  light-theme greys into the dark theme, and the Activity failure dot is
-  amber rather than accent blue, which reads as selection.
+  light-theme greys into the dark theme.
 - Binary IPC now works under the app's content security policy. The policy
   had no `connect-src`, so the web view blocked Tauri's custom-protocol fetch
   and silently fell back to postMessage, where raw response bytes arrived

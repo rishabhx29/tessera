@@ -21,11 +21,7 @@
           <button class="rail-item" data-view="search" aria-label="Search" aria-keyshortcuts="Control+1" aria-current="page" title="Search (Ctrl 1)">
             <svg class="rail-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5"></circle><path d="M13.2 13.2 17.5 17.5"></path></svg>
           </button>
-          <button class="rail-item" data-view="activity" aria-label="Activity" aria-keyshortcuts="Control+2" title="Activity (Ctrl 2)">
-            <svg class="rail-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10h3.2L8 4.5l3.7 11L13.5 10h4"></path></svg>
-            <span class="dot" id="activity-dot" aria-hidden="true" hidden></span>
-          </button>
-          <button class="rail-item" data-view="settings" aria-label="Settings" aria-keyshortcuts="Control+3" title="Settings (Ctrl 3)">
+          <button class="rail-item" data-view="settings" aria-label="Settings" aria-keyshortcuts="Control+2" title="Settings (Ctrl 2)">
             <svg class="rail-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 6h13M3.5 10h13M3.5 14h13"></path><circle cx="7.5" cy="6" r="1.7"></circle><circle cx="12" cy="10" r="1.7"></circle><circle cx="6.5" cy="14" r="1.7"></circle></svg>
           </button>
         </nav>
@@ -98,53 +94,6 @@
             <p class="empty-title" id="empty-title">No matches</p>
             <p class="dim" id="empty-hint">Try a different word, or a filter like <code>type:pdf</code>.</p>
             <button class="ghost" id="empty-clear" type="button">Clear the search</button>
-          </div>
-        </section>
-
-        <section class="view" id="view-activity" aria-label="Activity" hidden>
-          <header class="view-head">
-            <div>
-              <h1>Activity</h1>
-              <p class="view-sub">What the index holds, and what the watcher is doing right now.</p>
-            </div>
-            <button class="ghost" id="refresh-activity">Refresh</button>
-          </header>
-          <div class="groups">
-            <section class="group" id="card-index">
-              <h2 class="group-label">Index</h2>
-              <div class="group-box">
-                <dl class="facts" id="index-facts"></dl>
-                <ul class="folders" id="folders"></ul>
-              </div>
-            </section>
-            <section class="group" id="card-watch">
-              <h2 class="group-label">
-                Watcher <span class="pill" id="watch-state">…</span>
-              </h2>
-              <div class="group-box">
-                <p class="group-note" id="watch-summary"></p>
-                <div class="row-actions">
-                  <button id="watch-toggle" class="ghost">Pause indexing</button>
-                </div>
-                <pre class="log" id="watch-log" aria-live="polite"></pre>
-              </div>
-            </section>
-            <section class="group">
-              <h2 class="group-label">
-                Failures <span class="count" id="failure-count">0</span>
-              </h2>
-              <div class="group-box">
-                <p class="dim" id="failure-empty">Nothing has failed.</p>
-                <ul class="failures" id="failures"></ul>
-              </div>
-            </section>
-            <section class="group">
-              <h2 class="group-label">Skipped</h2>
-              <div class="group-box">
-                <p class="dim" id="skip-empty">Nothing skipped.</p>
-                <dl class="facts" id="skip-facts"></dl>
-              </div>
-            </section>
           </div>
         </section>
 

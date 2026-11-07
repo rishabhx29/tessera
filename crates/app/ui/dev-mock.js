@@ -173,17 +173,6 @@
     text_vectors: 17154,
   };
 
-  const WATCH_LOG = [
-    "[watch] watching 2 roots",
-    "[watch] indexed 1 — Screenshot 2026-11-05 094218.png (32.9 ms OCR, 1 chunk embedded)",
-    "[watch] indexed 1 — quarterly-report.docx (2.4 ms extract, 3 chunks embedded)",
-    "[watch] unchanged 214 on the 60 s rescan",
-    "[watch] queue drained — sessions released, idle 43 MB",
-    "[watch] rescan owed after store outage; retrying in 2 s",
-    "[watch] retrying broken-export.docx (attempt 2, next in 10 m)",
-    "[watch] queue drained",
-  ];
-
   function previewFor(path, query) {
     const row = ROWS.find((candidate) => candidate.path === path);
     const isImage = row?.kind === "image";
@@ -428,17 +417,6 @@
         mtime: (now - ages[index % ages.length]) * 1e9,
       }));
       return wait(20).then(() => ({ rows, indexed: 4998, folders: 2 }));
-    },
-    watch_status() {
-      return Promise.resolve({
-        running: true,
-        paused: false,
-        log: WATCH_LOG,
-        summary: null,
-      });
-    },
-    set_paused() {
-      return Promise.resolve();
     },
     index_folder({ path }) {
       return wait(900).then(

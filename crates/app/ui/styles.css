@@ -279,12 +279,6 @@ code {
   stroke-linejoin: round;
 }
 
-.rail-item .dot {
-  position: absolute;
-  top: 9px;
-  right: 9px;
-}
-
 /* Hover states live behind a pointer check: a touch device would otherwise
    stick the first tapped row or button in its hover style. */
 @media (hover: hover) and (pointer: fine) {
@@ -332,8 +326,7 @@ code {
   padding-top: 12px;
 }
 
-.engine-dot,
-.dot {
+.engine-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -351,13 +344,6 @@ code {
 
 .engine-dot.bad {
   background: var(--bad);
-}
-
-.dot {
-  width: 7px;
-  height: 7px;
-  background: var(--warn);
-  box-shadow: 0 0 0 2px var(--canvas);
 }
 
 /* ---- main ---------------------------------------------------------- */
@@ -1107,7 +1093,7 @@ mark {
   color: var(--muted);
 }
 
-/* ---- grouped pages (Activity, Settings) ---------------------------- */
+/* ---- grouped page (Settings) --------------------------------------- */
 
 .groups {
   display: flex;
@@ -1219,16 +1205,11 @@ mark {
   overflow-wrap: anywhere;
 }
 
-.folders,
-.failures {
+.folders {
   list-style: none;
   margin: 0;
   padding: 0;
   font-size: 12.5px;
-}
-
-.facts + .folders {
-  margin-top: 14px;
 }
 
 .folders li {
@@ -1241,25 +1222,11 @@ mark {
   border-top: 1px solid var(--line);
 }
 
-.failures li {
-  padding: 8px 0;
-}
-
-.failures li + li {
-  border-top: 1px solid var(--line);
-}
-
-.failures .path,
 .path {
   color: var(--muted);
   font-size: 11.5px;
   line-height: 1.45;
   overflow-wrap: anywhere;
-}
-
-.failures .error {
-  color: var(--bad);
-  font-size: 12px;
 }
 
 .row-actions {
@@ -1268,51 +1235,6 @@ mark {
   gap: 12px;
   margin-top: 14px;
   flex-wrap: wrap;
-}
-
-.pill {
-  border-radius: 999px;
-  background: var(--surface-2);
-  color: var(--muted);
-  padding: 2px 9px;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  text-transform: none;
-}
-
-.pill.live {
-  background: color-mix(in oklab, var(--ok) 14%, transparent);
-  color: var(--ok);
-}
-
-.pill.paused {
-  background: color-mix(in oklab, var(--warn) 16%, transparent);
-  color: var(--warn);
-}
-
-.count {
-  font-weight: 500;
-  color: var(--faint);
-}
-
-.log {
-  margin: 14px 0 0;
-  padding: 12px 14px;
-  max-height: 200px;
-  overflow: auto;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--canvas);
-  color: var(--ink-2);
-  font: 11.5px/1.55 var(--mono);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.log:empty::before {
-  content: "No output yet.";
-  color: var(--muted);
 }
 
 .models {

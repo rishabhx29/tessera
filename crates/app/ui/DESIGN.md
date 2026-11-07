@@ -46,12 +46,11 @@ weight 600 with −0.01em tracking; there is no serif in the app. Base is
 13px/1.5; the query is 15px. **Numbers and paths are sans too**, with
 `font-variant-numeric: tabular-nums` wherever values update — times, counts,
 latency and sizes all read as interface, not as code. Mono (Cascadia) is
-reserved for the watcher log and inline `code`, the two places where character
-alignment is the point.
+reserved for inline `code`, where character alignment is the point.
 
 **Shape.** 14px for the search bar, 10px for result rows, lead tiles and
 image frames, 8px for buttons and segmented controls, 6px for chips, full pill
-only for status and the filter track. Nothing above 16px.
+only for the filter track. Nothing above 16px.
 
 **Elevation.** One hairline and one soft shadow, never stacked heavy pairs:
 `--shadow-sm` for the pressed segment and floating chips, `--shadow-float` for
@@ -77,7 +76,7 @@ icon.
 
 ## Interaction rules (launcher-class)
 
-1. **Keyboard actions never animate.** `Ctrl+K`, `Esc`, `Ctrl+1/2/3`,
+1. **Keyboard actions never animate.** `Ctrl+K`, `Esc`, `Ctrl+1/2`,
    arrow-key selection — all instant, zero transition. Result rows and tiles
    have no transition at all: selection is a repaint at keystroke speed.
 2. **Hover and selection change colour only.** No movement, no scale on result
@@ -123,15 +122,14 @@ icon.
   for text only at body weight on white (4.7:1) or above.
 - **State is never colour-only.** Selection adds a background wash and an
   accent file name; image selection adds a ring; failure states say so in
-  words; the watcher pill is labelled "watching"/"paused". The rail's engine
-  dot keeps its state in a tooltip and an `sr-only` live label, and the
-  icon-only rail buttons carry `aria-label`, `aria-keyshortcuts` and `title`
-  so a sighted mouse user still gets the name.
+  words. The rail's engine dot keeps its state in a tooltip and an `sr-only`
+  live label, and the icon-only rail buttons carry `aria-label`,
+  `aria-keyshortcuts` and `title` so a sighted mouse user still gets the name.
 - **Status messages keep their shape.** A note is a full bordered message with
   a status dot, never a coloured side stripe.
-- **Live regions are quiet.** Search meta, notes and the watcher log only
-  rewrite when their text actually changed, so a polling pane does not
-  re-announce unchanged content every 1.8 s.
+- **Live regions are quiet.** Search meta and notes only rewrite when their
+  text actually changed. Settings polls, and its lists rebuild only when their
+  data changes, so a tick never re-announces content or steals focus.
 - **High contrast is honoured.** `prefers-contrast: more` darkens the lines,
   muted and faint tokens in light and dark separately.
 
@@ -185,17 +183,16 @@ so the result list never compresses into a sliver. The rail is fixed at 64px.
   An empty index says so in words. The panel belongs to an empty query and
   leaves the moment one exists, including while a cold search is still
   loading the models.
-- **Rail**: 64px, icon-only, 40px targets. The 24px mark at the head, three
+- **Rail**: 64px, icon-only, 40px targets. The 24px mark at the head, two
   view icons, the engine dot at the foot. No label text: the window spends its
   width on content, and the names live in `aria-label` and `title`.
 - **Empty states**: every empty state states a cause ("no matches", "no
   folders yet", "models need download") and, where one exists, the next
   action. An empty state that only says "empty" is a bug.
-- **Activity/Settings**: grouped macOS-Settings layout — a quiet 12px group
-  label above a hairline-separated group box on `surface` with a 12px radius.
-  Rows put the label and a one-line hint at left, the value right aligned;
-  stacked rows get a hairline rule between them. Sans for every path and
-  number; status pills for watcher state; the log is the one mono well.
+- **Settings**: grouped macOS-Settings layout — a quiet 12px group label above
+  a hairline-separated group box on `surface` with a 12px radius. Rows put the
+  label and a one-line hint at left, the value right aligned; stacked rows get
+  a hairline rule between them. Sans for every path and number.
 - **Toast**: a bottom-centre surface card, hairline, 10px radius,
   `--shadow-float` and a 20px backdrop blur; errors swap to the `bad` fill
   with `on-accent` text. It slides 8px and fades over 180ms, gated on reduced

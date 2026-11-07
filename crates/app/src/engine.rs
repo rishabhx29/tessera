@@ -138,7 +138,7 @@ pub struct ModelSetRow {
 /// Kept apart from [`StatusPayload`] because the two are asked at different
 /// rates and for different panes: the home state refreshes while a folder is
 /// being indexed, while `status` collects failures, skip reasons and model
-/// verification for Activity and Settings.
+/// verification for Settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RecentPayload {
     pub rows: Vec<HomeRow>,
