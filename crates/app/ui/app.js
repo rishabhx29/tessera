@@ -9,6 +9,9 @@ const state = {
   query: "",
   results: [],
   selected: -1,
+  // all | image | document. The filter decides which rows are visible; the
+  // selection index always refers to that visible list, never to the payload.
+  filter: "all",
   searchSeq: 0,
   previewSeq: 0,
   previewPath: null,
@@ -229,7 +232,10 @@ async function runSearch() {
   state.inflightQuery = null;
   clearSearchPending();
   state.results = payload.rows ?? [];
-  state.selected = state.results.length ? 0 : -1;
+  // A filter that would now show nothing falls back to All rather than
+  // leaving an empty panel under an active pill.
+  if (state.filter !== "all" && visibleRows().length === 0) state.filter = "all";
+  state.selected = visibleRows().length ? 0 : -1;
   renderNotes((payload.notes ?? []).map((text) => ({ text, error: false })));
   renderResults();
   renderSearchMeta(payload);
@@ -326,13 +332,13 @@ function kindGlyph(kind) {
   return icon;
 }
 
-// The square tile an image row leads with. The glyph underneath is both the
+// The picture frame a tile leads with. The glyph underneath is both the
 // skeleton (dimmed while the picture loads) and the fallback (full strength
 // when it cannot be shown), so a failed or missing picture never leaves a
-// hole in the row.
-function thumbTile(row) {
+// hole in the grid.
+function thumbTile(row, className) {
   const tile = document.createElement("span");
-  tile.className = "result-thumb";
+  tile.className = className;
   tile.dataset.path = row.path;
   tile.dataset.state = "idle";
   tile.innerHTML = KIND_ICONS.image;
@@ -372,7 +378,7 @@ function paintThumb(tile, url) {
 
 function paintThumbsFor(path) {
   const entry = thumbCache.get(path);
-  for (const tile of document.querySelectorAll(".result-thumb")) {
+  for (const tile of document.querySelectorAll(".thumb")) {
     if (tile.dataset.path !== path) continue;
     if (entry?.url) paintThumb(tile, entry.url);
     else tile.dataset.state = "failed";
@@ -384,7 +390,7 @@ function paintThumbsFor(path) {
 // cache and in-flight map survive, so re-rendering does not re-request.
 function attachThumbnails() {
   const list = $("results");
-  const tiles = list.querySelectorAll(".result-thumb");
+  const tiles = list.querySelectorAll(".thumb");
   if (thumbObserver) thumbObserver.disconnect();
   if (!tiles.length) return;
   if (!thumbObserver) {
@@ -420,9 +426,147 @@ function attachThumbnails() {
   }
 }
 
+// The visible answer: the filter applied, with images ahead of documents in
+// All. The engine ranks one fused list; the split keeps each kind in that
+// order, so the first image is still the strongest image match.
+function visibleRows() {
+  const images = state.results.filter(isImageRow);
+  if (state.filter === "image") return images;
+  const documents = state.results.filter((row) => !isImageRow(row));
+  if (state.filter === "document") return documents;
+  return images.concat(documents);
+}
+
+function visibleImageCount() {
+  if (state.filter === "document") return 0;
+  const rows = visibleRows();
+  let count = 0;
+  while (count < rows.length && isImageRow(rows[count])) count++;
+  return count;
+}
+
+// The gallery is the results grid itself: tiles take the columns and document
+// rows span all of them, so one scroller holds both shapes and the keyboard
+// still walks a single sequence.
+function galleryColumns() {
+  const list = $("results");
+  if (!list.classList.contains("gallery")) return 1;
+  const columns = getComputedStyle(list).gridTemplateColumns;
+  return columns ? columns.split(/\s+/).filter(Boolean).length : 1;
+}
+
+function renderFilters() {
+  const bar = $("filters");
+  bar.hidden = state.results.length === 0;
+  if (bar.hidden) return;
+  const images = state.results.filter(isImageRow).length;
+  const counts = {
+    all: state.results.length,
+    image: images,
+    document: state.results.length - images,
+  };
+  // A count of zero is a fact, not a teaser: the button says so and cannot be
+  // pressed into an empty panel.
+  for (const button of bar.children) {
+    const count = counts[button.dataset.filter] ?? 0;
+    button.querySelector(".filter-count").textContent = String(count);
+    button.disabled = count === 0;
+    button.setAttribute("aria-pressed", button.dataset.filter === state.filter ? "true" : "false");
+  }
+}
+
+function setFilter(filter) {
+  if (filter === state.filter) return;
+  state.filter = filter;
+  state.selected = visibleRows().length ? 0 : -1;
+  closePreview();
+  renderResults();
+}
+
+function resultButton(row, index, className) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = className;
+  button.id = `result-${index}`;
+  button.setAttribute("role", "option");
+  button.setAttribute("aria-selected", index === state.selected ? "true" : "false");
+  button.dataset.index = String(index);
+  button.dataset.kind = isImageRow(row) ? "image" : "document";
+  // Roving tabindex: the list is one tab stop, not forty.
+  button.tabIndex = index === (state.selected >= 0 ? state.selected : 0) ? 0 : -1;
+  button.addEventListener("click", () => select(index, true));
+  return button;
+}
+
+// An image hit is the picture itself: a tile in the gallery. The name stays as
+// a one-line caption so two screenshots of the same window can be told apart;
+// the matched text belongs to the preview, not to the grid.
+function buildTile(row, index, best) {
+  const button = resultButton(row, index, "tile");
+  const thumb = thumbTile(row, "thumb tile-thumb");
+  if (best) {
+    const badge = document.createElement("span");
+    badge.className = "tile-best";
+    badge.textContent = "Best match";
+    thumb.append(badge);
+  }
+  const name = document.createElement("span");
+  name.className = "tile-name";
+  name.textContent = row.name;
+  button.append(thumb, name);
+  return button;
+}
+
+function buildResult(row, index) {
+  const button = resultButton(row, index, "result");
+
+  const lead = document.createElement("span");
+  lead.className = "result-lead";
+  lead.setAttribute("aria-hidden", "true");
+  lead.append(kindGlyph(row.kind));
+
+  const name = document.createElement("span");
+  name.className = "result-name";
+  name.textContent = row.name;
+
+  const folder = document.createElement("span");
+  folder.className = "result-folder";
+  folder.textContent = row.folder;
+
+  const badges = document.createElement("span");
+  badges.className = "result-badges";
+  if (row.page) {
+    const page = document.createElement("span");
+    page.className = "badge";
+    page.textContent = `p. ${row.page}`;
+    badges.append(page);
+  }
+  for (const arm of row.arms ?? []) {
+    const badge = document.createElement("span");
+    badge.className = "badge arm";
+    badge.textContent = arm;
+    badges.append(badge);
+  }
+  if (!row.arms?.length) {
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.textContent = row.kind;
+    badges.append(badge);
+  }
+
+  const snippet = document.createElement("span");
+  snippet.className = "result-snippet";
+  appendSegments(snippet, row.snippet);
+
+  button.append(lead, name, folder, badges, snippet);
+  return button;
+}
+
 function renderResults() {
   const list = $("results");
   list.replaceChildren();
+  if (!state.results.length) state.filter = "all";
+  const rows = visibleRows();
   const showEmpty = Boolean(state.query) && state.results.length === 0 && $("first-run").hidden;
   $("empty").hidden = !showEmpty;
   if (showEmpty) {
@@ -432,62 +576,12 @@ function renderResults() {
   $("home").hidden = Boolean(state.query) || state.results.length > 0 || !$("first-run").hidden;
   list.setAttribute("aria-activedescendant", "");
   $("query").setAttribute("aria-activedescendant", "");
-  state.results.forEach((row, index) => {
-    const image = isImageRow(row);
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "result";
-    button.id = `result-${index}`;
-    button.setAttribute("role", "option");
-    button.setAttribute("aria-selected", index === state.selected ? "true" : "false");
-    button.dataset.index = String(index);
-    button.dataset.kind = image ? "image" : "document";
-    // Roving tabindex: the list is one tab stop, not forty.
-    button.tabIndex = index === (state.selected >= 0 ? state.selected : 0) ? 0 : -1;
-
-    const lead = document.createElement("span");
-    lead.className = "result-lead";
-    lead.setAttribute("aria-hidden", "true");
-    lead.append(image ? thumbTile(row) : kindGlyph(row.kind));
-
-    const name = document.createElement("span");
-    name.className = "result-name";
-    name.textContent = row.name;
-
-    const folder = document.createElement("span");
-    folder.className = "result-folder";
-    folder.textContent = row.folder;
-
-    const badges = document.createElement("span");
-    badges.className = "result-badges";
-    if (row.page) {
-      const page = document.createElement("span");
-      page.className = "badge";
-      page.textContent = `p. ${row.page}`;
-      badges.append(page);
-    }
-    for (const arm of row.arms ?? []) {
-      const badge = document.createElement("span");
-      badge.className = "badge arm";
-      badge.textContent = arm;
-      badges.append(badge);
-    }
-    if (!row.arms?.length) {
-      const badge = document.createElement("span");
-      badge.className = "badge";
-      badge.textContent = row.kind;
-      badges.append(badge);
-    }
-
-    const snippet = document.createElement("span");
-    snippet.className = "result-snippet";
-    appendSegments(snippet, row.snippet);
-
-    button.append(lead, name, folder, badges, snippet);
-    button.addEventListener("click", () => select(index, true));
-    list.append(button);
+  renderFilters();
+  list.classList.toggle("gallery", rows.some(isImageRow));
+  rows.forEach((row, index) => {
+    list.append(isImageRow(row) ? buildTile(row, index, index === 0) : buildResult(row, index));
   });
-  if (state.selected >= 0) {
+  if (state.selected >= 0 && state.selected < rows.length) {
     list.setAttribute("aria-activedescendant", `result-${state.selected}`);
     $("query").setAttribute("aria-activedescendant", `result-${state.selected}`);
   }
@@ -506,39 +600,72 @@ function appendSegments(target, segments) {
   }
 }
 
+function selectionFocused() {
+  return Boolean(document.activeElement?.matches?.(".result, .tile"));
+}
+
 function select(index, open) {
-  if (index < 0 || index >= state.results.length) return;
+  const rows = visibleRows();
+  if (index < 0 || index >= rows.length) return;
   state.selected = index;
-  for (const button of document.querySelectorAll(".result")) {
+  for (const button of $("results").children) {
     const selected = button.dataset.index === String(index);
     button.setAttribute("aria-selected", selected ? "true" : "false");
     button.tabIndex = selected ? 0 : -1;
   }
   $("results").setAttribute("aria-activedescendant", `result-${index}`);
   $("query").setAttribute("aria-activedescendant", `result-${index}`);
-  const row = state.results[index];
-  if (open) openPreview(row);
-  const active = $(`result-${index}`);
-  active?.scrollIntoView({ block: "nearest" });
+  if (open) openPreview(rows[index]);
+  $(`result-${index}`)?.scrollIntoView({ block: "nearest" });
 }
 
-function move(delta) {
-  if (!state.results.length) return;
+// If focus already sits on a result, it travels with the selection. Without
+// this, the next Enter would activate the row the user just left.
+function advance(index) {
+  const keyboard = selectionFocused();
+  select(index, true);
+  if (keyboard) $(`result-${index}`)?.focus();
+}
+
+function moveHorizontal(delta) {
+  const rows = visibleRows();
+  if (!rows.length) return;
   const from = state.selected < 0 ? 0 : state.selected;
-  const next = Math.min(Math.max(from + delta, 0), state.results.length - 1);
-  // If focus already sits on a row, it travels with the selection. Without
-  // this, the next Enter would activate the row the user just left.
-  const keyboard = document.activeElement?.classList?.contains("result");
-  select(next, true);
-  if (keyboard) $(`result-${next}`)?.focus();
+  advance(Math.min(Math.max(from + delta, 0), rows.length - 1));
+}
+
+// Down and up follow the grid: a column step inside the image tiles, a single
+// step through the document rows. Crossing between the two lands on the
+// nearest edge instead of skipping the section.
+function moveVertical(delta) {
+  const rows = visibleRows();
+  if (!rows.length) return;
+  const columns = galleryColumns();
+  const images = visibleImageCount();
+  const from = state.selected < 0 ? (delta > 0 ? 0 : rows.length - 1) : state.selected;
+  let next = from + delta;
+  if (from < images && columns > 1) {
+    const target = from + delta * columns;
+    if (target >= 0 && target < images) {
+      next = target;
+    } else if (delta > 0 && images < rows.length) {
+      next = images;
+    } else if (delta > 0) {
+      // Last image row, same column where it exists.
+      next = images - 1 - ((images - 1 - (from % columns)) % columns);
+    } else {
+      next = Math.min(from % columns, images - 1);
+    }
+  } else if (delta < 0 && images > 0 && from === images) {
+    next = images - 1;
+  }
+  advance(Math.min(Math.max(next, 0), rows.length - 1));
 }
 
 function moveToEdge(last) {
-  if (!state.results.length) return;
-  const keyboard = document.activeElement?.classList?.contains("result");
-  const next = last ? state.results.length - 1 : 0;
-  select(next, true);
-  if (keyboard) $(`result-${next}`)?.focus();
+  const rows = visibleRows();
+  if (!rows.length) return;
+  advance(last ? rows.length - 1 : 0);
 }
 
 // ---- preview ---------------------------------------------------------------
@@ -904,6 +1031,10 @@ document.querySelectorAll(".rail-item").forEach((button) => {
   button.addEventListener("click", () => showView(button.dataset.view));
 });
 
+document.querySelectorAll(".filter").forEach((button) => {
+  button.addEventListener("click", () => setFilter(button.dataset.filter));
+});
+
 // The home state's example queries are real searches, not decoration: each
 // fills the box and runs, so the three arms demonstrate themselves.
 document.querySelectorAll(".example").forEach((button) => {
@@ -964,16 +1095,26 @@ document.addEventListener("keydown", (event) => {
   }
   if (state.view !== "search") return;
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-    if (state.results.length) {
+    if (visibleRows().length) {
       event.preventDefault();
-      move(event.key === "ArrowDown" ? 1 : -1);
+      moveVertical(event.key === "ArrowDown" ? 1 : -1);
+    }
+    return;
+  }
+  if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    // Caret keys stay caret keys while the query has text to move through. An
+    // empty box has no caret journey, so there they walk the gallery.
+    const typing = document.activeElement === $("query") && $("query").value.length > 0;
+    if (!typing && visibleRows().length) {
+      event.preventDefault();
+      moveHorizontal(event.key === "ArrowRight" ? 1 : -1);
     }
     return;
   }
   // Home/End belong to the caret while the query has focus; they jump the
   // list only when the user is not typing.
   if ((event.key === "Home" || event.key === "End") && document.activeElement !== $("query")) {
-    if (state.results.length) {
+    if (visibleRows().length) {
       event.preventDefault();
       moveToEdge(event.key === "End");
     }
@@ -981,9 +1122,9 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.key === "Enter") {
     const target = document.activeElement;
-    // The input's Enter is the form submit; a focused result button clicks
-    // itself. Only the unclaimed Enter opens the selection.
-    if (target === $("query") || target?.classList?.contains("result")) return;
+    // Inputs and buttons handle their own Enter; only the unclaimed Enter
+    // opens the selection.
+    if (target?.closest?.("button, input, a")) return;
     if (state.selected >= 0) {
       event.preventDefault();
       select(state.selected, true);

@@ -449,6 +449,62 @@ h2 {
   color: var(--muted);
 }
 
+/* The kinds an answer holds. All keeps both, Images and Docs narrow it. */
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 10px 2px 0;
+}
+
+.filters[hidden] {
+  display: none;
+}
+
+.filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 3px 11px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.filter[aria-pressed="true"] {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-tile);
+}
+
+.filter-count {
+  font: 10.5px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+
+.filter[aria-pressed="true"] .filter-count {
+  color: var(--accent);
+}
+
+.filter:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .filter:hover:not(:disabled):not([aria-pressed="true"]) {
+    background: var(--surface-2);
+    color: var(--ink);
+  }
+}
+
 .notes {
   display: flex;
   flex-wrap: wrap;
@@ -493,6 +549,97 @@ h2 {
 
 .results:empty {
   display: none;
+}
+
+/* All: the pictures come first as a gallery, then the document rows in the
+   same scroller. The list itself is the grid; each document row spans every
+   column, so one sequence still holds both shapes. */
+.results.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 16px 12px;
+  padding: 14px 12px;
+  align-content: start;
+}
+
+.results.gallery .result {
+  grid-column: 1 / -1;
+  padding-inline: 4px;
+}
+
+/* An image hit is the picture, not a line about it. The tile keeps the source
+   aspect inside a fixed frame (contain), so the content that matched is never
+   cropped to fit a column. */
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tile-thumb {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+}
+
+.tile-name {
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tile[aria-selected="true"] .tile-name {
+  color: var(--accent-strong);
+}
+
+/* The ring sits outside the picture with a gap: the image is never tinted or
+   trimmed to show that it is selected. */
+.tile[aria-selected="true"] .tile-thumb {
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--line));
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.tile:focus-visible {
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .tile:hover .tile-thumb {
+    border-color: var(--line-strong);
+  }
+
+  .tile:hover .tile-name {
+    color: var(--ink);
+  }
+}
+
+/* The strongest image in the answer stays marked while the selection moves,
+   so "best match" and "what I am looking at" never mean the same thing.
+   No z-index: the picture is prepended to the frame, so document order already
+   puts the label above it, and a stacking context here would let the label
+   paint over the preview pane. */
+.tile-best {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--canvas);
+  font: 600 10px/1.5 var(--sans);
+  letter-spacing: 0.01em;
+  pointer-events: none;
 }
 
 /* One row per file, whatever the file is. An image row leads with the
@@ -571,15 +718,12 @@ h2 {
   height: 100%;
 }
 
-/* The picture itself. Square and cropped (object-fit: cover) so forty rows
-   line up whatever the source aspect ratio; the glyph underneath is the
-   skeleton while it loads and the fallback when it cannot be shown. */
-.result-thumb {
+/* A picture tile, wherever it appears. The glyph underneath is the skeleton
+   while the JPEG loads and the fallback when it cannot be shown. */
+.thumb {
   position: relative;
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--inset);
@@ -587,39 +731,35 @@ h2 {
   overflow: hidden;
 }
 
-.result-thumb svg {
+.thumb svg {
   display: block;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
 }
 
-.result-thumb img {
+.thumb img {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   opacity: 0;
 }
 
-.result-thumb[data-state="ready"] img {
+.thumb[data-state="ready"] img {
   opacity: 1;
 }
 
-.result-thumb[data-state="ready"] svg {
+.thumb[data-state="ready"] svg {
   opacity: 0;
 }
 
-.result-thumb[data-state="loading"] svg {
+.thumb[data-state="loading"] svg {
   opacity: 0.4;
 }
 
-.result-thumb[data-state="failed"] {
+.thumb[data-state="failed"] {
   color: var(--muted);
-}
-
-.result[aria-selected="true"] .result-thumb {
-  border-color: color-mix(in oklab, var(--accent) 30%, var(--line));
 }
 
 .result-name {
@@ -1201,8 +1341,8 @@ button:disabled {
   /* A thumbnail resolves into place: the glyph recedes and the picture
      arrives. Opacity only, so it costs no layout and reads as a decode
      rather than a transition. */
-  .result-thumb img,
-  .result-thumb svg {
+  .thumb img,
+  .thumb svg {
     transition: opacity 140ms ease;
   }
 

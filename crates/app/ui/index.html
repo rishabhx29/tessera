@@ -57,6 +57,17 @@
           </form>
           <div class="search-meta" id="search-meta" role="status"></div>
           <div class="notes" id="notes" role="status"></div>
+          <div class="filters" id="filters" role="group" aria-label="Filter results" hidden>
+            <button type="button" class="filter" data-filter="all" aria-pressed="true">
+              All <span class="filter-count">0</span>
+            </button>
+            <button type="button" class="filter" data-filter="image" aria-pressed="false">
+              Images <span class="filter-count">0</span>
+            </button>
+            <button type="button" class="filter" data-filter="document" aria-pressed="false">
+              Docs <span class="filter-count">0</span>
+            </button>
+          </div>
           <div class="results" id="results" role="listbox" aria-label="Results" tabindex="-1"></div>
           <div class="home" id="home" hidden>
             <svg class="home-mark" viewBox="0 0 44 44" aria-hidden="true">
