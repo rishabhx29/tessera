@@ -65,10 +65,6 @@ export const Nav: React.FC = () => {
             <span className="font-display text-[1.65rem] leading-none tracking-display text-ink">
               Tessera
             </span>
-            <span className="hidden items-center gap-1.5 rounded-full border border-line bg-paper-card px-2.5 py-1 font-mono text-[10px] text-ink-muted lg:inline-flex">
-              <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden="true" />
-              v0.1 in preparation
-            </span>
           </a>
 
           <nav aria-label="Primary" className="hidden items-center gap-7 md:flex">

@@ -43,17 +43,9 @@ export const Hero: React.FC = () => {
 
       <div className="shell relative">
         <div className="mx-auto flex max-w-3xl flex-col items-center pb-14 pt-20 text-center sm:pt-28 md:pb-20">
-          <p
-            className="hero-fade inline-flex items-center gap-2 rounded-full border border-line bg-paper-card/80 px-3 py-1.5 font-mono text-[11px] text-ink-muted backdrop-blur-sm"
-            style={{ animationDelay: '0.5s' }}
-          >
-            <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden="true" />
-            Windows first. The first public release is being prepared.
-          </p>
-
           <h1
             id="hero-title"
-            className="mt-7 font-display text-[clamp(2.9rem,7.2vw,6rem)] leading-[0.95] tracking-display text-ink"
+            className="font-display text-[clamp(2.9rem,7.2vw,6rem)] leading-[0.95] tracking-display text-ink"
           >
             <span className="block overflow-hidden pb-1">
               <span className="hero-line block" style={{ animationDelay: '0.1s' }}>
