@@ -27,6 +27,10 @@ releases begin.
   keyboard actions never animate, hovers change color only, presses answer
   with a 0.97 scale, and everything else stays under 200 ms and gated on
   reduced-motion.
+- The app icon is the same mosaic on the instrument's graphite plate: three
+  light tiles and one cobalt, with a vector source (`crates/app/icons/icon.svg`)
+  and 16–256 px entries in `icon.ico`. The taskbar, title bar and installer
+  carry the mark instead of the old magnifier.
 - `dev-mock.js`, a stand-in for the Tauri IPC that exists only in a plain
   browser (inert under the real app), mirroring the payload shapes in
   `engine.rs`. It exists because every QA round correctly noted that the

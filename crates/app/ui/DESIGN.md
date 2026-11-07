@@ -51,6 +51,16 @@ is a mosaic piece, and the accent tile is the one that was found. The same SVG
 serves the 20px rail mark and the 40px home mark; no wordmark in the home
 state beyond the small lockup in the rail.
 
+**The app icon** is the same mark on the instrument's plate: a graphite
+rounded square (the dark `surface`, 21% corner) carrying three `#ECF0F5`
+tiles and one `#2F5FE3` tile, with a faint (8%) white hairline to hold the
+plate edge on a dark taskbar. The mark fills 66% of the plate, keeping the
+in-window mark's gap-to-tile proportion. `icons/icon.svg` is the source;
+`32x32.png`, `128x128.png` and `icon.ico` (16–256px) are generated from the
+same geometry. Changing any icon file does not rerun the Windows resource
+build — touch `tauri.conf.json` before rebuilding or the exe keeps the old
+icon.
+
 ## Interaction rules (launcher-class)
 
 1. **Keyboard actions never animate.** `Ctrl+K`, `Esc`, `Ctrl+1/2/3`,
