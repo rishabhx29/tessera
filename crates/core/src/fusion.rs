@@ -582,6 +582,59 @@ pub struct FusedHit {
     /// The keyword arm voted, but no term appears in the body text: the file
     /// matched on its name. The window says "name matches" for this hit.
     pub name_only: bool,
+    /// The picture's own size, for the wall's layout. `None` for a document
+    /// and for a picture whose header has not been read.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    /// The lines whose text contains a query term, and where they sit on the
+    /// picture. Empty for a document and for a hit the image arm found alone.
+    pub marks: Vec<Mark>,
+}
+
+/// A rectangle on a picture, in fractions of its width and height. The same
+/// coordinates draw the mark in the wall and in the preview.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mark {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+}
+
+/// The lines of `text` that contain a term, with their boxes.
+///
+/// The comparison is case-insensitive and literal, the same rule the keyword
+/// arm uses. A tile whose line count and box count disagree is not trusted:
+/// halves of two different reads would put a mark where no word is.
+pub fn line_marks(
+    text: &str,
+    boxes: &[Option<crate::geometry::NormBox>],
+    terms: &[&str],
+) -> Vec<Mark> {
+    if text.lines().count() != boxes.len() {
+        return Vec::new();
+    }
+    let needles: Vec<String> = terms
+        .iter()
+        .filter(|term| !term.is_empty())
+        .map(|term| term.to_lowercase())
+        .collect();
+    text.lines()
+        .zip(boxes)
+        .filter_map(|(line, bounds)| {
+            let bounds = bounds.as_ref()?;
+            let lower = line.to_lowercase();
+            needles
+                .iter()
+                .any(|term| lower.contains(term))
+                .then_some(Mark {
+                    x0: bounds.x0,
+                    y0: bounds.y0,
+                    x1: bounds.x1,
+                    y1: bounds.y1,
+                })
+        })
+        .collect()
 }
 
 /// One arm's wall time, in milliseconds. Measured per search, never estimated.
@@ -871,6 +924,14 @@ pub fn search(
                         tile_id == *first_id && !body_contains_any(first_text, &terms)
                     })
             });
+        let marks = if display.kind == "image" && hit.arms.contains(Arm::Lexical) {
+            hit.tile_id
+                .and_then(|tile_id| chosen_tiles.get(&tile_id))
+                .map(|tile| line_marks(&tile.text, &tile.boxes, &terms))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         hits.push(FusedHit {
             file_id: hit.file_id,
             path: display.path.clone(),
@@ -879,6 +940,9 @@ pub fn search(
             snippet,
             arms: hit.arms,
             name_only,
+            width: display.width,
+            height: display.height,
+            marks,
         });
     }
     trace_mark(trace_started, "hits built");
@@ -987,6 +1051,9 @@ fn filter_only(
             },
             arms: ArmSet::default(),
             name_only: false,
+            width: display.width,
+            height: display.height,
+            marks: Vec::new(),
         });
     }
     Ok(hits)
@@ -1522,6 +1589,77 @@ mod tests {
         store
             .put_image_embedding(file_id, &Embedding::new(values.to_vec(), 4).unwrap())
             .unwrap();
+    }
+
+    #[test]
+    fn marks_follow_matching_lines_without_marking_the_filename() {
+        let bounds = crate::geometry::NormBox::pixels(10.0, 20.0, 60.0, 30.0, 100, 100);
+        let text = "invoice.png\nINVOICE total\nunrelated line";
+        let boxes = [None, Some(bounds), Some(bounds)];
+        let marks = line_marks(text, &boxes, &["invoice", "total"]);
+        assert_eq!(marks.len(), 1);
+        assert_eq!(
+            (marks[0].x0, marks[0].y0, marks[0].x1, marks[0].y1),
+            (0.1, 0.2, 0.6, 0.3)
+        );
+        assert!(line_marks(text, &boxes, &["png"]).is_empty());
+        assert!(line_marks(text, &boxes, &[""]).is_empty());
+        assert!(line_marks(text, &boxes[..2], &["invoice"]).is_empty());
+    }
+
+    #[test]
+    fn picture_hits_carry_size_and_only_literal_votes_carry_marks() {
+        let data = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let store = Store::open(data.path()).unwrap();
+        let path = index(
+            &store,
+            corpus.path(),
+            "shot.png",
+            Kind::Image,
+            &[("shot.png\nInvoice total\nunrelated", None)],
+        );
+        let file_id = store.file_id(&path).unwrap();
+        store.set_dimensions(file_id, 800, 400).unwrap();
+        let displays = store.file_displays(&[file_id]).unwrap();
+        let tile_id = displays[&file_id].first_tile.as_ref().unwrap().0;
+        let bounds = crate::geometry::NormBox::pixels(80.0, 80.0, 480.0, 120.0, 800, 400);
+        store
+            .set_tile_boxes(tile_id, &[None, Some(bounds), Some(bounds)])
+            .unwrap();
+        image_vector(&store, &path, [1.0, 0.0, 0.0, 0.0]);
+        let query = parse_query(&["invoice".into()]).unwrap();
+
+        let words = search(data.path(), &query, SearchMode::Words, None, None, 10).unwrap();
+        assert_eq!(words.hits.len(), 1);
+        let hit = &words.hits[0];
+        assert_eq!((hit.width, hit.height), (Some(800), Some(400)));
+        assert_eq!(hit.marks.len(), 1);
+        assert_eq!(hit.marks[0].y0, 0.2);
+
+        let pictures = search(
+            data.path(),
+            &query,
+            SearchMode::Pictures,
+            Some(&FakeImage),
+            None,
+            10,
+        )
+        .unwrap();
+        assert_eq!(pictures.hits.len(), 1);
+        assert!(pictures.hits[0].marks.is_empty());
+        assert_eq!(
+            (pictures.hits[0].width, pictures.hits[0].height),
+            (Some(800), Some(400))
+        );
+
+        let filter = parse_query(&["type:image".into()]).unwrap();
+        let listing = search(data.path(), &filter, SearchMode::All, None, None, 10).unwrap();
+        assert!(listing.hits[0].marks.is_empty());
+        assert_eq!(
+            (listing.hits[0].width, listing.hits[0].height),
+            (Some(800), Some(400))
+        );
     }
 
     #[test]
