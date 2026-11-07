@@ -1,9 +1,10 @@
 # Tessera window — design direction
 
-The desktop window shares one brand with the website: warm paper, charcoal
-ink, one terracotta accent, hairline rules. The website's `DESIGN.md` owns the
-palette and type stacks; this file is the window's reading of it, plus the
-interaction rules that belong to a search tool specifically.
+The window is a **tool**, not a page. It deliberately parts from the website's
+warm editorial palette: the site is the publication, the app is the instrument.
+The app is neutral graphite and true white with one cobalt accent, so the
+content — screenshots, documents, names — carries every bit of colour. The
+website's `DESIGN.md` owns the site's own palette; this file owns the window.
 
 ## The archetype
 
@@ -12,54 +13,68 @@ summoned, used dozens of times a day, and dismissed. That decides almost every
 rule below. Speed is the aesthetic; anything that adds a beat between
 keystroke and answer is a defect, however pretty.
 
-## Brand tokens (aligned with `website/DESIGN.md`)
+## Tokens
 
-| Token | Light | Role |
-|---|---|---|
-| canvas | `#FAF9F5` | window background — warm archival paper |
-| surface | `#FFFFFF` | elevated panels: search bar, results, cards |
-| subtle | `#F3F1EB` | secondary surface: hover fills, log, badges |
-| inset | `#EBE8E0` | deepest panel: code, image backdrop |
-| line | `#E5E2D9` | 1px hairlines |
-| line-strong | `#D1CDC0` | input borders, focus-adjacent |
-| ink | `#181715` | headings, result names (15.4:1 AAA) |
-| ink-2 | `#45423D` | body, snippets (8.8:1 AAA) |
-| muted | `#59554E` | meta, paths, hints (6.6:1 AA) |
-| faint | `#6B665E` | the quietest annotations (5.0:1 AA) |
-| accent | `#C2410C` | terracotta — selection, matches, focus (5.1:1 AA) |
-| accent-strong | `#9A3412` | accent hover / pressed (7.3:1 AAA) |
-| accent-subtle | `#FFF7ED` | selection background wash |
+| Token | Light | Dark | Role |
+|---|---|---|---|
+| canvas | `#F6F7F9` | `#0B0D11` | window background |
+| surface | `#FFFFFF` | `#111419` | search bar, cards, preview |
+| surface-2 | `#EEF0F3` | `#191D24` | hover fills, filter track, lead tiles |
+| inset | `#E7EAEF` | `#0E1116` | image backdrop inside thumbnails |
+| line | `#E3E6EB` | `#222730` | 1px hairlines |
+| line-strong | `#CBD1DA` | `#333A47` | input borders |
+| ink | `#101318` | `#ECF0F5` | headings, result names (~17:1) |
+| ink-2 | `#3B424E` | `#C2C9D4` | body, snippets (~9:1) |
+| muted | `#5A6270` | `#8E97A6` | meta, paths, hints (6.1:1 light) |
+| faint | `#636C7A` | `#8B94A3` | quietest annotations (5.3:1 light) |
+| accent | `#2F5FE3` | `#7AA2FF` | selection, matches, focus (5.5:1 light) |
+| accent-strong | `#1E4BC8` | `#9BBAFF` | selected names, primary hover (7.3:1 light) |
+| accent-soft | `#EDF2FE` | `#16233F` | selected row wash |
+| ok / warn / bad | `#2C6E46` / `#8A5A17` / `#B3261E` | `#7AD3A0` / `#E6B566` / `#F2938D` | status, both themes |
 
-Dark theme keeps the same structure (paper → deep warm charcoal, accent lifts
-to a light terracotta for contrast). Status colors (`ok`/`warn`/`bad`) are
-warm-leaning greens, ambers and reds tuned to both themes.
+The accent is a signal, not decoration. It appears only on: the selected row
+or tile, matched text, the primary action, focus rings, and the live state.
+Anything else is ink, line or surface.
 
-Type: the site's three stacks — **Charter** serif for display headings only
-(view titles, first-run); system sans for everything interactive; mono
-(Cascadia) for paths, latency, file sizes, and log output, always with
-`tabular-nums` where numbers update.
+**Type.** One family: the system sans stack. Headings are the same face at
+weight 600 with −0.02em tracking; there is no serif in the app. Mono
+(Cascadia) is reserved for paths, latency, sizes and log output, always with
+`tabular-nums` where numbers update. Base is 13px/1.5; the query is 15px.
+
+**Shape.** 12px for panels and the search bar, 8px for buttons, 10px for image
+frames, 6px for chips, full pill only for status. No radius above 12px.
+
+## The mark
+
+Four rounded tiles in a 2×2 mosaic; three are ink and one is accent. A tessera
+is a mosaic piece, and the accent tile is the one that was found. The same SVG
+serves the 20px rail mark and the 40px home mark; no wordmark in the home
+state beyond the small lockup in the rail.
 
 ## Interaction rules (launcher-class)
 
 1. **Keyboard actions never animate.** `Ctrl+K`, `Esc`, `Ctrl+1/2/3`,
-   arrow-key selection — all instant, zero transition. These run hundreds of
-   times a day; a 120 ms fade per press is a tax, not a polish (Raycast ships
-   no open/close animation at all).
+   arrow-key selection — all instant, zero transition. Result rows and tiles
+   have no transition at all: selection is a repaint at keystroke speed.
 2. **Hover and selection change color only.** No movement, no scale on result
-   rows. The selection is a background wash plus a 3px accent edge.
-3. **Pressable things answer the press.** Buttons get `scale(0.97)` on
-   `:active` at ~120 ms ease-out. This is the one transform feedback a
-   high-frequency UI keeps.
-4. **Motion budget under 300 ms, usually under 200.** Only the toast, preview
-   pane, and first-run state animate, and each exists to prevent a jarring
-   change — never to decorate. Exit faster than enter.
-5. **Ease-out or a custom curve, never ease-in.** `--ease-out:
-   cubic-bezier(0.23, 1, 0.32, 1)` for entries; `ease` for color changes;
-   linear only for indeterminate progress.
-6. **Only `transform`, `opacity` and color transition.** Never width, height
-   or `all`.
-7. **`prefers-reduced-motion` collapses movement to opacity/color.**
-   `prefers-reduced-motion: no-preference` gates every transform transition.
+   rows. Selection is a background wash (`accent-soft`) plus an
+   `accent-strong` name; an image tile additionally gets a 2px accent ring
+   drawn *outside* the picture with a 2px gap, so the image is never tinted or
+   trimmed to show state.
+3. **Pressable things answer the press.** Small buttons get `scale(0.97)` and
+   tiles `scale(0.985)` on `:active` at 120ms ease-out. Result rows are
+   excluded: a full-width row dipping under the pointer reads as the list
+   jumping.
+4. **Motion budget under 300 ms, usually under 200.** Only the toast, a
+   thumbnail resolving, and hover color on chrome animate. There is no
+   page-load choreography and no view transition.
+5. **Ease-out, never ease-in.** `--ease-out: cubic-bezier(0.23, 1, 0.32, 1)`
+   for the press and the toast; `ease` for color changes.
+6. **Only transform, opacity and color transition.** Never width, height or
+   `all`.
+7. **`prefers-reduced-motion` collapses movement.** Color changes stay;
+   transforms, thumbnail fades and the toast slide are gated on
+   `prefers-reduced-motion: no-preference`.
 8. **Hovers are gated behind `@media (hover: hover) and (pointer: fine)`** so
    touch devices don't get sticky hover states.
 
@@ -75,46 +90,68 @@ Type: the site's three stacks — **Charter** serif for display headings only
   never becomes the only label for a result.
 - **Focus is always visible and never trapped.** One `:focus-visible` style
   (2px accent, drawn inside a result row so the scrolling list cannot clip
-  it). The preview is a non-modal complementary pane; `Esc` closes it, and
-  no overlay ever swallows Tab.
+  it). The search bar draws its own accent ring on `:focus-within` and the
+  input drops its duplicate outline. The preview is a non-modal complementary
+  pane; `Esc` closes it, and no overlay ever swallows Tab.
 - **State is never colour-only.** Selection adds a background wash and an
-  accent file name; failure states say so in words; the watcher pill is
-  labelled "watching"/"paused".
+  accent file name; image selection adds a ring; failure states say so in
+  words; the watcher pill is labelled "watching"/"paused". In the 64px rail
+  the engine keeps its words under the dot (wrapped, 9.5px) instead of
+  collapsing to a coloured dot, and the icon-only buttons carry `title`
+  tooltips so a sighted mouse user still gets the name.
+- **Status messages keep their shape.** A note is a full bordered message with
+  a status dot, never a coloured side stripe.
 - **Live regions are quiet.** Search meta, notes and the watcher log only
   rewrite when their text actually changed, so a polling pane does not
   re-announce unchanged content every 1.8 s.
 
 ## Component standards
 
-- **Search bar**: 48px pill-adjacent field, hairline border that turns
-  terracotta with a soft focus wash when focused. The latency readout is a
-  quiet mono status line under the field — total wall time first, engine time
-  called out separately. It sits outside the input so the query and the
-  numbers never compete for the same space.
-- **Results**: one row per file — lead → name → folder → modality badges →
-  snippet with terracotta match runs. Rows are dense (this is a list, not
-  cards); the selected row is unmistakable. Arm badges say *why* a file
-  surfaced — that is the product's honesty promise, so they are never
-  decorative.
-- **Image rows**: the lead is the picture itself, a 44px square tile cropped
-  with `object-fit: cover` so mixed answers keep one alignment and one
-  density. The tile is asked for only when it is near the viewport (lazy,
-  via `IntersectionObserver`), shows the image glyph dimmed while it loads,
-  and keeps that glyph at full strength if the thumbnail cannot be made.
-  Documents keep their kind glyph. There is deliberately no second grid for
-  image-heavy answers: a search answer is one list, and the lead column is
-  the only difference between a picture and a document row. The full-size
-  picture belongs in the preview pane, never in a 44px row.
+- **Search bar**: 48px field, 12px radius, `surface` on `canvas`, 1px
+  `line-strong` border; focus turns the border accent and adds a 3px accent
+  wash ring. The magnifier turns accent while focused. The latency readout is
+  a quiet mono line under the field — total wall time first, engine time
+  called out separately — outside the input so query and numbers never
+  compete for space. The search column stops at 1040px: past that the extra
+  width becomes gutter rather than stretch, because a launcher bar and a
+  snippet line both get worse when they run the width of a monitor.
+- **Primary actions**: the label takes the canvas colour rather than white, so
+  it stays dark on the lighter dark-mode accent and legible in both themes.
+- **Filters**: one segmented control on a `surface-2` track with a hairline
+  border. The pressed segment is the raised white one with a 1px line and a
+  1px shadow; its count is the only accent. A zero count disables its segment
+  rather than hiding it.
+- **Image results**: a gallery grid (`auto-fill`, 168px minimum, 4:3 frames).
+  The picture uses `object-fit: contain` so the part that matched is never
+  cropped; the frame sits on `inset` with a hairline. The grid keeps a 6px
+  inline gutter so the selection ring drawn outside the first and last
+  columns is not clipped by the scroller. The strongest image carries a small
+  surface "Best match" chip at 8px, while the selection ring stays on the
+  selected tile, so "best" and "current" never mean the same thing. Tiles are
+  lazy, via `IntersectionObserver`; the image glyph is the skeleton and the
+  fallback.
+- **Document results**: one dense row per file — 40px lead tile with the kind
+  glyph → name → folder (mono) → arm/page chips → two-line snippet with
+  accent match runs. The lead tile is a `surface-2` square, deliberately the
+  same size and radius as an image frame's lead so mixed answers keep one
+  alignment. Arm badges say *why* a file surfaced; that is the product's
+  honesty promise, so they are never decorative.
 - **Preview pane**: the file at left, its evidence at right. Image previews
   put the cached 320px thumbnail up first, then swap in the full file; they
   sit on the inset surface. OCR/page text highlights matches. Meta is mono.
   The pane is not modal — no focus trap — and `Esc` or the close button
   returns to the list.
+- **Home state**: the 40px mark, one short title ("Find it again."), one
+  explanatory line, then three example queries as a single bordered list with
+  hairline separators. Each example is a real search, not decoration. The
+  panel belongs to an empty query and leaves the moment one exists, including
+  while a cold search is still loading the models.
 - **Empty states**: every empty state states a cause ("no matches", "no
   folders yet", "models need download") and, where one exists, the next
   action. An empty state that only says "empty" is a bug.
-- **Activity/Settings**: cards on surface, hairline borders, mono for every
-  path and number, status pills for watcher state.
+- **Activity/Settings**: cards on surface with 12px radius and hairline
+  borders; section titles are 13px sans, not tracked uppercase. Mono for every
+  path and number; status pills for watcher state.
 
 ## The dev mock
 

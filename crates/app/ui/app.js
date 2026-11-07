@@ -213,6 +213,11 @@ async function runSearch() {
   if (query === state.inflightQuery) return;
   const seq = ++state.searchSeq;
   state.inflightQuery = query;
+  // The home panel answers "nothing typed yet". A cold search loads the models
+  // for seconds, and leaving the panel up under the pending line reads as if
+  // the keystroke did nothing.
+  $("home").hidden = true;
+  $("empty").hidden = true;
   beginSearchPending(seq);
   let payload;
   try {

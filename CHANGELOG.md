@@ -20,11 +20,13 @@ releases begin.
 - The workspace and app bundle carry version **0.1.0** — the first shippable
   number; the scaffold's 0.0.0 never shipped anything.
 - The window's design direction, written down where the UI lives
-  (`crates/app/ui/DESIGN.md`): the website's brand tokens — canvas `#FAF9F5`,
-  ink `#181715`, terracotta `#C2410C`, hairlines `#E5E2D9` — plus the
-  launcher-class interaction rules the window now follows: keyboard actions
-  never animate, hovers change color only, presses answer with a 0.97 scale,
-  and everything else stays under 200 ms and gated on reduced-motion.
+  (`crates/app/ui/DESIGN.md`): a launcher-class instrument rather than a page.
+  The chrome is neutral graphite and true white with one cobalt accent
+  (`#2F5FE3` light, `#7AA2FF` dark), one system sans, mono only for paths and
+  numbers, 12px panels — plus the interaction rules the window follows:
+  keyboard actions never animate, hovers change color only, presses answer
+  with a 0.97 scale, and everything else stays under 200 ms and gated on
+  reduced-motion.
 - `dev-mock.js`, a stand-in for the Tauri IPC that exists only in a plain
   browser (inert under the real app), mirroring the payload shapes in
   `engine.rs`. It exists because every QA round correctly noted that the
@@ -138,23 +140,30 @@ releases begin.
 
 ### Changed
 
-- Result rows: image hits lead with a 44 px square thumbnail cropped to one
-  alignment, documents keep their kind glyph. The preview paints the cached
+- Results: image hits are a gallery of 4:3 tiles, each picture contained so
+  the part that matched is never cropped, the strongest carrying a Best match
+  chip and the selection ring drawn outside the frame. Documents keep a dense
+  row — 40 px lead tile with the kind glyph, name, mono folder, arm chips and
+  a two-line snippet with accent match runs. The preview paints the cached
   tile first and then swaps in the full file, so the pane is a picture from
-  the first frame. The rail carries an icon beside each view; the result list
-  is one tab stop with a roving tabindex and `aria-activedescendant`; empty
-  states name their cause and offer the next action. Selection reads as a
-  background wash and an accent file name, with no coloured edge.
+  the first frame. The rail is icon-only; the result list is one tab stop with
+  a roving tabindex and `aria-activedescendant`; empty states name their cause
+  and offer the next action. Selection reads as a background wash and an
+  accent file name, with no coloured edge.
 - The website is a proof-first page: every claim carries a measurement or says
   it does not exist yet. A demo section holds a captioned placeholder at the
   exact path the real recording will take, the hero's result grid is an
   interactive illustration labelled as one, and the measured block keeps the
   50k target that was missed beside the ones that were met.
 
-- The window adopts the website's brand palette and type stacks, replacing
-  its ad-hoc warm scheme; they are one product now. Scrollbars are quiet
-  (thin, hairline thumb), `::selection` gets the accent wash, and the dark
-  theme keeps the same structure with a lifted accent.
+- The window's palette now deliberately parts with the website's: the site is
+  the publication, the app is the instrument, so the chrome is neutral
+  graphite and true white and the content carries every bit of colour. One
+  cobalt accent marks selection, matches, the primary action, focus and live
+  state, and nothing else; the mark is four rounded tiles in a 2×2 mosaic,
+  three ink and one accent. Scrollbars are quiet (thin, hairline thumb),
+  `::selection` gets the accent wash, and the dark theme keeps the same
+  structure with a lifted accent.
 - The search readout moved out of the input — where it fought the query for
   the line — into a mono status line under the bar: results, total wall
   time, engine time, arms, reserved at one line so the list never jumps.

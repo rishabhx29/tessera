@@ -18,7 +18,7 @@
   badge.textContent = "mock";
   badge.style.cssText =
     "position:fixed;right:8px;bottom:8px;z-index:9999;padding:2px 8px;" +
-    "border-radius:999px;background:#59554E;color:#FAF9F5;font:600 10px/1.6" +
+    "border-radius:999px;background:#3B424E;color:#ECF0F5;font:600 10px/1.6" +
     " ui-monospace,Consolas,monospace;letter-spacing:0.08em;opacity:0.75;";
   document.addEventListener("DOMContentLoaded", () => document.body.append(badge));
 
@@ -218,45 +218,66 @@
 
   const imageCache = new Map();
 
-  // A canvas-drawn stand-in screenshot, so the preview pane has real pixels
-  // to lay out during review.
+  // A canvas-drawn stand-in image, so the preview pane has real pixels to lay
+  // out during review. Photos get the scene the thumbnails use; screenshots
+  // get the document mock.
   function fakeImageBytes(path) {
     if (imageCache.has(path)) return Promise.resolve(imageCache.get(path));
     const canvas = document.createElement("canvas");
     canvas.width = 880;
     canvas.height = 560;
     const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#f6f4ef";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#e5e2d9";
-    ctx.fillRect(0, 0, canvas.width, 36);
-    ctx.fillStyle = "#c2410c";
-    ctx.beginPath();
-    ctx.arc(18, 18, 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#181715";
-    ctx.font = "600 22px system-ui, sans-serif";
-    ctx.fillText("Booking confirmation — QF-3391", 24, 84);
-    ctx.fillStyle = "#45423d";
-    ctx.font = "15px system-ui, sans-serif";
-    const lines = [
-      "Passenger  ·  R. T.",
-      "Flight     ·  QF-3391  LIS → OPO",
-      "Total due  ·  €214.60 by Nov 18",
-      "Seat       ·  14A          Gate 22",
-    ];
-    lines.forEach((line, index) => ctx.fillText(line, 24, 130 + index * 30));
-    ctx.fillStyle = "#fff7ed";
-    ctx.fillRect(24, 270, 480, 130);
-    ctx.strokeStyle = "#c2410c";
-    ctx.strokeRect(24, 270, 480, 130);
-    ctx.fillStyle = "#9a3412";
-    ctx.font = "600 14px ui-monospace, Consolas, monospace";
-    ctx.fillText("PAYMENT RECEIPT — 2026-11-05", 40, 300);
-    ctx.fillStyle = "#59554e";
-    ctx.fillText("airline · invoice · €214.60", 40, 326);
-    ctx.fillStyle = "#d1cdc0";
-    ctx.fillRect(24, 440, 832, 1);
+    if (/IMG_/i.test(path)) {
+      const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      sky.addColorStop(0, "#cfe3f0");
+      sky.addColorStop(0.55, "#e9dcc0");
+      sky.addColorStop(1, "#7d8f5a");
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#f3e2b8";
+      ctx.beginPath();
+      ctx.arc(canvas.width * 0.76, canvas.height * 0.28, 58, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(70, 80, 45, 0.85)";
+      ctx.beginPath();
+      ctx.ellipse(canvas.width * 0.4, canvas.height * 0.72, 128, 66, 0.1, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(canvas.width * 0.25, canvas.height * 0.62, 48, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = "#f8f9fb";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#e6e9ee";
+      ctx.fillRect(0, 0, canvas.width, 36);
+      ctx.fillStyle = "#2f5fe3";
+      ctx.beginPath();
+      ctx.arc(18, 18, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#101318";
+      ctx.font = "600 22px system-ui, sans-serif";
+      ctx.fillText("Booking confirmation — QF-3391", 24, 84);
+      ctx.fillStyle = "#3b424e";
+      ctx.font = "15px system-ui, sans-serif";
+      const lines = [
+        "Passenger  ·  R. T.",
+        "Flight     ·  QF-3391  LIS → OPO",
+        "Total due  ·  €214.60 by Nov 18",
+        "Seat       ·  14A          Gate 22",
+      ];
+      lines.forEach((line, index) => ctx.fillText(line, 24, 130 + index * 30));
+      ctx.fillStyle = "#edf2fe";
+      ctx.fillRect(24, 270, 480, 130);
+      ctx.strokeStyle = "#2f5fe3";
+      ctx.strokeRect(24, 270, 480, 130);
+      ctx.fillStyle = "#1e4bc8";
+      ctx.font = "600 14px ui-monospace, Consolas, monospace";
+      ctx.fillText("PAYMENT RECEIPT — 2026-11-05", 40, 300);
+      ctx.fillStyle = "#5a6270";
+      ctx.fillText("airline · invoice · €214.60", 40, 326);
+      ctx.fillStyle = "#cbd1da";
+      ctx.fillRect(24, 440, 832, 1);
+    }
     return new Promise((resolve) => {
       canvas.toBlob((blob) => {
         blob.arrayBuffer().then((buffer) => {
@@ -301,25 +322,25 @@
     // A screenshot: window chrome, a title, and a small chart, so thumbnail
     // rows read as pictures at 44 px rather than as generic documents.
     const palettes = [
-      ["#c2410c", "#fde4d8"],
-      ["#3f6f8a", "#dceaf1"],
-      ["#5d7a3f", "#e4ecda"],
+      ["#2f5fe3", "#e8eefc"],
+      ["#3f6f8a", "#e1edf3"],
+      ["#4d6b52", "#e6ede6"],
     ];
     let hash = 0;
     for (const ch of path) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
     const [ink, wash] = palettes[hash % palettes.length];
-    ctx.fillStyle = "#f6f4ef";
+    ctx.fillStyle = "#f8f9fb";
     ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = "#e5e2d9";
+    ctx.fillStyle = "#e6e9ee";
     ctx.fillRect(0, 0, width, 26);
     ctx.fillStyle = ink;
     ctx.beginPath();
     ctx.arc(14, 13, 4, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = "#181715";
+    ctx.fillStyle = "#101318";
     ctx.font = "600 16px system-ui, sans-serif";
     ctx.fillText("Booking confirmation — QF-3391", 18, 56);
-    ctx.fillStyle = "#45423d";
+    ctx.fillStyle = "#3b424e";
     ctx.font = "11px system-ui, sans-serif";
     for (let index = 0; index < 3; index += 1) {
       const y = 76 + index * 16;

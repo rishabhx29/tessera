@@ -10,20 +10,25 @@
     <div id="app" data-view="search">
       <aside class="rail" aria-label="Sections">
         <div class="brand" aria-label="Tessera">
-          <span class="brand-mark" aria-hidden="true">T</span>
+          <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="2" y="2" width="9" height="9" rx="2.6" />
+            <rect x="13" y="2" width="9" height="9" rx="2.6" />
+            <rect x="2" y="13" width="9" height="9" rx="2.6" />
+            <rect class="mark-accent" x="13" y="13" width="9" height="9" rx="2.6" />
+          </svg>
           <span class="brand-name">Tessera</span>
         </div>
         <nav class="rail-nav">
-          <button class="rail-item" data-view="search" aria-label="Search" aria-keyshortcuts="Control+1" aria-current="page">
+          <button class="rail-item" data-view="search" aria-label="Search" aria-keyshortcuts="Control+1" aria-current="page" title="Search (Ctrl 1)">
             <svg class="rail-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5"></circle><path d="M13.2 13.2 17.5 17.5"></path></svg>
             <span>Search</span><kbd>Ctrl 1</kbd>
           </button>
-          <button class="rail-item" data-view="activity" aria-label="Activity" aria-keyshortcuts="Control+2">
+          <button class="rail-item" data-view="activity" aria-label="Activity" aria-keyshortcuts="Control+2" title="Activity (Ctrl 2)">
             <svg class="rail-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10h3.2L8 4.5l3.7 11L13.5 10h4"></path></svg>
             <span>Activity</span>
             <span class="rail-end"><kbd>Ctrl 2</kbd><span class="dot" id="activity-dot" aria-hidden="true" hidden></span></span>
           </button>
-          <button class="rail-item" data-view="settings" aria-label="Settings" aria-keyshortcuts="Control+3">
+          <button class="rail-item" data-view="settings" aria-label="Settings" aria-keyshortcuts="Control+3" title="Settings (Ctrl 3)">
             <svg class="rail-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 6h13M3.5 10h13M3.5 14h13"></path><circle cx="7.5" cy="6" r="1.7"></circle><circle cx="12" cy="10" r="1.7"></circle><circle cx="6.5" cy="14" r="1.7"></circle></svg>
             <span>Settings</span><kbd>Ctrl 3</kbd>
           </button>
@@ -70,19 +75,13 @@
           </div>
           <div class="results" id="results" role="listbox" aria-label="Results" tabindex="-1"></div>
           <div class="home" id="home" hidden>
-            <svg class="home-mark" viewBox="0 0 44 44" aria-hidden="true">
-              <g>
-                <rect x="2" y="2" width="10" height="10" rx="3" />
-                <rect x="17" y="2" width="10" height="10" rx="3" />
-                <rect x="32" y="2" width="10" height="10" rx="3" />
-                <rect x="2" y="17" width="10" height="10" rx="3" />
-                <rect class="mark-accent" x="17" y="17" width="10" height="10" rx="3" />
-                <rect x="32" y="17" width="10" height="10" rx="3" />
-                <rect x="2" y="32" width="10" height="10" rx="3" />
-                <rect x="17" y="32" width="10" height="10" rx="3" />
-                <rect x="32" y="32" width="10" height="10" rx="3" />
-              </g>
+            <svg class="home-mark" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="2" y="2" width="9" height="9" rx="2.6" />
+              <rect x="13" y="2" width="9" height="9" rx="2.6" />
+              <rect x="2" y="13" width="9" height="9" rx="2.6" />
+              <rect class="mark-accent" x="13" y="13" width="9" height="9" rx="2.6" />
             </svg>
+            <p class="home-title">Find it again.</p>
             <p class="home-line">
               One search bar for everything the file system can't search — the
               words inside screenshots and documents, and what pictures show.

@@ -1,62 +1,77 @@
-/* Tessera's shell: a quiet, keyboard-first search surface.
-   The tokens are the website's brand (website/DESIGN.md): warm paper, ink,
-   one terracotta accent, hairline rules. Motion follows the launcher rules in
-   DESIGN.md — keyboard actions never animate; color changes do. */
+/* Tessera's window: a quiet, keyboard-first search surface.
+   Neutral graphite chrome on true white, one cobalt accent that only ever
+   means selected, matched or act-here. Motion follows DESIGN.md: keyboard
+   actions never animate; chrome answers hover and press instantly. */
 
 :root {
-  --canvas: #faf9f5;
+  color-scheme: light;
+
+  --canvas: #f6f7f9;
   --surface: #ffffff;
-  --surface-2: #f3f1eb;
-  --inset: #ebe8e0;
-  --ink: #181715;
-  --ink-2: #45423d;
-  --muted: #59554e;
-  --faint: #6b665e;
-  --line: #e5e2d9;
-  --line-strong: #d1cdc0;
-  --accent: #c2410c;
-  --accent-strong: #9a3412;
-  --accent-soft: #fff7ed;
-  --ok: #3d6b35;
+  --surface-2: #eef0f3;
+  --inset: #e7eaef;
+
+  --ink: #101318;
+  --ink-2: #3b424e;
+  --muted: #5a6270;
+  --faint: #636c7a;
+
+  --line: #e3e6eb;
+  --line-strong: #cbd1da;
+
+  --accent: #2f5fe3;
+  --accent-strong: #1e4bc8;
+  --accent-soft: #edf2fe;
+
+  --ok: #2c6e46;
   --warn: #8a5a17;
-  --bad: #9b2c20;
-  --shadow-tile: 0 1px 3px rgb(24 23 21 / 5%), 0 1px 2px rgb(24 23 21 / 3%);
-  --shadow-float: 0 1px 2px rgb(24 23 21 / 6%), 0 10px 30px -10px rgb(24 23 21 / 12%);
-  --radius: 10px;
-  --radius-sm: 6px;
-  --rail: 216px;
-  --preview: minmax(320px, 34vw);
-  --serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
-  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI",
+  --bad: #b3261e;
+
+  --shadow-sm: 0 1px 2px rgb(16 19 24 / 7%);
+  --shadow-float: 0 2px 6px rgb(16 19 24 / 8%), 0 8px 24px -8px rgb(16 19 24 / 22%);
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --rail: 208px;
+  --preview: minmax(340px, 32vw);
+
+  --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont,
     Roboto, "Helvetica Neue", Arial, sans-serif;
-  --mono: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, Consolas, monospace;
+  --mono: ui-monospace, "Cascadia Code", "Cascadia Mono", "Source Code Pro", Menlo,
+    Consolas, monospace;
+
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --dur-1: 120ms;
-  --dur-2: 200ms;
-  color-scheme: light;
+  --dur-2: 180ms;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --canvas: #16140f;
-    --surface: #1d1a14;
-    --surface-2: #242019;
-    --inset: #12100c;
-    --ink: #f2ece0;
-    --ink-2: #d6cdbc;
-    --muted: #9c9385;
-    --faint: #948b7e;
-    --line: #302b22;
-    --line-strong: #464035;
-    --accent: #e08a6d;
-    --accent-strong: #f0a184;
-    --accent-soft: #3a241d;
-    --ok: #8fbc84;
-    --warn: #d9ac63;
-    --bad: #e2907f;
-    --shadow-tile: 0 1px 2px rgb(0 0 0 / 30%);
-    --shadow-float: 0 1px 2px rgb(0 0 0 / 40%), 0 10px 30px rgb(0 0 0 / 35%);
     color-scheme: dark;
+
+    --canvas: #0b0d11;
+    --surface: #111419;
+    --surface-2: #191d24;
+    --inset: #0e1116;
+
+    --ink: #ecf0f5;
+    --ink-2: #c2c9d4;
+    --muted: #8e97a6;
+    --faint: #8b94a3;
+
+    --line: #222730;
+    --line-strong: #333a47;
+
+    --accent: #7aa2ff;
+    --accent-strong: #9bbaff;
+    --accent-soft: #16233f;
+
+    --ok: #7ad3a0;
+    --warn: #e6b566;
+    --bad: #f2938d;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 35%);
+    --shadow-float: 0 2px 6px rgb(0 0 0 / 40%), 0 8px 24px -8px rgb(0 0 0 / 55%);
   }
 }
 
@@ -85,11 +100,11 @@ input {
 }
 
 kbd {
-  font: 11px/1 var(--mono);
+  font: 10.5px/1 var(--mono);
   color: var(--faint);
   border: 1px solid var(--line);
   border-bottom-color: var(--line-strong);
-  border-radius: 4px;
+  border-radius: 5px;
   padding: 2px 5px;
   background: var(--surface);
 }
@@ -98,18 +113,18 @@ code {
   font: 12px/1.2 var(--mono);
   background: var(--surface-2);
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 5px;
   padding: 1px 4px;
 }
 
 ::selection {
-  background: color-mix(in oklab, var(--accent) 20%, transparent);
+  background: color-mix(in oklab, var(--accent) 22%, transparent);
 }
 
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 3px;
+  border-radius: 4px;
 }
 
 /* Quiet scrollbars: thin, hairline track, a thumb that darkens on hover.
@@ -160,8 +175,8 @@ code {
 .rail {
   display: flex;
   flex-direction: column;
-  gap: 22px;
-  padding: 22px 14px 16px;
+  gap: 24px;
+  padding: 20px 14px 14px;
   border-right: 1px solid var(--line);
   background: var(--canvas);
   -webkit-app-region: drag;
@@ -178,20 +193,28 @@ code {
   padding: 0 8px;
 }
 
+/* Three tiles and the one that was found: a tessera is a mosaic piece, and
+   the accent tile is the result. It reads at 20px and at 40px. */
 .brand-mark {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  background: var(--ink);
-  color: var(--canvas);
-  font: 600 15px/1 var(--serif);
+  flex: none;
+  width: 20px;
+  height: 20px;
+  color: var(--ink);
+}
+
+.brand-mark rect,
+.home-mark rect {
+  fill: currentColor;
+}
+
+.brand-mark .mark-accent,
+.home-mark .mark-accent {
+  fill: var(--accent);
 }
 
 .brand-name {
-  font: 600 17px/1 var(--serif);
-  letter-spacing: -0.01em;
+  font: 600 16px/1 var(--sans);
+  letter-spacing: -0.02em;
 }
 
 .rail-nav {
@@ -252,7 +275,6 @@ code {
   }
 
   .example:hover {
-    border-color: var(--line-strong);
     background: var(--surface-2);
   }
 
@@ -261,9 +283,8 @@ code {
   }
 
   button.primary:hover {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: var(--canvas);
+    background: var(--accent-strong);
+    border-color: var(--accent-strong);
   }
 
   button.ghost:hover {
@@ -272,7 +293,25 @@ code {
 
   button.danger-button:hover {
     background: var(--bad);
-    color: var(--surface);
+    border-color: var(--bad);
+    color: var(--canvas);
+  }
+
+  .tile:hover .tile-thumb {
+    border-color: var(--line-strong);
+  }
+
+  .tile:hover .tile-name {
+    color: var(--ink);
+  }
+
+  .result:hover {
+    background: var(--surface-2);
+  }
+
+  .filter:hover:not(:disabled):not([aria-pressed="true"]) {
+    background: color-mix(in oklab, var(--ink) 5%, transparent);
+    color: var(--ink);
   }
 }
 
@@ -284,7 +323,7 @@ code {
   padding: 10px 8px 0;
   border-top: 1px solid var(--line);
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11.5px;
 }
 
 .engine-dot,
@@ -326,7 +365,7 @@ code {
   flex-direction: column;
   min-height: 0;
   height: 100%;
-  padding: 26px 30px;
+  padding: 24px 28px;
   overflow-y: auto;
 }
 
@@ -343,25 +382,24 @@ code {
 }
 
 .view-sub {
-  margin: 6px 0 0;
+  margin: 5px 0 0;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.5;
   max-width: 56ch;
 }
 
 h1 {
   margin: 0;
-  font: 600 25px/1.15 var(--serif);
-  letter-spacing: -0.015em;
+  font: 600 24px/1.2 var(--sans);
+  letter-spacing: -0.02em;
+  text-wrap: balance;
 }
 
 h2 {
   margin: 0 0 12px;
-  font: 600 11px/1.4 var(--mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
+  font: 600 13px/1.4 var(--sans);
+  color: var(--ink);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -374,18 +412,22 @@ h2 {
    states are short enough to fit even at the minimum window height. */
 #view-search {
   overflow: hidden;
+  /* A launcher bar does not get better when it spans the whole monitor, and
+     long snippet lines get worse. Past 1040px the extra width becomes gutter
+     instead of stretch. */
+  padding-inline: max(30px, calc((100% - 1040px) / 2));
 }
 
 .search-bar {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex: none;
   padding: 0 14px;
   height: 48px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: var(--shadow-tile);
   /* Focus is a keyboard action: it answers instantly, like every other
      keyboard action in this window. Color only, no movement. */
   transition: border-color var(--dur-1) ease;
@@ -393,17 +435,21 @@ h2 {
 
 .search-bar:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 16%, transparent), var(--shadow-tile);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 14%, transparent);
 }
 
 .search-icon {
-  width: 18px;
-  height: 18px;
+  width: 17px;
+  height: 17px;
   flex: none;
   fill: none;
   stroke: var(--faint);
   stroke-width: 1.6;
   stroke-linecap: round;
+}
+
+.search-bar:focus-within .search-icon {
+  stroke: var(--accent);
 }
 
 #query {
@@ -414,6 +460,10 @@ h2 {
   background: transparent;
   font-size: 15px;
   padding: 0;
+}
+
+#query:focus-visible {
+  outline: none;
 }
 
 #query::placeholder {
@@ -435,26 +485,33 @@ h2 {
   align-items: baseline;
   gap: 6px;
   min-height: 18px;
-  margin: 8px 2px 0;
+  margin: 9px 2px 0;
   font: 11px/1.4 var(--mono);
   font-variant-numeric: tabular-nums;
   color: var(--faint);
 }
 
 .search-meta .sep {
-  opacity: 0.6;
+  opacity: 0.55;
 }
 
 .search-meta .pending {
   color: var(--muted);
 }
 
-/* The kinds an answer holds. All keeps both, Images and Docs narrow it. */
+/* The kinds an answer holds. One segmented track; the pressed segment is the
+   raised one, and the accent appears only in its count. */
 .filters {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin: 10px 2px 0;
+  gap: 2px;
+  flex: none;
+  align-self: flex-start;
+  margin: 8px 0 0;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
 }
 
 .filters[hidden] {
@@ -465,10 +522,10 @@ h2 {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 28px;
+  min-height: 26px;
   padding: 3px 11px;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: 7px;
   background: transparent;
   color: var(--muted);
   font-size: 12px;
@@ -480,7 +537,7 @@ h2 {
   border-color: var(--line);
   background: var(--surface);
   color: var(--ink);
-  box-shadow: var(--shadow-tile);
+  box-shadow: var(--shadow-sm);
 }
 
 .filter-count {
@@ -494,15 +551,8 @@ h2 {
 }
 
 .filter:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: default;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .filter:hover:not(:disabled):not([aria-pressed="true"]) {
-    background: var(--surface-2);
-    color: var(--ink);
-  }
 }
 
 .notes {
@@ -510,21 +560,35 @@ h2 {
   flex-wrap: wrap;
   gap: 8px;
   min-height: 0;
-  margin: 10px 2px 0;
+  margin: 10px 0 0;
 }
 
 .notes:empty {
   display: none;
 }
 
+/* A note is a bordered message with a status dot, not a side stripe: the
+   border says "system message", the colour says which kind. */
 .note {
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--warn);
+  position: relative;
+  border: 1px solid color-mix(in oklab, var(--warn) 30%, var(--line));
   border-radius: var(--radius-sm);
-  background: var(--surface);
+  background: color-mix(in oklab, var(--warn) 7%, var(--surface));
   color: var(--ink-2);
-  padding: 7px 10px;
+  padding: 7px 11px 7px 26px;
   font-size: 12px;
+}
+
+.note::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-radius: 50%;
+  background: var(--warn);
 }
 
 /* An empty note box reads as a broken control; say nothing instead. */
@@ -533,16 +597,18 @@ h2 {
 }
 
 .note.error {
-  border-left-color: var(--bad);
+  border-color: color-mix(in oklab, var(--bad) 30%, var(--line));
+  background: color-mix(in oklab, var(--bad) 7%, var(--surface));
+}
+
+.note.error::before {
+  background: var(--bad);
 }
 
 .results {
   flex: 1 1 auto;
   min-height: 0;
-  margin-top: 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
+  margin-top: 8px;
   overflow: hidden auto;
   overscroll-behavior: contain;
 }
@@ -556,15 +622,17 @@ h2 {
    column, so one sequence still holds both shapes. */
 .results.gallery {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
   gap: 16px 12px;
-  padding: 14px 12px;
+  /* The selection ring is drawn 4px outside the thumb; the scroller clips at
+     its padding edge, so the gutter must hold the ring on the first and last
+     column. */
+  padding: 6px 6px 20px;
   align-content: start;
 }
 
 .results.gallery .result {
   grid-column: 1 / -1;
-  padding-inline: 4px;
 }
 
 /* An image hit is the picture, not a line about it. The tile keeps the source
@@ -573,11 +641,11 @@ h2 {
 .tile {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 8px;
   min-width: 0;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: 10px;
   background: transparent;
   text-align: left;
   cursor: pointer;
@@ -599,6 +667,7 @@ h2 {
 
 .tile[aria-selected="true"] .tile-name {
   color: var(--accent-strong);
+  font-weight: 500;
 }
 
 /* The ring sits outside the picture with a gap: the image is never tinted or
@@ -606,22 +675,12 @@ h2 {
 .tile[aria-selected="true"] .tile-thumb {
   border-color: color-mix(in oklab, var(--accent) 55%, var(--line));
   outline: 2px solid var(--accent);
-  outline-offset: 3px;
+  outline-offset: 2px;
 }
 
 .tile:focus-visible {
   outline-offset: 4px;
-  border-radius: 8px;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .tile:hover .tile-thumb {
-    border-color: var(--line-strong);
-  }
-
-  .tile:hover .tile-name {
-    color: var(--ink);
-  }
+  border-radius: 10px;
 }
 
 /* The strongest image in the answer stays marked while the selection moves,
@@ -631,13 +690,14 @@ h2 {
    paint over the preview pane. */
 .tile-best {
   position: absolute;
-  top: 7px;
-  left: 7px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--canvas);
-  font: 600 10px/1.5 var(--sans);
+  top: 8px;
+  left: 8px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+  font: 500 10px/1.5 var(--sans);
   letter-spacing: 0.01em;
   pointer-events: none;
 }
@@ -651,16 +711,16 @@ h2 {
    lead | snippet (spans to the right edge) */
 .result {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
   grid-template-areas:
     "lead name badges"
     "lead folder badges"
     "lead snippet snippet";
   align-items: start;
-  column-gap: 14px;
+  column-gap: 13px;
   row-gap: 1px;
   width: 100%;
-  padding: 8px 14px;
+  padding: 9px 10px;
   border: 0;
   border-bottom: 1px solid var(--line);
   background: transparent;
@@ -672,17 +732,11 @@ h2 {
   border-bottom: 0;
 }
 
-/* The outline would be clipped by the list's rounded, scrolling box; drawn
-   just inside the row it stays visible on every edge. */
+/* The outline would be clipped by the list's scrolling box; drawn just inside
+   the row it stays visible on every edge. */
 .result:focus-visible {
   outline-offset: -2px;
   border-radius: 0;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .result:hover {
-    background: var(--surface-2);
-  }
 }
 
 .result[aria-selected="true"] {
@@ -698,14 +752,17 @@ h2 {
   align-self: center;
   display: flex;
   align-items: center;
-  width: 44px;
-  height: 44px;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 9px;
+  background: var(--surface-2);
 }
 
 .result-icon {
   width: 18px;
   height: 18px;
-  color: var(--faint);
+  color: var(--muted);
 }
 
 .result[aria-selected="true"] .result-icon {
@@ -725,7 +782,7 @@ h2 {
   display: grid;
   place-items: center;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--inset);
   color: var(--faint);
   overflow: hidden;
@@ -799,8 +856,8 @@ h2 {
 
 .badge {
   border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 1.5px 8px;
+  border-radius: 6px;
+  padding: 1.5px 7px;
   font-size: 10.5px;
   font-weight: 500;
   color: var(--muted);
@@ -808,7 +865,10 @@ h2 {
   white-space: nowrap;
 }
 
+/* Arm badges say why a file surfaced; they get the flat chip, not the outline,
+   so the row still has only one raised element: the selection. */
 .badge.arm {
+  border-color: transparent;
   background: var(--surface-2);
   color: var(--ink-2);
 }
@@ -832,7 +892,7 @@ h2 {
 mark {
   background: transparent;
   color: var(--accent);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 /* The three states of an answered (or unanswered) box: the home state that
@@ -849,34 +909,37 @@ mark {
 }
 
 .home-mark {
-  width: 44px;
-  height: 44px;
-  margin-bottom: 22px;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 20px;
+  color: var(--ink);
 }
 
-.home-mark rect {
-  fill: color-mix(in oklab, var(--ink) 14%, transparent);
-}
-
-.home-mark .mark-accent {
-  fill: var(--accent);
+.home-title {
+  margin: 0 0 8px;
+  font: 600 21px/1.25 var(--sans);
+  letter-spacing: -0.02em;
+  color: var(--ink);
 }
 
 .home-line,
 .first-run p {
-  color: var(--ink-2);
+  color: var(--muted);
   font-size: 14px;
   line-height: 1.6;
-  margin: 0 auto 26px;
-  max-width: 46ch;
+  margin: 0 auto 24px;
+  max-width: 44ch;
 }
 
 .home-examples {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  max-width: 480px;
+  max-width: 460px;
   margin: 0 auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
   text-align: left;
 }
 
@@ -884,21 +947,24 @@ mark {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: 44px;
-  padding: 9px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
+  min-height: 46px;
+  padding: 10px 14px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
   cursor: pointer;
   text-align: left;
+}
+
+.example:first-child {
+  border-top: 0;
 }
 
 .example .tag {
   flex: none;
   width: 58px;
-  font: 600 10px/1.4 var(--mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font: 500 11px/1.4 var(--sans);
   color: var(--faint);
 }
 
@@ -910,17 +976,17 @@ mark {
   white-space: nowrap;
 }
 
-.example .q {
-  transition: color var(--dur-1) ease;
-}
-
 .first-run h1 {
-  font-size: 30px;
-  margin-bottom: 12px;
+  font-size: 27px;
+  margin-bottom: 10px;
 }
 
 .first-run {
-  padding-top: clamp(60px, 17vh, 160px);
+  padding-top: clamp(56px, 16vh, 150px);
+}
+
+.first-run .primary {
+  margin-top: 2px;
 }
 
 .empty {
@@ -928,7 +994,7 @@ mark {
 }
 
 .empty-title {
-  font: 600 20px/1.35 var(--serif);
+  font: 600 18px/1.35 var(--sans);
   letter-spacing: -0.01em;
   margin: 0 0 6px;
   color: var(--ink);
@@ -941,7 +1007,7 @@ mark {
 }
 
 .empty .ghost {
-  margin-top: 20px;
+  margin-top: 18px;
 }
 
 .dim {
@@ -962,17 +1028,21 @@ mark {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
-  padding: 16px 18px 18px;
+  padding: 18px 20px 20px;
 }
 
 .card.danger {
-  border-color: color-mix(in oklab, var(--bad) 35%, var(--line));
+  border-color: color-mix(in oklab, var(--bad) 30%, var(--line));
 }
 
+/* The label sizes itself; only the value column is allowed to give way. With
+   `1fr auto`, one long path shrank the labels and broke "Image vectors" over
+   two lines. */
 .facts {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: max-content minmax(0, 1fr);
   gap: 6px 14px;
+  align-items: baseline;
   margin: 0;
   font-size: 12.5px;
 }
@@ -984,6 +1054,10 @@ mark {
 .facts dd {
   margin: 0;
   text-align: right;
+  /* Counts, sizes and index paths are data; the mono face makes them line up
+     and marks them as machine values, per the type rule. */
+  font: 11px/1.55 var(--mono);
+  color: var(--ink-2);
   font-variant-numeric: tabular-nums;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -1044,13 +1118,13 @@ mark {
 
 .pill.live {
   border-color: transparent;
-  background: color-mix(in oklab, var(--ok) 18%, var(--surface));
+  background: color-mix(in oklab, var(--ok) 14%, var(--surface));
   color: var(--ok);
 }
 
 .pill.paused {
   border-color: transparent;
-  background: color-mix(in oklab, var(--warn) 20%, var(--surface));
+  background: color-mix(in oklab, var(--warn) 16%, var(--surface));
   color: var(--warn);
 }
 
@@ -1066,7 +1140,7 @@ mark {
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  background: var(--canvas);
   color: var(--ink-2);
   font: 11px/1.55 var(--mono);
   white-space: pre-wrap;
@@ -1089,8 +1163,6 @@ mark {
   color: var(--muted);
   font-weight: 500;
   font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   padding: 0 6px 6px 0;
 }
 
@@ -1137,26 +1209,29 @@ button.ghost,
 button.danger-button {
   min-height: 32px;
   border-radius: var(--radius-sm);
-  padding: 7px 12px;
+  padding: 7px 13px;
   border: 1px solid var(--line-strong);
   background: var(--surface);
   cursor: pointer;
 }
 
 button.primary {
-  background: var(--ink);
-  border-color: var(--ink);
+  background: var(--accent);
+  border-color: var(--accent);
+  /* The accent is dark in light mode and light in dark mode, so the label
+     follows the page colour rather than staying white. */
   color: var(--canvas);
   font-weight: 600;
 }
 
 button.danger-button {
-  border-color: var(--bad);
+  background: transparent;
+  border-color: color-mix(in oklab, var(--bad) 55%, var(--line));
   color: var(--bad);
 }
 
 button:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: default;
 }
 
@@ -1180,7 +1255,7 @@ button:disabled {
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
-  padding: 18px 18px 12px;
+  padding: 18px 20px 14px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -1194,8 +1269,7 @@ button:disabled {
 .preview-head h2 {
   margin: 0;
   font: 600 15px/1.35 var(--sans);
-  letter-spacing: -0.005em;
-  text-transform: none;
+  letter-spacing: -0.01em;
   color: var(--ink);
   overflow-wrap: anywhere;
 }
@@ -1216,7 +1290,7 @@ button:disabled {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 16px 18px;
+  padding: 16px 20px;
 }
 
 .preview-body img {
@@ -1227,7 +1301,7 @@ button:disabled {
   margin: 0 auto 18px;
   padding: 10px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--inset);
 }
 
@@ -1249,7 +1323,7 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 18px;
+  padding: 12px 20px;
   border-top: 1px solid var(--line);
   font: 11px/1.4 var(--mono);
   font-variant-numeric: tabular-nums;
@@ -1272,6 +1346,11 @@ button:disabled {
   font-size: 12.5px;
 }
 
+.toast[data-kind="error"] {
+  background: var(--bad);
+  color: var(--canvas);
+}
+
 .toast[hidden] {
   display: none;
 }
@@ -1283,12 +1362,15 @@ button:disabled {
   /* 64px cannot hold a word: the rail becomes icons, the accessible name
      stays on the button via aria-label, and the tooltip still says the name. */
   .rail {
-    padding: 18px 8px 12px;
+    padding: 16px 8px 12px;
+  }
+  .brand {
+    justify-content: center;
+    padding: 0;
   }
   .brand-name,
   .rail-item > span:not(.rail-end),
-  .rail-item kbd,
-  #engine-label {
+  .rail-item kbd {
     display: none;
   }
   .rail-icon {
@@ -1302,6 +1384,21 @@ button:disabled {
     gap: 6px;
     padding: 8px;
   }
+  /* The engine state must not collapse to a coloured dot: there is room for
+     the words under it, wrapped, at the bottom of the rail. */
+  .rail-foot {
+    flex-direction: column;
+    gap: 4px;
+    justify-content: center;
+    padding: 10px 0 0;
+  }
+  #engine-label {
+    max-width: 52px;
+    font-size: 9.5px;
+    line-height: 1.25;
+    text-align: center;
+    overflow-wrap: anywhere;
+  }
   #app.preview-open {
     grid-template-columns: 64px minmax(0, 1fr);
   }
@@ -1310,20 +1407,39 @@ button:disabled {
     inset: 0 0 0 64px;
   }
   .view {
-    padding: 18px;
+    padding: 16px;
+  }
+  /* The ID-level measure on the search view outranks the shorthand above. */
+  #view-search {
+    padding-inline: 16px;
   }
 }
 
-/* Motion, all of it in one place. Every rule here is gated on
-   no-preference: reduced motion keeps the color changes and loses the
-   movement. What animates: color transitions on interactive elements, the
-   press answer, the toast. What never animates: keyboard actions, view
-   switches, search results (they re-render per keystroke). */
+/* Motion, all of it in one place. What animates: hover colour on chrome,
+   the press answer, a thumbnail resolving, the toast. What never animates:
+   keyboard actions, view switches, result rows and tiles — selection is
+   instant at keystroke speed. Everything that moves is gated on
+   no-preference; reduced motion keeps the colour changes and loses the
+   movement. */
+
+.rail-item,
+.example,
+.filter,
+button.primary,
+button.ghost,
+button.danger-button,
+.search-bar {
+  transition:
+    background-color var(--dur-1) ease,
+    color var(--dur-1) ease,
+    border-color var(--dur-1) ease;
+}
+
 @media (prefers-reduced-motion: no-preference) {
-  .result,
-  .rail-item,
-  button,
-  .example {
+  button.primary,
+  button.ghost,
+  button.danger-button,
+  .filter {
     transition:
       background-color var(--dur-1) ease,
       color var(--dur-1) ease,
@@ -1332,10 +1448,14 @@ button:disabled {
   }
 
   /* A pressable thing answers the press — the one transform feedback a
-     high-frequency surface keeps. Result rows are buttons too; a 0.97 dip
-     reads as the list acknowledging the click. */
-  button:active {
+     high-frequency surface keeps. Result rows and tiles are excluded: a
+     full-width row dipping under the pointer reads as the list jumping. */
+  button:not(.result):not(.tile):active {
     transform: scale(0.97);
+  }
+
+  .tile:active {
+    transform: scale(0.985);
   }
 
   /* A thumbnail resolves into place: the glyph recedes and the picture
