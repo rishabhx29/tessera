@@ -20,13 +20,14 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use crate::geometry::NormBox;
 use crate::hash::LazyHash;
 use crate::index::skip::{FileFacts, FileProbe, SystemProbe};
 use crate::store::{Arm, FileState, Store};
 use crate::vectors::TextEmbedder;
 
 /// One indexed unit: a numbered chunk of extracted text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Tile {
     pub seq: u32,
     pub text: String,
@@ -34,6 +35,11 @@ pub struct Tile {
     /// 1-based, because it is what a person reads off the page ("page 4");
     /// `None` for formats without them.
     pub page: Option<u32>,
+    /// Where each line of `text` sits on the picture, when the format has one.
+    /// One entry per line, in the same order; `None` for a line with no place
+    /// on the picture (the filename line). Empty when the format has no
+    /// geometry at all.
+    pub boxes: Vec<Option<NormBox>>,
 }
 
 /// What processing one file produced.
@@ -43,7 +49,7 @@ pub struct Tile {
 /// no text layer, and filing it as failed would blame the user's file for a
 /// capability this build does not have. What each outcome becomes in the
 /// store is the loop's business; the pipeline only says which one happened.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Extraction {
     /// The file's searchable content — possibly empty, because a file with no
     /// text at all is still findable by its name.
@@ -319,11 +325,19 @@ fn with_filename(path: &Path, mut tiles: Vec<Tile>) -> Vec<Tile> {
         return tiles;
     };
     match tiles.first_mut() {
-        Some(first) => first.text = format!("{name}\n{}", first.text),
+        Some(first) => {
+            first.text = format!("{name}\n{}", first.text);
+            // The name comes before the body, so its "no place on the picture"
+            // goes before the body's boxes. Alignment survives the prepend.
+            if !first.boxes.is_empty() {
+                first.boxes.insert(0, None);
+            }
+        }
         None => tiles.push(Tile {
             seq: 0,
             text: name.to_string(),
             page: None,
+            boxes: Vec::new(),
         }),
     }
     tiles
@@ -649,6 +663,7 @@ mod tests {
             seq: 0,
             text: "hello".into(),
             page: Some(4),
+            boxes: Vec::new(),
         };
         assert_eq!(t.seq, 0);
         assert_eq!(t.text, "hello");
@@ -658,12 +673,19 @@ mod tests {
 
     #[test]
     fn filename_leads_the_first_tile() {
+        let bounds = NormBox {
+            x0: 0.1,
+            y0: 0.2,
+            x1: 0.3,
+            y1: 0.4,
+        };
         let tiles = with_filename(
             Path::new("notes/zwiebel.md"),
             vec![Tile {
                 seq: 0,
                 text: "body".into(),
                 page: Some(2),
+                boxes: vec![Some(bounds)],
             }],
         );
         assert_eq!(tiles[0].text, "zwiebel.md\nbody");
@@ -671,6 +693,11 @@ mod tests {
             tiles[0].page,
             Some(2),
             "prepending the name must not move the tile off its page"
+        );
+        assert_eq!(
+            tiles[0].boxes,
+            vec![None, Some(bounds)],
+            "the name has no place on the picture, so its box is None and the lines stay aligned"
         );
     }
 
@@ -680,6 +707,10 @@ mod tests {
         assert_eq!(tiles.len(), 1);
         assert_eq!(tiles[0].text, "photo.png.txt");
         assert_eq!(tiles[0].page, None, "a name tile belongs to no page");
+        assert!(
+            tiles[0].boxes.is_empty(),
+            "a name-only tile has no geometry to align"
+        );
     }
 
     #[test]

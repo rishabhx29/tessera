@@ -91,6 +91,7 @@ fn tiles_from_pages(pages: &[String]) -> Extraction {
                 seq: tiles.len() as u32,
                 text: chunk,
                 page: Some(index as u32 + 1),
+                boxes: Vec::new(),
             });
         }
     }

@@ -1227,6 +1227,7 @@ mod tests {
                 seq: seq as u32,
                 text: (*text).to_string(),
                 page: *page,
+                boxes: Vec::new(),
             })
             .collect();
         store

@@ -20,13 +20,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, Transaction};
 
+use crate::geometry::{boxes_from_json, boxes_to_json, NormBox};
 use crate::index::skip::{FileFacts, SkipReason};
 use crate::index::{Kind, Tile};
 use crate::vectors::Embedding;
 
 /// The schema version this engine understands. Bumping it means writing a
 /// migration; opening a future-version store must fail loudly.
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 /// The width of a SigLIP-base embedding. Pinned by the model's own output shape,
 /// so it is a constant rather than something read from a file that might be a
@@ -228,17 +229,21 @@ fn upsert_file(conn: &Connection, row: FileRow<'_>) -> Result<()> {
 type FileRowRef = (i64, String);
 
 /// One matched tile: its position in the file, the page it came from when the
-/// format has pages, and the text itself. A result needs the tile rather than
-/// a joined string because only the tile knows its page.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// format has pages, the text itself, and where each line sits on a picture.
+/// A result needs the tile rather than a joined string because only the tile
+/// knows its page and its geometry.
+#[derive(Debug, Clone, PartialEq)]
 pub struct MatchedTile {
     pub seq: u32,
     pub page: Option<u32>,
     pub text: String,
+    /// One entry per line of `text`, when the picture's geometry is known.
+    /// Empty for a format without geometry and for a row not yet backfilled.
+    pub boxes: Vec<Option<NormBox>>,
 }
 
 /// One matched file, with everything a search result needs to describe it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MatchedFile {
     pub file_id: i64,
     pub path: String,
@@ -283,6 +288,32 @@ pub(crate) struct TileRow {
     pub(crate) seq: u32,
     pub(crate) page: Option<u32>,
     pub(crate) text: String,
+    /// One entry per line of `text`, when the picture's geometry is known.
+    pub(crate) boxes: Vec<Option<NormBox>>,
+}
+
+/// One file as the window's library lists it: what it is, when it changed,
+/// and — for pictures — the size the wall lays it out by.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LibraryFile {
+    pub path: String,
+    pub kind: String,
+    /// Nanoseconds since the Unix epoch, as the last index run saw it.
+    pub mtime: i64,
+    /// The picture's own size, once read. `None` until the backfill or the
+    /// next index run fills it in.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+/// An image tile whose geometry has not been read yet — the backfill's work
+/// list. The text comes along because the pass compares it against a fresh
+/// OCR read before it trusts any boxes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingTile {
+    pub tile_id: i64,
+    pub path: String,
+    pub text: String,
 }
 
 /// What a search may consider: the `type:`, `in:`, `before:` and `after:`
@@ -308,6 +339,10 @@ pub struct FileDisplay {
     pub kind: String,
     /// The file's first tile: id, page, text. Absent for a file with no tiles.
     pub first_tile: Option<(i64, Option<u32>, String)>,
+    /// The picture's size, for the wall's layout. `None` for a document or a
+    /// picture whose header has not been read yet.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 
 /// One row for the window's empty-query state: a file with content behind it,
@@ -481,6 +516,22 @@ fn text_chars_of(tiles: &[Tile]) -> i64 {
         .sum()
 }
 
+/// The `tiles.boxes` value for one tile. A list that does not line up with the
+/// text's lines is stored as no geometry: a wrong box is worse than no box.
+fn boxes_for_store(tile: &Tile) -> String {
+    if tile.boxes.is_empty() || tile.boxes.len() == tile.text.lines().count() {
+        boxes_to_json(&tile.boxes)
+    } else {
+        boxes_to_json(&[])
+    }
+}
+
+/// A `tiles.boxes` column as boxes. A NULL — an old row the backfill has not
+/// reached — and a malformed value both mean no geometry.
+fn stored_boxes(value: Option<String>) -> Vec<Option<NormBox>> {
+    value.map(|json| boxes_from_json(&json)).unwrap_or_default()
+}
+
 /// Delete a file's tiles from the tiles table and from the FTS index.
 ///
 /// External-content FTS5 has no rows of its own to cascade: deleting a tile
@@ -616,6 +667,16 @@ impl Store {
                      COMMIT;",
                 )
                 .context("migrating schema to v7")?,
+            8 => self
+                .conn
+                .execute_batch(
+                    "BEGIN;
+                     ALTER TABLE files ADD COLUMN width INTEGER;
+                     ALTER TABLE files ADD COLUMN height INTEGER;
+                     ALTER TABLE tiles ADD COLUMN boxes TEXT;
+                     COMMIT;",
+                )
+                .context("migrating schema to v8")?,
             other => anyhow::bail!("no migration for schema version {other}"),
         }
         self.conn
@@ -761,6 +822,82 @@ impl Store {
         Ok(removed)
     }
 
+    /// Forget every row under one indexed folder: index data only. The files
+    /// on disk are untouched — that is the whole contract of this call.
+    ///
+    /// Rows are purged one at a time, because external-content FTS5 has no
+    /// cascade: the mirrored entries need the old text, and [`Store::remove_row`]
+    /// supplies it inside each file's own transaction.
+    pub fn remove_root(&self, root: &Path) -> Result<usize> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT id FROM files WHERE root = ?1 ORDER BY id")?;
+        let rows = stmt.query_map(rusqlite::params![root.to_string_lossy()], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        let ids: Vec<i64> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        for id in &ids {
+            self.remove_row(*id)?;
+        }
+        Ok(ids.len())
+    }
+
+    /// Record a picture's own size. A header read, not a decode; the wall needs
+    /// the aspect ratio before any thumbnail exists.
+    pub fn set_dimensions(&self, file_id: i64, width: u32, height: u32) -> Result<()> {
+        self.conn.execute(
+            "UPDATE files SET width = ?2, height = ?3 WHERE id = ?1",
+            rusqlite::params![file_id, width as i64, height as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Indexed pictures whose size has not been read yet: the backfill's first
+    /// work list, with the paths its header reads need.
+    pub fn image_files_missing_dimensions(&self) -> Result<Vec<(i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, path FROM files
+             WHERE status = 'indexed' AND kind = 'image'
+               AND (width IS NULL OR height IS NULL)
+             ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(anyhow::Error::from)
+    }
+
+    /// Indexed image tiles whose line geometry has never been read: the
+    /// backfill's second work list. A tile whose `boxes` is NULL predates the
+    /// geometry column; `[]` was already read and found to have none.
+    pub fn image_tiles_missing_boxes(&self) -> Result<Vec<PendingTile>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.id, f.path, t.text
+             FROM tiles t JOIN files f ON f.id = t.file_id
+             WHERE f.status = 'indexed' AND f.kind = 'image' AND t.boxes IS NULL
+             ORDER BY t.id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(PendingTile {
+                tile_id: row.get(0)?,
+                path: row.get(1)?,
+                text: row.get(2)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(anyhow::Error::from)
+    }
+
+    /// Record one tile's line geometry, or `[]` when it has none.
+    pub fn set_tile_boxes(&self, tile_id: i64, boxes: &[Option<NormBox>]) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tiles SET boxes = ?2 WHERE id = ?1",
+            rusqlite::params![tile_id, boxes_to_json(boxes)],
+        )?;
+        Ok(())
+    }
+
     /// Upsert one file and replace its tiles, in one transaction. Idempotent:
     /// re-running on an already-indexed file leaves exactly one set of rows.
     pub fn index_file(
@@ -796,8 +933,14 @@ impl Store {
         purge_tiles(&tx, file_id)?;
         for tile in tiles {
             tx.execute(
-                "INSERT INTO tiles(file_id, seq, page, text) VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![file_id, tile.seq, tile.page, tile.text],
+                "INSERT INTO tiles(file_id, seq, page, text, boxes) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    file_id,
+                    tile.seq,
+                    tile.page,
+                    tile.text,
+                    boxes_for_store(tile)
+                ],
             )?;
             let tile_id = tx.last_insert_rowid();
             tx.execute(
@@ -1035,7 +1178,7 @@ impl Store {
         let mut out: Vec<MatchedFile> = Vec::with_capacity(file_ids.len());
         for chunk in file_ids.chunks(IN_BATCH) {
             let sql = format!(
-                "SELECT f.id, f.path, f.kind, t.seq, t.page, t.text
+                "SELECT f.id, f.path, f.kind, t.seq, t.page, t.text, t.boxes
                  FROM files f JOIN tiles t ON t.file_id = f.id
                  WHERE f.id IN ({})
                  ORDER BY f.id, t.seq",
@@ -1051,6 +1194,7 @@ impl Store {
                         seq: row.get::<_, u32>(3)?,
                         page: row.get::<_, Option<u32>>(4)?,
                         text: row.get(5)?,
+                        boxes: stored_boxes(row.get(6)?),
                     }],
                 })
             })?;
@@ -1220,7 +1364,7 @@ impl Store {
         let mut out = HashMap::with_capacity(file_ids.len());
         for chunk in file_ids.chunks(IN_BATCH) {
             let sql = format!(
-                "SELECT f.id, f.path, f.kind, t.id, t.page, t.text
+                "SELECT f.id, f.path, f.kind, t.id, t.page, t.text, f.width, f.height
                  FROM files f
                  LEFT JOIN tiles t
                    ON t.file_id = f.id
@@ -1241,6 +1385,8 @@ impl Store {
                         path: row.get(1)?,
                         kind: row.get(2)?,
                         first_tile,
+                        width: row.get(6)?,
+                        height: row.get(7)?,
                     },
                 ))
             })?;
@@ -1250,6 +1396,76 @@ impl Store {
             }
         }
         Ok(out)
+    }
+
+    /// The indexed files of the given kinds, newest first: the window's
+    /// library, which the picture wall and the document list both render.
+    ///
+    /// An empty `kinds` means every kind. Only `indexed` rows are listed: a
+    /// skipped or failed row has nothing to preview, and offering it would make
+    /// the wall's own count a lie.
+    pub fn library_files(&self, kinds: &[String], limit: usize) -> Result<Vec<LibraryFile>> {
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(kinds.len() + 1);
+        let mut kind_sql = String::new();
+        if !kinds.is_empty() {
+            let mut placeholders = Vec::with_capacity(kinds.len());
+            for (index, kind) in kinds.iter().enumerate() {
+                placeholders.push(format!("?{}", index + 1));
+                params.push(Box::new(kind.clone()));
+            }
+            kind_sql = format!(" AND kind IN ({})", placeholders.join(","));
+        }
+        let limit_param = kinds.len() + 1;
+        params.push(Box::new(limit as i64));
+        let sql = format!(
+            "SELECT path, kind, mtime, width, height
+             FROM files
+             WHERE status = 'indexed'{kind_sql}
+             ORDER BY mtime DESC, path
+             LIMIT ?{limit_param}"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            Ok(LibraryFile {
+                path: row.get(0)?,
+                kind: row.get(1)?,
+                mtime: row.get(2)?,
+                width: row.get(3)?,
+                height: row.get(4)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(anyhow::Error::from)
+    }
+
+    /// Indexed files per kind, for the home's counts. Unindexed rows are
+    /// excluded for the same reason as [`Store::library_files`].
+    pub fn kind_counts(&self) -> Result<Vec<(String, i64)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT kind, COUNT(*) FROM files
+             WHERE status = 'indexed' GROUP BY kind ORDER BY kind",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(anyhow::Error::from)
+    }
+
+    /// Indexed files per indexed folder, for settings. Rows written before
+    /// roots existed (`root = ''`) are not a folder row: there is no name to
+    /// show, which is the same reason [`Store::roots`] leaves them out.
+    pub fn root_counts(&self) -> Result<Vec<(String, i64)>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT root, COUNT(*) FROM files
+             WHERE status = 'indexed' AND root != ''
+             GROUP BY root ORDER BY root",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(anyhow::Error::from)
     }
 
     /// The newest indexed files, for the window's empty-query state.
@@ -1596,7 +1812,7 @@ impl Store {
             std::collections::HashMap::with_capacity(ids.len());
         for chunk in ids.chunks(IN_BATCH) {
             let sql = format!(
-                "SELECT f.id, f.path, f.kind, t.seq, t.page, t.text
+                "SELECT f.id, f.path, f.kind, t.seq, t.page, t.text, t.boxes
                  FROM files f
                  LEFT JOIN tiles t ON t.id =
                      (SELECT t2.id FROM tiles t2 WHERE t2.file_id = f.id ORDER BY t2.seq LIMIT 1)
@@ -1608,8 +1824,14 @@ impl Store {
                 let seq: Option<u32> = row.get(3)?;
                 let page: Option<u32> = row.get(4)?;
                 let text: Option<String> = row.get(5)?;
+                let boxes: Option<String> = row.get(6)?;
                 let tiles = match (seq, text) {
-                    (Some(seq), Some(text)) => vec![MatchedTile { seq, page, text }],
+                    (Some(seq), Some(text)) => vec![MatchedTile {
+                        seq,
+                        page,
+                        text,
+                        boxes: stored_boxes(boxes),
+                    }],
                     _ => Vec::new(),
                 };
                 Ok(MatchedFile {
@@ -1824,6 +2046,7 @@ impl Store {
                         seq: row.seq,
                         page: row.page,
                         text: row.text.clone(),
+                        boxes: row.boxes.clone(),
                     }],
                 });
                 if hits.len() == limit {
@@ -1844,7 +2067,7 @@ impl Store {
         let mut out = HashMap::with_capacity(ids.len());
         for chunk in ids.chunks(IN_BATCH) {
             let sql = format!(
-                "SELECT t.id, t.file_id, f.path, f.kind, t.seq, t.page, t.text
+                "SELECT t.id, t.file_id, f.path, f.kind, t.seq, t.page, t.text, t.boxes
                  FROM tiles t JOIN files f ON f.id = t.file_id
                  WHERE t.id IN ({})",
                 holes(chunk.len())
@@ -1860,6 +2083,7 @@ impl Store {
                         seq: row.get(4)?,
                         page: row.get(5)?,
                         text: row.get(6)?,
+                        boxes: stored_boxes(row.get(7)?),
                     },
                 ))
             })?;
@@ -1940,6 +2164,7 @@ mod tests {
                     seq: 0,
                     text: "a screenshot".into(),
                     page: None,
+                    boxes: Vec::new(),
                 }],
             )
             .expect("index it");
@@ -2307,11 +2532,13 @@ mod tests {
                 seq: 0,
                 page: Some(1),
                 text: "the landlord shall maintain the roof".to_string(),
+                boxes: Vec::new(),
             },
             Tile {
                 seq: 1,
                 page: Some(4),
                 text: "the tenant shall not compete within five miles".to_string(),
+                boxes: Vec::new(),
             },
         ];
         store
@@ -2486,6 +2713,7 @@ mod tests {
                 seq: seq as u32,
                 text: (*text).to_string(),
                 page: None,
+                boxes: Vec::new(),
             })
             .collect()
     }
@@ -2501,6 +2729,298 @@ mod tests {
                 &tiles(texts),
             )
             .unwrap();
+    }
+
+    #[test]
+    fn schema_v7_to_v8_preserves_the_library() {
+        let dir = tempfile::tempdir().unwrap();
+        let corpus = PathBuf::from("corpus");
+        let file = corpus.join("a.txt");
+        {
+            let conn = Connection::open(dir.path().join("index.sqlite")).unwrap();
+            let store = Store { conn };
+            // A real v7 index: every migration up to the one before the
+            // geometry columns, so the test proves the upgrade itself.
+            for version in 1..=7 {
+                store.apply_migration(version).unwrap();
+            }
+            store
+                .conn
+                .execute(
+                    "INSERT INTO files(path, root, kind, size, mtime, sha1, status, skip_reason, indexed_at, thumb)
+                     VALUES (?1, ?2, 'text', 10, 20, 'abc123', 'indexed', NULL, 30, NULL)",
+                    rusqlite::params![file.to_string_lossy(), corpus.to_string_lossy()],
+                )
+                .unwrap();
+            store
+                .conn
+                .execute(
+                    "INSERT INTO tiles(file_id, seq, text) VALUES (1, 0, 'a.txt\ninvoice')",
+                    [],
+                )
+                .unwrap();
+            store
+                .conn
+                .execute(
+                    "INSERT INTO tiles_fts(rowid, text) VALUES (1, 'a.txt\ninvoice')",
+                    [],
+                )
+                .unwrap();
+        }
+
+        let store = Store::open(dir.path()).unwrap();
+        let state = store.file_state(&file).unwrap().unwrap();
+        assert_eq!(state.size, 10);
+        assert_eq!(state.sha1.as_deref(), Some("abc123"));
+        assert_eq!(store.tile_texts(1).unwrap(), vec!["a.txt\ninvoice"]);
+        assert_eq!(
+            store
+                .file_ids_matching(&crate::search::term_match_expr("invoice"))
+                .unwrap(),
+            HashSet::from([1]),
+            "the full-text index survives the migration"
+        );
+        // The new columns read as "not read yet", not as zero or as an error.
+        let (width, height, boxes): (Option<i64>, Option<i64>, Option<String>) = store
+            .conn
+            .query_row(
+                "SELECT f.width, f.height, t.boxes
+                 FROM files f JOIN tiles t ON t.file_id = f.id WHERE f.id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((width, height), (None, None));
+        assert_eq!(boxes, None, "an old tile is pending geometry, not empty");
+        assert_eq!(
+            store.image_tiles_missing_boxes().unwrap().len(),
+            0,
+            "a text tile is not the backfill's work"
+        );
+    }
+
+    #[test]
+    fn picture_boxes_round_trip_through_the_store() {
+        let (_dir, store) = tmp_store();
+        let corpus = tempfile::tempdir().unwrap();
+        let path = corpus.path().join("shot.png");
+        std::fs::write(&path, b"x").unwrap();
+        let bounds = NormBox {
+            x0: 0.1,
+            y0: 0.2,
+            x1: 0.3,
+            y1: 0.4,
+        };
+        store
+            .index_file(
+                corpus.path(),
+                &path,
+                Kind::Image,
+                &facts(10),
+                Some("abc"),
+                &[Tile {
+                    seq: 0,
+                    text: "shot.png\ninvoice".into(),
+                    page: None,
+                    boxes: vec![None, Some(bounds)],
+                }],
+            )
+            .unwrap();
+
+        let file_id = store.file_id(&path).unwrap();
+        let file = store.files_by_ids(&[file_id]).unwrap().remove(0);
+        assert_eq!(file.tiles[0].boxes, vec![None, Some(bounds)]);
+        let tile_id: i64 = store
+            .conn
+            .query_row("SELECT id FROM tiles", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            store.tile_rows(&[tile_id]).unwrap()[&tile_id].boxes,
+            vec![None, Some(bounds)]
+        );
+    }
+
+    #[test]
+    fn a_wrong_box_count_is_stored_as_no_boxes() {
+        let (_dir, store) = tmp_store();
+        let corpus = tempfile::tempdir().unwrap();
+        let bounds = NormBox {
+            x0: 0.1,
+            y0: 0.2,
+            x1: 0.3,
+            y1: 0.4,
+        };
+        for (name, boxes, expected) in [
+            ("two-lines.png", vec![Some(bounds)], Vec::new()),
+            (
+                "lined-up.png",
+                vec![None, Some(bounds)],
+                vec![None, Some(bounds)],
+            ),
+        ] {
+            let path = corpus.path().join(name);
+            std::fs::write(&path, b"x").unwrap();
+            store
+                .index_file(
+                    corpus.path(),
+                    &path,
+                    Kind::Image,
+                    &facts(10),
+                    Some("abc"),
+                    &[Tile {
+                        seq: 0,
+                        text: "name.png\ninvoice".into(),
+                        page: None,
+                        boxes,
+                    }],
+                )
+                .unwrap();
+            let file_id = store.file_id(&path).unwrap();
+            let file = store.files_by_ids(&[file_id]).unwrap().remove(0);
+            assert_eq!(file.tiles[0].boxes, expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn library_files_filter_and_order() {
+        let (_dir, store) = tmp_store();
+        let corpus = tempfile::tempdir().unwrap();
+        let index = |name: &str, kind: Kind, mtime: i64| {
+            let path = corpus.path().join(name);
+            std::fs::write(&path, b"x").unwrap();
+            store
+                .index_file(
+                    corpus.path(),
+                    &path,
+                    kind,
+                    &facts_at(10, mtime),
+                    Some("abc"),
+                    &tiles(&[name]),
+                )
+                .unwrap();
+        };
+        index("old.png", Kind::Image, 1_000);
+        index("new.pdf", Kind::Pdf, 3_000);
+        index("mid.png", Kind::Image, 2_000);
+
+        let all: Vec<String> = store
+            .library_files(&[], 10)
+            .unwrap()
+            .into_iter()
+            .map(|file| file.path)
+            .collect();
+        assert_eq!(
+            all,
+            vec![
+                corpus.path().join("new.pdf").to_string_lossy().to_string(),
+                corpus.path().join("mid.png").to_string_lossy().to_string(),
+                corpus.path().join("old.png").to_string_lossy().to_string(),
+            ],
+            "newest first"
+        );
+
+        let pictures: Vec<String> = store
+            .library_files(&["image".to_string()], 10)
+            .unwrap()
+            .into_iter()
+            .map(|file| file.path)
+            .collect();
+        assert_eq!(pictures.len(), 2, "only the pictures");
+        assert_eq!(store.library_files(&[], 1).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn kind_counts_ignore_unindexed_rows() {
+        let (_dir, store) = tmp_store();
+        let corpus = tempfile::tempdir().unwrap();
+        indexed_file(&store, "/corpus/a.txt", &["a"]);
+        indexed_file(&store, "/corpus/b.txt", &["b"]);
+        let image = corpus.path().join("c.png");
+        std::fs::write(&image, b"x").unwrap();
+        store
+            .index_file(
+                corpus.path(),
+                &image,
+                Kind::Image,
+                &facts(10),
+                Some("abc"),
+                &tiles(&["c.png"]),
+            )
+            .unwrap();
+        store
+            .skip_file(
+                corpus.path(),
+                &corpus.path().join("cloud.txt"),
+                Kind::Text,
+                &FileFacts {
+                    placeholder: true,
+                    ..facts(10)
+                },
+                SkipReason::CloudPlaceholder,
+            )
+            .unwrap();
+
+        assert_eq!(
+            store.kind_counts().unwrap(),
+            vec![("image".to_string(), 1), ("text".to_string(), 2)],
+            "a skipped row is not a file the library can show"
+        );
+    }
+
+    #[test]
+    fn remove_root_deletes_one_root_only() {
+        let (_dir, store) = tmp_store();
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let first_file = first.path().join("invoice.png");
+        let second_file = second.path().join("report.txt");
+        std::fs::write(&first_file, b"x").unwrap();
+        std::fs::write(&second_file, b"x").unwrap();
+        store
+            .index_file(
+                first.path(),
+                &first_file,
+                Kind::Image,
+                &facts(10),
+                Some("abc"),
+                &tiles(&["invoice.png\nairline invoice"]),
+            )
+            .unwrap();
+        store
+            .index_file(
+                second.path(),
+                &second_file,
+                Kind::Text,
+                &facts(10),
+                Some("def"),
+                &tiles(&["report.txt\nquarterly report"]),
+            )
+            .unwrap();
+
+        assert_eq!(store.remove_root(first.path()).unwrap(), 1);
+        assert!(store.file_state(&first_file).unwrap().is_none());
+        assert!(store.file_state(&second_file).unwrap().is_some());
+        assert!(
+            store
+                .file_ids_matching(&crate::search::term_match_expr("airline"))
+                .unwrap()
+                .is_empty(),
+            "the removed root's text must leave the full-text index too"
+        );
+        assert_eq!(
+            store
+                .file_ids_matching(&crate::search::term_match_expr("quarterly"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(first_file.exists(), "the user's file is untouched");
+        assert!(second_file.exists());
+        assert_eq!(
+            store.root_counts().unwrap(),
+            vec![(second.path().to_string_lossy().to_string(), 1)]
+        );
+        assert_eq!(store.remove_root(first.path()).unwrap(), 0, "idempotent");
     }
 
     #[test]
@@ -2678,16 +3198,19 @@ mod tests {
                         seq: 0,
                         text: "a report".into(),
                         page: Some(1),
+                        boxes: Vec::new(),
                     },
                     Tile {
                         seq: 1,
                         text: "more text".into(),
                         page: Some(2),
+                        boxes: Vec::new(),
                     },
                     Tile {
                         seq: 2,
                         text: "no page here".into(),
                         page: None,
+                        boxes: Vec::new(),
                     },
                 ],
             )
@@ -2764,11 +3287,13 @@ mod tests {
                 seq: 0,
                 text: "brand new words".into(),
                 page: None,
+                boxes: Vec::new(),
             },
             Tile {
                 seq: 0,
                 text: "second tile".into(),
                 page: None,
+                boxes: Vec::new(),
             },
         ];
         let err = store.index_file(

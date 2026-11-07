@@ -384,11 +384,13 @@ mod tests {
                         seq: 0,
                         text: "report.pdf\na cover page".into(),
                         page: Some(1),
+                        boxes: Vec::new(),
                     },
                     Tile {
                         seq: 1,
                         text: "the invoice from the airline".into(),
                         page: Some(4),
+                        boxes: Vec::new(),
                     },
                 ],
             )
@@ -405,6 +407,7 @@ mod tests {
                     seq: 0,
                     text: "note.txt\nthe invoice from the bank".into(),
                     page: None,
+                    boxes: Vec::new(),
                 }],
             )
             .unwrap();
@@ -434,6 +437,7 @@ mod tests {
                 seq: seq as u32,
                 text: (*text).to_string(),
                 page: None,
+                boxes: Vec::new(),
             })
             .collect();
         store

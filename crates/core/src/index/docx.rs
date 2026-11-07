@@ -52,6 +52,7 @@ impl Pipeline for DocxPipeline {
                     seq: seq as u32,
                     text,
                     page: None,
+                    boxes: Vec::new(),
                 })
                 .collect(),
         ))

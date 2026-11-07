@@ -978,6 +978,7 @@ mod tests {
                     seq: 0,
                     text: "ok.txt\nthe invoice".into(),
                     page: None,
+                    boxes: Vec::new(),
                 }],
             )
             .unwrap();
@@ -1028,6 +1029,7 @@ mod tests {
                     seq: 0,
                     text: "ok.txt\nthe invoice".into(),
                     page: None,
+                    boxes: Vec::new(),
                 }],
             )
             .unwrap();

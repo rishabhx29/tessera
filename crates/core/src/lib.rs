@@ -14,6 +14,7 @@
 
 pub mod cli;
 pub mod fusion;
+pub mod geometry;
 pub mod hash;
 pub mod index;
 pub mod models;

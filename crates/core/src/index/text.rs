@@ -55,6 +55,7 @@ impl Pipeline for TextPipeline {
                     seq: seq as u32,
                     text,
                     page: None,
+                    boxes: Vec::new(),
                 })
                 .collect(),
         ))

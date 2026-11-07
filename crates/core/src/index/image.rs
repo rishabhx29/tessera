@@ -86,6 +86,7 @@ impl Pipeline for ImagePipeline {
                 seq: 0,
                 text,
                 page: None,
+                boxes: Vec::new(),
             }]
         }))
     }
