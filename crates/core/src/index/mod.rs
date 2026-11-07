@@ -10,6 +10,7 @@
 //! *before* anything opens it, a rename updates one row instead of indexing
 //! the same bytes twice, and a deletion removes its results.
 
+pub mod backfill;
 pub mod docx;
 pub mod image;
 pub mod pdf;

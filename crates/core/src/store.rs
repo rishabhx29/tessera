@@ -902,6 +902,16 @@ impl Store {
         Ok(count)
     }
 
+    /// Put a tile back into the state a row written before geometry has:
+    /// `boxes` NULL, which is the backfill's work list. Test seam only, so a
+    /// backfill test can build the one state production can no longer write.
+    #[cfg(test)]
+    pub(crate) fn forget_tile_boxes(&self, tile_id: i64) -> Result<()> {
+        self.conn
+            .execute("UPDATE tiles SET boxes = NULL WHERE id = ?1", [tile_id])?;
+        Ok(())
+    }
+
     /// Record one tile's line geometry, or `[]` when it has none.
     pub fn set_tile_boxes(&self, tile_id: i64, boxes: &[Option<NormBox>]) -> Result<()> {
         self.conn.execute(

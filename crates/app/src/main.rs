@@ -374,6 +374,24 @@ fn main() {
             std::thread::spawn(move || {
                 handle.state::<Shell>().restart_watch();
             });
+
+            // Old index rows get their picture sizes and line boxes in the
+            // background, after the window and the watcher have settled. No
+            // progress modal: Settings reads the pending count if the user
+            // asks. The thread dies with the process, which is the deadline.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                let service = handle.state::<Shell>().service.clone();
+                match service.backfill_missing_geometry() {
+                    Ok(summary) if summary.sized + summary.boxed > 0 => eprintln!(
+                        "picture backfill: {} sized, {} prepared, {} skipped, {} failed",
+                        summary.sized, summary.boxed, summary.skipped, summary.failed
+                    ),
+                    Ok(_) => {}
+                    Err(err) => eprintln!("the picture backfill did not finish: {err}"),
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| {

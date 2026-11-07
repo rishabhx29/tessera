@@ -15,6 +15,7 @@ use tessera_core::cli::{image_query_embedder, text_embedder, text_query_embedder
 use tessera_core::fusion::{
     line_marks, missing_model_notes, parse_query, search as fused_search, Mark, SearchMode,
 };
+use tessera_core::index::backfill::{backfill, BackfillSummary};
 use tessera_core::index::{index_folder, index_folder_with_text, IndexSummary};
 use tessera_core::models::Models;
 use tessera_core::ocr::OcrChoice;
@@ -748,6 +749,24 @@ impl AppService {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .is_some()
+    }
+
+    /// Fill the picture sizes and line boxes that rows indexed before the
+    /// geometry upgrade do not have.
+    ///
+    /// Runs once per launch on a background thread. It reads only indexed
+    /// image paths, never a cloud placeholder, and does nothing before the
+    /// first folder exists. A resolved row is not in the work list again.
+    pub fn backfill_missing_geometry(&self) -> Result<BackfillSummary, String> {
+        if !self.index_exists() {
+            return Ok(BackfillSummary::default());
+        }
+        let models = Models::open(&self.models_dir).map_err(|err| format!("{err:#}"))?;
+        let ocr = tessera_core::cli::ocr_engine(&OcrChoice::Native, &models)
+            .map_err(|err| format!("{err:#}"))?;
+        let store = Store::open(&self.data_dir).map_err(|err| format!("{err:#}"))?;
+        let summary = backfill(&store, ocr.as_ref()).map_err(|err| format!("{err:#}"))?;
+        Ok(summary)
     }
 
     /// Add a folder by indexing it. One-shot, so the shell can run it on a

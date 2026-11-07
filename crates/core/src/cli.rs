@@ -231,6 +231,23 @@ fn migrate_legacy_data_dir(legacy: &Path, new_dir: &Path) -> Result<bool> {
     Ok(true)
 }
 
+/// The OCR engine the given choice resolves to, ready to read a picture.
+///
+/// An engine the user *named* and did not get is a bug, not a preference, so
+/// that is an error. The platform default missing is not: the text formats
+/// keep working, and each image is recorded as failed with the reason. The
+/// backfill and the index run must make this decision in one place.
+pub fn ocr_engine(choice: &OcrChoice, models: &Models) -> Result<Box<dyn OcrEngine>> {
+    match ocr::select(choice, models) {
+        Ok(selection) => Ok(selection.engine),
+        Err(err) if matches!(choice, OcrChoice::Native) => {
+            eprintln!("no OCR engine on this machine: {err:#}");
+            Ok(Box::new(ocr::Unavailable(ocr::default_engine_name())))
+        }
+        Err(err) => Err(err),
+    }
+}
+
 /// Every pipeline the engine has, in the order they are offered a file.
 ///
 /// Public because it is the engine's format table, not a CLI detail: the
@@ -245,17 +262,7 @@ fn migrate_legacy_data_dir(legacy: &Path, new_dir: &Path) -> Result<bool> {
 /// choice is resolved inside the pipeline and a missing engine shows up per file,
 /// in the diagnostics.
 pub fn pipelines(ocr: &OcrChoice, models: &Models) -> Result<Vec<Box<dyn Pipeline>>> {
-    // An engine the user *named* and did not get is a bug, not a preference, so
-    // that stops the run. The platform default missing is not: the text formats
-    // keep working and each image is recorded as failed with the reason.
-    let engine: Box<dyn OcrEngine> = match ocr::select(ocr, models) {
-        Ok(selection) => selection.engine,
-        Err(err) if matches!(ocr, OcrChoice::Native) => {
-            eprintln!("no OCR engine on this machine: {err:#}");
-            Box::new(ocr::Unavailable(ocr::default_engine_name()))
-        }
-        Err(err) => return Err(err),
-    };
+    let engine = ocr_engine(ocr, models)?;
     Ok(vec![
         Box::new(TextPipeline),
         Box::new(PdfPipeline),
