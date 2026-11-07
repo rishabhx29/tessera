@@ -28,7 +28,9 @@ use windows::Graphics::Imaging::{
     BitmapAlphaMode, BitmapDecoder, BitmapPixelFormat, SoftwareBitmap,
 };
 
-use super::{lines_into_text, OcrEngine};
+use crate::geometry::NormBox;
+
+use super::{lines_into_text, OcrEngine, OcrLine};
 
 /// Blank rows added above and below every band before recognition.
 ///
@@ -84,6 +86,15 @@ impl OcrEngine for WindowsOcr {
     }
 
     fn recognize(&self, path: &Path) -> Result<String> {
+        let lines = self
+            .recognize_lines(path)?
+            .into_iter()
+            .map(|line| line.text)
+            .collect::<Vec<_>>();
+        Ok(lines_into_text(&lines))
+    }
+
+    fn recognize_lines(&self, path: &Path) -> Result<Vec<OcrLine>> {
         // Windows imaging wants an absolute, normalised path and answers
         // anything else with an error that says nothing useful. Normalising
         // here means every caller can pass what it has — a joined relative
@@ -95,11 +106,16 @@ impl OcrEngine for WindowsOcr {
         // the pixels to us.
         let (decoder, width, height) = open(&path)?;
 
-        let lines = match image_limit() {
-            Some(max) if width > max || height > max => self.read_in_bands(&path, max)?,
-            _ => self.read_bitmap(&software_bitmap(&decoder, &path)?, &path)?,
-        };
-        Ok(lines_into_text(&lines))
+        match image_limit() {
+            Some(max) if width > max || height > max => self.read_in_bands(&path, max),
+            _ => self.read_bitmap(
+                &software_bitmap(&decoder, &path)?,
+                &path,
+                width,
+                height,
+                0.0,
+            ),
+        }
     }
 }
 
@@ -109,7 +125,14 @@ impl WindowsOcr {
     /// A poisoned lock means a previous recognition panicked; the recogniser
     /// itself is still fine, so the guard is recovered instead of turning one
     /// bad file into an engine that never reads another.
-    fn read_bitmap(&self, bitmap: &SoftwareBitmap, path: &Path) -> Result<Vec<String>> {
+    fn read_bitmap(
+        &self,
+        bitmap: &SoftwareBitmap,
+        path: &Path,
+        frame_width: u32,
+        frame_height: u32,
+        y_offset: f32,
+    ) -> Result<Vec<OcrLine>> {
         let _recognizing = self
             .recognizing
             .lock()
@@ -127,16 +150,29 @@ impl WindowsOcr {
             .Lines()
             .context("the recognised result had no lines")?;
         let count = lines.Size().context("counting the recognised lines")?;
-        let mut text = Vec::with_capacity(count as usize);
+        let mut recognized = Vec::with_capacity(count as usize);
         for i in 0..count {
             let line = lines.GetAt(i).context("reading a recognised line")?;
-            text.push(
-                line.Text()
-                    .context("reading a recognised line")?
-                    .to_string(),
-            );
+            let text = line
+                .Text()
+                .context("reading a recognised line")?
+                .to_string();
+            let text = text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            let words = line.Words().context("reading the words in a line")?;
+            let count = words.Size().context("counting the words in a line")?;
+            let rects = (0..count)
+                .map(|i| words.GetAt(i)?.BoundingRect())
+                .collect::<windows::core::Result<Vec<_>>>()
+                .context("reading the word bounds in a line")?;
+            recognized.push(OcrLine {
+                text: text.to_string(),
+                bounds: line_bounds(rects, frame_width, frame_height, y_offset),
+            });
         }
-        Ok(text)
+        Ok(recognized)
     }
 
     /// Read an image the recogniser refuses whole.
@@ -151,7 +187,7 @@ impl WindowsOcr {
     /// cut severs every line), so it is scaled to the limit first; that loses
     /// resolution but keeps the file readable, and it is rare enough that the
     /// scaled path is not worth a second strategy.
-    fn read_in_bands(&self, path: &Path, max: u32) -> Result<Vec<String>> {
+    fn read_in_bands(&self, path: &Path, max: u32) -> Result<Vec<OcrLine>> {
         let mut pixels = image::open(path)
             .with_context(|| format!("decoding {}", path.display()))?
             .into_rgb8();
@@ -173,10 +209,48 @@ impl WindowsOcr {
         let mut lines = Vec::new();
         for (top, bottom) in bands {
             let bitmap = band_bitmap(&pixels, top, bottom, margin)?;
-            lines.extend(self.read_bitmap(&bitmap, path)?);
+            // Word bounds include the blank top padding, which is not part of the image.
+            let y_offset = top as f32 - margin as f32;
+            lines.extend(self.read_bitmap(
+                &bitmap,
+                path,
+                pixels.width(),
+                pixels.height(),
+                y_offset,
+            )?);
         }
         Ok(lines)
     }
+}
+
+fn line_bounds(
+    rects: impl IntoIterator<Item = windows::Foundation::Rect>,
+    width: u32,
+    height: u32,
+    y_offset: f32,
+) -> Option<NormBox> {
+    let mut rects = rects.into_iter();
+    let first = rects.next()?;
+    let (mut x0, mut y0, mut x1, mut y1) = (
+        first.X,
+        first.Y,
+        first.X + first.Width,
+        first.Y + first.Height,
+    );
+    for rect in rects {
+        x0 = x0.min(rect.X);
+        y0 = y0.min(rect.Y);
+        x1 = x1.max(rect.X + rect.Width);
+        y1 = y1.max(rect.Y + rect.Height);
+    }
+    Some(NormBox::pixels(
+        x0,
+        y0 + y_offset,
+        x1,
+        y1 + y_offset,
+        width,
+        height,
+    ))
 }
 
 /// The recogniser's own limit, or `None` when this Windows will not say.
@@ -373,6 +447,115 @@ fn block_on<F: std::future::IntoFuture>(future: F) -> F::Output {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Foundation::Rect;
+
+    #[test]
+    fn a_line_rectangle_is_normalized() {
+        assert_eq!(
+            line_bounds(
+                [Rect {
+                    X: 100.0,
+                    Y: 50.0,
+                    Width: 500.0,
+                    Height: 200.0,
+                }],
+                1000,
+                500,
+                0.0,
+            ),
+            Some(NormBox {
+                x0: 0.1,
+                y0: 0.1,
+                x1: 0.6,
+                y1: 0.5,
+            })
+        );
+    }
+
+    #[test]
+    fn a_band_offset_moves_boxes_down() {
+        let rect = Rect {
+            X: 100.0,
+            Y: 84.0,
+            Width: 500.0,
+            Height: 40.0,
+        };
+        for (top, y0, y1) in [(0, 0.01, 0.03), (800, 0.41, 0.43)] {
+            assert_eq!(
+                line_bounds([rect], 1000, 2000, top as f32 - BAND_MARGIN as f32),
+                Some(NormBox {
+                    x0: 0.1,
+                    y0,
+                    x1: 0.6,
+                    y1,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn a_scaled_frame_keeps_the_same_fractions() {
+        for scale in [1, 2] {
+            let factor = scale as f32;
+            assert_eq!(
+                line_bounds(
+                    [Rect {
+                        X: 100.0 * factor,
+                        Y: 150.0 * factor,
+                        Width: 200.0 * factor,
+                        Height: 50.0 * factor,
+                    }],
+                    1000 * scale,
+                    500 * scale,
+                    0.0,
+                ),
+                Some(NormBox {
+                    x0: 0.1,
+                    y0: 0.3,
+                    x1: 0.3,
+                    y1: 0.4,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn a_line_rectangle_unions_every_word() {
+        assert_eq!(
+            line_bounds(
+                [
+                    Rect {
+                        X: 300.0,
+                        Y: 60.0,
+                        Width: 100.0,
+                        Height: 20.0,
+                    },
+                    Rect {
+                        X: 100.0,
+                        Y: 70.0,
+                        Width: 50.0,
+                        Height: 40.0,
+                    },
+                    Rect {
+                        X: 500.0,
+                        Y: 50.0,
+                        Width: 100.0,
+                        Height: 20.0,
+                    },
+                ],
+                1000,
+                500,
+                0.0,
+            ),
+            Some(NormBox {
+                x0: 0.1,
+                y0: 0.1,
+                x1: 0.6,
+                y1: 0.22,
+            })
+        );
+        assert_eq!(line_bounds([], 1000, 500, 0.0), None);
+    }
 
     #[test]
     fn the_engine_name_is_windows() {
@@ -404,6 +587,24 @@ mod tests {
         let path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ocr-sample.png");
         let text = engine.recognize(&path).expect("the fixture is readable");
+        let lines = engine
+            .recognize_lines(&path)
+            .expect("the fixture has readable lines");
+        assert_eq!(
+            text,
+            lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        for line in &lines {
+            assert!(!line.text.is_empty());
+            assert_eq!(line.text, line.text.trim());
+            let bounds = line.bounds.expect("a recognised line has word bounds");
+            assert!(0.0 <= bounds.x0 && bounds.x0 < bounds.x1 && bounds.x1 <= 1.0);
+            assert!(0.0 <= bounds.y0 && bounds.y0 < bounds.y1 && bounds.y1 <= 1.0);
+        }
         let text = text.to_lowercase();
         for expected in ["invoice", "tessera", "qf-3391"] {
             assert!(
@@ -698,11 +899,54 @@ mod tests {
             .recognize(&path)
             .expect("a capture over the recogniser's limit must still be read")
             .to_lowercase();
+        let lines = engine
+            .recognize_lines(&path)
+            .expect("a tall capture has readable lines");
+        let original_lines = engine
+            .recognize_lines(
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ocr-sample.png"),
+            )
+            .expect("the original fixture has readable lines");
         for expected in ["invoice", "tessera", "qf-3391"] {
             assert!(
                 text.contains(expected),
                 "the bottom band was not read: {expected:?} missing from {text:?}"
             );
+            let line = lines
+                .iter()
+                .find(|line| line.text.to_lowercase().contains(expected))
+                .expect("the bottom band's line is present");
+            let bounds = line.bounds.expect("the bottom band's line has bounds");
+            let original = original_lines
+                .iter()
+                .find(|line| line.text.to_lowercase().contains(expected))
+                .and_then(|line| line.bounds)
+                .expect("the original fixture's line has bounds");
+            for (actual, expected) in [
+                (
+                    bounds.x0 * fixture.width() as f32,
+                    original.x0 * fixture.width() as f32,
+                ),
+                (
+                    bounds.x1 * fixture.width() as f32,
+                    original.x1 * fixture.width() as f32,
+                ),
+                (
+                    bounds.y0 * height as f32,
+                    top as f32 + original.y0 * fixture.height() as f32,
+                ),
+                (
+                    bounds.y1 * height as f32,
+                    top as f32 + original.y1 * fixture.height() as f32,
+                ),
+            ] {
+                assert!(
+                    (actual - expected).abs() <= 4.0,
+                    "the bottom band's bounds must use full-frame pixels without padding: \
+                     got {actual}, expected {expected} for {:?}",
+                    line.text
+                );
+            }
         }
     }
 }

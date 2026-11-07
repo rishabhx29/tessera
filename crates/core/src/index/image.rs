@@ -74,7 +74,13 @@ impl Pipeline for ImagePipeline {
     }
 
     fn process(&self, path: &Path) -> Result<Extraction> {
-        let text = self.engine.recognize(path)?;
+        let (lines, boxes): (Vec<_>, Vec<_>) = self
+            .engine
+            .recognize_lines(path)?
+            .into_iter()
+            .map(|line| (line.text, line.bounds))
+            .unzip();
+        let text = crate::ocr::lines_into_text(&lines);
         // An image with no text is not a failure: a photo has nothing to read,
         // and filing it as failed would put half a photo library in the failed
         // column for doing nothing wrong. No tiles means the loop's filename
@@ -86,7 +92,7 @@ impl Pipeline for ImagePipeline {
                 seq: 0,
                 text,
                 page: None,
-                boxes: Vec::new(),
+                boxes,
             }]
         }))
     }
@@ -151,6 +157,97 @@ mod tests {
         );
         assert_eq!(pipeline.accepts(Path::new("i.txt")), None);
         assert_eq!(pipeline.accepts(Path::new("noext")), None);
+    }
+
+    #[test]
+    fn default_ocr_lines_are_trimmed_without_invented_geometry() {
+        let lines = Fixed("  first  \n\n second\r\n  ")
+            .recognize_lines(Path::new("a.png"))
+            .unwrap();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text, "first");
+        assert_eq!(lines[1].text, "second");
+        assert!(lines.iter().all(|line| line.bounds.is_none()));
+        assert!(Broken.recognize_lines(Path::new("broken.png")).is_err());
+    }
+
+    struct Positioned;
+
+    impl OcrEngine for Positioned {
+        fn name(&self) -> &'static str {
+            "positioned"
+        }
+
+        fn recognize(&self, _path: &Path) -> Result<String> {
+            Ok("invoice\ntotal".into())
+        }
+
+        fn recognize_lines(&self, _path: &Path) -> Result<Vec<crate::ocr::OcrLine>> {
+            Ok(vec![
+                crate::ocr::OcrLine {
+                    text: "invoice".into(),
+                    bounds: Some(crate::geometry::NormBox {
+                        x0: 0.1,
+                        y0: 0.2,
+                        x1: 0.6,
+                        y1: 0.3,
+                    }),
+                },
+                crate::ocr::OcrLine {
+                    text: "total".into(),
+                    bounds: None,
+                },
+            ])
+        }
+    }
+
+    #[test]
+    fn an_image_tile_has_one_box_per_line() {
+        let pipeline = ImagePipeline::new(Box::new(Positioned));
+        let Extraction::Tiles(tiles) = pipeline.process(Path::new("invoice.png")).unwrap() else {
+            panic!("an image returns tiles");
+        };
+        assert_eq!(tiles[0].text, "invoice\ntotal");
+        assert_eq!(tiles[0].boxes.len(), 2);
+        assert_eq!(tiles[0].boxes[1], None);
+        let bounds = tiles[0].boxes[0].unwrap();
+        assert_eq!(
+            (bounds.x0, bounds.y0, bounds.x1, bounds.y1),
+            (0.1, 0.2, 0.6, 0.3)
+        );
+    }
+
+    #[test]
+    fn image_dimensions_and_filename_alignment_are_recorded() {
+        let data = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let path = corpus.path().join("invoice.png");
+        image::RgbImage::new(80, 40).save(&path).unwrap();
+        let store = crate::store::Store::open(data.path()).unwrap();
+        let pipelines: Vec<Box<dyn Pipeline>> =
+            vec![Box::new(ImagePipeline::new(Box::new(Positioned)))];
+        let summary = crate::index::index_folder(&store, &pipelines, corpus.path()).unwrap();
+        assert_eq!((summary.indexed, summary.failed), (1, 0));
+        let id = store.file_id(&path).unwrap();
+        let displays = store.file_displays(&[id]).unwrap();
+        assert_eq!(
+            (displays[&id].width, displays[&id].height),
+            (Some(80), Some(40))
+        );
+        let file = store.files_by_ids(&[id]).unwrap().remove(0);
+        assert_eq!(file.tiles[0].text, "invoice.png\ninvoice\ntotal");
+        assert_eq!(file.tiles[0].boxes.len(), 3);
+        assert_eq!(file.tiles[0].boxes[0], None);
+        assert_eq!(file.tiles[0].boxes[1].unwrap().y0, 0.2);
+        assert_eq!(file.tiles[0].boxes[2], None);
+
+        image::RgbImage::new(40, 120).save(&path).unwrap();
+        crate::index::index_folder(&store, &pipelines, corpus.path()).unwrap();
+        let displays = store.file_displays(&[id]).unwrap();
+        assert_eq!(
+            (displays[&id].width, displays[&id].height),
+            (Some(40), Some(120))
+        );
     }
 
     #[test]

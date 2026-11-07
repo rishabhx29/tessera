@@ -33,7 +33,14 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use crate::geometry::NormBox;
 use crate::models::Models;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OcrLine {
+    pub text: String,
+    pub bounds: Option<NormBox>,
+}
 
 /// Something that reads the text out of an image file.
 ///
@@ -48,6 +55,20 @@ pub trait OcrEngine: Send + Sync {
 
     /// The text visible in the image, or an error if it could not be read.
     fn recognize(&self, path: &Path) -> Result<String>;
+
+    /// Trimmed, non-empty lines, with bounds only when the engine reports them.
+    fn recognize_lines(&self, path: &Path) -> Result<Vec<OcrLine>> {
+        Ok(self
+            .recognize(path)?
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(|line| OcrLine {
+                text: line.to_string(),
+                bounds: None,
+            })
+            .collect())
+    }
 
     /// The image's text line by line, with each engine's own confidence where it
     /// has one.

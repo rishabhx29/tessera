@@ -416,6 +416,16 @@ pub(crate) fn process_one(
         Ok(Extraction::Tiles(tiles)) => {
             let sha = Some(hash.get()?);
             store.index_file(folder, path, kind, facts, sha, &with_filename(path, tiles))?;
+            if kind == Kind::Image {
+                match ::image::image_dimensions(path) {
+                    Ok((width, height)) => {
+                        store.set_dimensions(store.file_id(path)?, width, height)?;
+                    }
+                    Err(err) => {
+                        eprintln!("could not read picture size for {}: {err}", path.display())
+                    }
+                }
+            }
             summary.indexed += 1;
             true
         }

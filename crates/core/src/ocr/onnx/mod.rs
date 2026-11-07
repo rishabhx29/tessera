@@ -37,7 +37,8 @@ use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::{Tensor, ValueType};
 
-use super::{lines_into_text, OcrEngine};
+use super::{lines_into_text, OcrEngine, OcrLine};
+use crate::geometry::NormBox;
 use crate::models::Models;
 
 /// The model set the engine needs. One name, so "are the OCR models installed?"
@@ -316,15 +317,23 @@ impl OnnxOcr {
     /// and for diagnostics.
     pub fn lines(&self, path: &Path) -> Result<Vec<(String, f32)>> {
         let image = decode(path)?;
-        let boxes = self.detect(&image)?;
-        let mut found = self.recognize(&image, &boxes)?;
+        Ok(self
+            .lines_with_boxes(&image)?
+            .into_iter()
+            .map(|(text, score, _)| (text, score))
+            .collect())
+    }
+
+    fn lines_with_boxes(&self, image: &image::RgbImage) -> Result<Vec<(String, f32, layout::Box)>> {
+        let boxes = self.detect(image)?;
+        let mut found = self.recognize(image, &boxes)?;
         // Reading order is what a person means by "the text of this screenshot".
         // The boxes come out of a flood fill in raster order, which on a
         // two-column screenshot is the wrong one.
         found.sort_by_key(|(bbox, _)| (bbox.y0, bbox.x0));
         Ok(found
             .into_iter()
-            .map(|(_, read)| (read.text, read.score))
+            .map(|(bbox, read)| (read.text, read.score, bbox))
             .collect())
     }
 
@@ -578,12 +587,35 @@ impl OcrEngine for OnnxOcr {
         Ok(lines_into_text(&lines))
     }
 
+    fn recognize_lines(&self, path: &Path) -> Result<Vec<OcrLine>> {
+        let image = decode(path)?;
+        Ok(self
+            .lines_with_boxes(&image)?
+            .into_iter()
+            .map(|(text, _, bbox)| normalized_line(text, bbox, image.width(), image.height()))
+            .collect())
+    }
+
     fn lines_with_scores(&self, path: &Path) -> Result<Vec<(String, Option<f32>)>> {
         Ok(self
             .lines(path)?
             .into_iter()
             .map(|(text, score)| (text, Some(score)))
             .collect())
+    }
+}
+
+fn normalized_line(text: String, bbox: layout::Box, width: u32, height: u32) -> OcrLine {
+    OcrLine {
+        text,
+        bounds: Some(NormBox::pixels(
+            bbox.x0 as f32,
+            bbox.y0 as f32,
+            bbox.x1 as f32,
+            bbox.y1 as f32,
+            width,
+            height,
+        )),
     }
 }
 
@@ -687,6 +719,115 @@ fn argmax(row: &[f32]) -> (usize, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_line_rectangle_is_normalized() {
+        let line = normalized_line(
+            "invoice".to_string(),
+            layout::Box {
+                x0: 200,
+                y0: 100,
+                x1: 1200,
+                y1: 500,
+            },
+            2000,
+            1000,
+        );
+        assert_eq!(line.text, "invoice");
+        assert_eq!(
+            line.bounds,
+            Some(crate::geometry::NormBox {
+                x0: 0.1,
+                y0: 0.1,
+                x1: 0.6,
+                y1: 0.5,
+            })
+        );
+    }
+
+    #[test]
+    fn normalized_line_boxes_stay_inside_the_image() {
+        let line = normalized_line(
+            "edge".to_string(),
+            layout::Box {
+                x0: 0,
+                y0: 0,
+                x1: 2001,
+                y1: 1001,
+            },
+            2000,
+            1000,
+        );
+        assert_eq!(
+            line.bounds,
+            Some(crate::geometry::NormBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 1.0,
+                y1: 1.0,
+            })
+        );
+    }
+
+    fn installed_engine() -> Option<OnnxOcr> {
+        let dir = match std::env::var("TESSERA_MODELS_DIR") {
+            Ok(dir) => PathBuf::from(dir),
+            Err(_) => {
+                crate::cli::models_dir(&crate::cli::default_data_dir().expect("a data dir"), None)
+            }
+        };
+        let models = Models::open(&dir).expect("the models dir is openable");
+        if !OnnxOcr::is_installed(&models) {
+            eprintln!("skipping: the ppocr models are not installed");
+            return None;
+        }
+        Some(OnnxOcr::new(&models).expect("installed models must load"))
+    }
+
+    #[test]
+    fn recognized_lines_preserve_scores_order_and_original_image_bounds() {
+        let Some(engine) = installed_engine() else {
+            return;
+        };
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ocr-sample.png");
+        let image = decode(&path).unwrap();
+        let boxes = engine.detect(&image).unwrap();
+        let mut expected = engine.recognize(&image, &boxes).unwrap();
+        expected.sort_by_key(|(bbox, _)| (bbox.y0, bbox.x0));
+        assert!(
+            expected.len() > 1,
+            "the fixture must exercise reading order"
+        );
+
+        let lines = engine.recognize_lines(&path).unwrap();
+        let scored = engine.lines(&path).unwrap();
+        let trait_scored = engine.lines_with_scores(&path).unwrap();
+        assert_eq!(lines.len(), expected.len());
+        assert_eq!(scored.len(), expected.len());
+        assert_eq!(trait_scored.len(), expected.len());
+        for (index, (bbox, read)) in expected.iter().enumerate() {
+            let line = &lines[index];
+            assert_eq!(line.text, read.text);
+            assert!(!line.text.is_empty());
+            assert_eq!(line.text, line.text.trim());
+            assert_eq!(scored[index], (read.text.clone(), read.score));
+            assert_eq!(trait_scored[index], (read.text.clone(), Some(read.score)));
+            let bounds = line.bounds.expect("ONNX lines must retain their boxes");
+            for (actual, expected) in [
+                (bounds.x0, bbox.x0 as f32 / image.width() as f32),
+                (bounds.y0, bbox.y0 as f32 / image.height() as f32),
+                (bounds.x1, bbox.x1 as f32 / image.width() as f32),
+                (bounds.y1, bbox.y1 as f32 / image.height() as f32),
+            ] {
+                assert!((0.0..=1.0).contains(&actual), "{bounds:?}");
+                assert!(
+                    (actual - expected).abs() <= 0.000051,
+                    "{actual} != {expected}"
+                );
+            }
+            assert!(bounds.x0 < bounds.x1 && bounds.y0 < bounds.y1);
+        }
+    }
 
     // The refusal is the one error a user cannot debug from ort's message, so
     // what it names is the whole point. These pin the two facts that make it
