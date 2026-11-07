@@ -21,7 +21,9 @@ use tauri::{AppHandle, Manager, State, WindowEvent};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt as _, ShortcutState};
-use tessera_app::engine::{AppService, Preview, RecentPayload, SearchPayload, StatusPayload};
+use tessera_app::engine::{
+    parse_lens, AppService, Preview, RecentPayload, SearchPayload, StatusPayload,
+};
 use tessera_app::watcher::{WatchHandle, WatchStatus};
 
 /// The hotkey, in the one place it is written down.
@@ -72,9 +74,11 @@ impl Shell {
 async fn search(
     shell: State<'_, Shell>,
     query: String,
+    mode: Option<String>,
     limit: usize,
 ) -> Result<SearchPayload, String> {
-    shell.service.search(&query, limit)
+    let mode = parse_lens(mode.as_deref())?;
+    shell.service.search(&query, mode, limit)
 }
 
 #[tauri::command]

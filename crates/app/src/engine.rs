@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 
 use tessera_core::cli::{image_query_embedder, text_embedder, text_query_embedder};
-use tessera_core::fusion::{parse_query, search as fused_search};
+use tessera_core::fusion::{missing_model_notes, parse_query, search as fused_search, SearchMode};
 use tessera_core::index::{index_folder, index_folder_with_text, IndexSummary};
 use tessera_core::models::Models;
 use tessera_core::ocr::OcrChoice;
@@ -87,6 +87,9 @@ pub struct SearchPayload {
     /// a slow first query can be told apart from a slow search.
     pub engine_millis: u64,
     pub arms: Vec<String>,
+    /// The lens that answered. The window drops a response whose mode is not
+    /// the lens on screen, so a slow answer cannot repaint a new question.
+    pub mode: String,
 }
 
 /// The preview pane's answer.
@@ -217,12 +220,17 @@ impl AppService {
         self.data_dir.join("index.sqlite").exists()
     }
 
-    /// Run the one search box: every installed arm, fused.
+    /// Run the one search box under one lens: the arms that lens runs, fused.
     ///
     /// `millis` times the whole command from this line, including the one-time
     /// model load; `engine_millis` is the fused search alone. The window shows
     /// both, so the first query after launch does not claim to have been fast.
-    pub fn search(&self, query: &str, limit: usize) -> Result<SearchPayload, String> {
+    pub fn search(
+        &self,
+        query: &str,
+        mode: SearchMode,
+        limit: usize,
+    ) -> Result<SearchPayload, String> {
         let started = std::time::Instant::now();
         if !self.index_exists() {
             return Err("no index yet: add a folder to start indexing".into());
@@ -235,20 +243,17 @@ impl AppService {
                 millis: started.elapsed().as_millis() as u64,
                 engine_millis: 0,
                 arms: Vec::new(),
+                mode: mode.name().to_string(),
             });
         }
         let embedders = self.search_embedders()?;
-        let mut notes = Vec::new();
-        if embedders.image.is_none() {
-            notes.push("Image descriptions are off: the siglip models are not installed.".into());
-        }
-        if embedders.text.is_none() {
-            notes.push("Meaning search is off: the minilm models are not installed.".into());
-        }
+        let mut notes =
+            missing_model_notes(mode, embedders.image.is_some(), embedders.text.is_some());
         let engine_started = std::time::Instant::now();
         let outcome = fused_search(
             &self.data_dir,
             &parsed,
+            mode,
             embedders.image.as_deref(),
             embedders.text.as_deref(),
             limit.clamp(1, 100),
@@ -273,6 +278,7 @@ impl AppService {
             millis: started.elapsed().as_millis() as u64,
             engine_millis,
             arms,
+            mode: mode.name().to_string(),
         })
     }
 
@@ -727,6 +733,18 @@ fn write_cache(dir: &Path, target: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The lens named by a command argument, or the default when absent.
+///
+/// The window sends a lens name rather than an enum so a typo is a clear
+/// error, not a silent fallback to `all` that mixes every kind again.
+pub fn parse_lens(mode: Option<&str>) -> Result<SearchMode, String> {
+    match mode {
+        None => Ok(SearchMode::All),
+        Some(name) => SearchMode::parse(name)
+            .ok_or_else(|| format!("{name} is not a lens — use all, pictures, words or documents")),
+    }
+}
+
 /// A fused hit as the result list wants it.
 fn row_from_hit(hit: &tessera_core::fusion::FusedHit, terms: &[String]) -> Row {
     Row {
@@ -912,6 +930,7 @@ mod tests {
             page: Some(3),
             snippet: "the invoice total".into(),
             arms: Default::default(),
+            name_only: false,
         };
         let row = row_from_hit(&hit, &["invoice".into()]);
         assert_eq!(row.name, "invoice.pdf");
@@ -927,7 +946,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let service = AppService::new(temp.path(), temp.path().join("models"));
         assert!(!service.index_exists());
-        let error = service.search("invoice", 10).unwrap_err();
+        let error = service.search("invoice", SearchMode::All, 10).unwrap_err();
         assert!(error.contains("no index yet"), "{error}");
         let status = service.status().unwrap();
         assert_eq!(status.index_mb, 0.0);
@@ -1133,9 +1152,9 @@ mod tests {
         drop(Store::open(temp.path()).unwrap());
         let service = AppService::new(temp.path(), temp.path().join("models"));
         assert_eq!(service.search_loads(), 0);
-        let first = service.search("invoice", 10).unwrap();
+        let first = service.search("invoice", SearchMode::All, 10).unwrap();
         assert_eq!(service.search_loads(), 1);
-        let second = service.search("invoice", 10).unwrap();
+        let second = service.search("invoice", SearchMode::All, 10).unwrap();
         assert_eq!(
             service.search_loads(),
             1,
@@ -1155,11 +1174,55 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         drop(Store::open(temp.path()).unwrap());
         let service = AppService::new(temp.path(), temp.path().join("models"));
-        service.search("invoice", 10).unwrap();
+        service.search("invoice", SearchMode::All, 10).unwrap();
         assert!(service.search_embedders_are_cached());
         service.install_models(&[]).unwrap();
         assert!(!service.search_embedders_are_cached());
-        service.search("invoice", 10).unwrap();
+        service.search("invoice", SearchMode::All, 10).unwrap();
         assert_eq!(service.search_loads(), 2);
+    }
+
+    #[test]
+    fn search_echoes_the_lens() {
+        // The window drops a payload whose mode is not the lens on screen, so
+        // the answer has to carry the lens that produced it.
+        let temp = tempfile::tempdir().unwrap();
+        drop(Store::open(temp.path()).unwrap());
+        let service = AppService::new(temp.path(), temp.path().join("models"));
+        let payload = service.search("invoice", SearchMode::Pictures, 10).unwrap();
+        assert_eq!(payload.mode, "pictures");
+        assert!(payload.rows.is_empty());
+    }
+
+    #[test]
+    fn an_unknown_lens_is_an_error() {
+        assert_eq!(parse_lens(None).unwrap(), SearchMode::All);
+        assert_eq!(parse_lens(Some("words")).unwrap(), SearchMode::Words);
+        let error = parse_lens(Some("videos")).unwrap_err();
+        assert!(error.contains("not a lens"), "{error}");
+        assert!(error.contains("videos"), "{error}");
+    }
+
+    #[test]
+    fn pictures_without_the_model_says_so() {
+        // The note names the lens's own arm; a pictures query must not be told
+        // that the meaning arm is off, because pictures never runs it.
+        let temp = tempfile::tempdir().unwrap();
+        drop(Store::open(temp.path()).unwrap());
+        let service = AppService::new(temp.path(), temp.path().join("models"));
+        let payload = service.search("samurai", SearchMode::Pictures, 10).unwrap();
+        assert!(
+            payload
+                .notes
+                .iter()
+                .any(|note| note.contains("picture search is off")),
+            "{:?}",
+            payload.notes
+        );
+        assert!(
+            payload.notes.iter().all(|note| !note.contains("meaning")),
+            "{:?}",
+            payload.notes
+        );
     }
 }
