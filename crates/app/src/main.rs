@@ -22,7 +22,7 @@ use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt as _, ShortcutState};
 use tessera_app::engine::{
-    parse_lens, AppService, Preview, RecentPayload, SearchPayload, StatusPayload,
+    parse_lens, AppService, LibraryPayload, Preview, RecentPayload, SearchPayload, StatusPayload,
 };
 use tessera_app::watcher::{WatchHandle, WatchStatus};
 
@@ -82,8 +82,24 @@ async fn search(
 }
 
 #[tauri::command]
-async fn preview(shell: State<'_, Shell>, path: String, query: String) -> Result<Preview, String> {
-    shell.service.preview(&path, &query)
+async fn preview(
+    shell: State<'_, Shell>,
+    path: String,
+    query: String,
+    page: Option<u32>,
+) -> Result<Preview, String> {
+    shell.service.preview(&path, &query, page)
+}
+
+/// The home's library: newest indexed files, optionally narrowed to some
+/// kinds, with the counts that describe the whole index.
+#[tauri::command]
+async fn library(
+    shell: State<'_, Shell>,
+    kinds: Option<Vec<String>>,
+    limit: usize,
+) -> Result<LibraryPayload, String> {
+    shell.service.library(&kinds.unwrap_or_default(), limit)
 }
 
 /// Image bytes for a path the *index* knows is an image.
@@ -303,6 +319,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             search,
             preview,
+            library,
             preview_image,
             thumbnail,
             status,

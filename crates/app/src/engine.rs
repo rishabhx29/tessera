@@ -12,17 +12,23 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 
 use tessera_core::cli::{image_query_embedder, text_embedder, text_query_embedder};
-use tessera_core::fusion::{missing_model_notes, parse_query, search as fused_search, SearchMode};
+use tessera_core::fusion::{
+    line_marks, missing_model_notes, parse_query, search as fused_search, Mark, SearchMode,
+};
 use tessera_core::index::{index_folder, index_folder_with_text, IndexSummary};
 use tessera_core::models::Models;
 use tessera_core::ocr::OcrChoice;
 use tessera_core::store::Store;
 use tessera_core::vectors::{QueryEmbedder, TextEmbedder};
 
-/// Longest edge of a result thumbnail, in pixels. The list draws these at
-/// 44 px, so 320 leaves detail for a 2x display and for the preview pane's
-/// first frame without holding a screenshot in memory.
-const THUMBNAIL_EDGE: u32 = 320;
+/// Longest edge of a result thumbnail, in pixels. The wall's rows are about
+/// 168 px tall, so 480 leaves detail on a 2x display without holding a
+/// screenshot in memory.
+const THUMBNAIL_EDGE: u32 = 480;
+
+/// The thumbnail cache's format version. A change to the edge or the encoder
+/// moves it, so an old entry is never served for a new size.
+const THUMBNAIL_VERSION: u32 = 2;
 
 /// JPEG quality for a thumbnail. 82 is visually clean at this size and keeps a
 /// screenshot near 20 KB, which matters when forty rows load at once.
@@ -61,7 +67,7 @@ pub struct Segment {
 }
 
 /// One result as the list renders it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Row {
     pub path: String,
     pub name: String,
@@ -71,10 +77,55 @@ pub struct Row {
     pub snippet: Vec<Segment>,
     /// `keyword`, `image`, `meaning` — the arms that found this file.
     pub arms: Vec<String>,
+    /// The picture's size, for the wall's layout. `None` for a document or a
+    /// picture whose header has not been read yet.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    /// The matching lines' places on the picture. Empty for a document, for a
+    /// match that came from the image arm alone, and for a picture whose
+    /// geometry has not been read.
+    pub marks: Vec<RowMark>,
+    /// The file's only searchable text is its own name: there is nothing
+    /// inside it to show, so the wall and the preview say so.
+    pub name_only: bool,
+}
+
+/// A rectangle on a picture, in fractions of its width and height. The app's
+/// serializable mirror of [`tessera_core::fusion::Mark`].
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RowMark {
+    pub x0: f32,
+    pub y0: f32,
+    pub x1: f32,
+    pub y1: f32,
+}
+
+/// The home's answer: a page of the library plus the counts that describe the
+/// index behind it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LibraryPayload {
+    pub rows: Vec<LibraryRow>,
+    pub pictures: i64,
+    pub documents: i64,
+    pub indexed: i64,
+    pub folders: usize,
+}
+
+/// One library row: a file the wall or the document list can show.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LibraryRow {
+    pub path: String,
+    pub name: String,
+    pub folder: String,
+    pub kind: String,
+    /// Nanoseconds since the Unix epoch, as the last index run saw it.
+    pub mtime: i64,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 
 /// A search answer, including why it may be empty.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SearchPayload {
     pub rows: Vec<Row>,
     /// User-facing notes: no index, no models, an arm with nothing to rank.
@@ -93,17 +144,20 @@ pub struct SearchPayload {
 }
 
 /// The preview pane's answer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Preview {
     pub path: String,
     pub name: String,
     pub kind: String,
     pub page: Option<u32>,
-    /// The text of the matching tile (OCR text for an image), with the query's
+    /// The text of the matched tile (OCR text for an image), with the query's
     /// terms highlighted.
     pub text: Vec<Segment>,
     /// Present for images: the shell displays this file directly.
     pub image_path: Option<String>,
+    /// The matching lines' places on the picture, in the same fractions the
+    /// wall uses. Empty for a document and for a query that marks nothing.
+    pub marks: Vec<RowMark>,
 }
 
 /// Counts and paths for the progress and settings screens.
@@ -111,15 +165,33 @@ pub struct Preview {
 pub struct StatusPayload {
     pub index_path: String,
     pub index_mb: f64,
+    /// Kept until the old window is replaced; Settings reads `folder_rows`,
+    /// which also carries each folder's file count.
     pub folders: Vec<String>,
+    pub folder_rows: Vec<FolderCountRow>,
+    pub version: String,
     /// `(status, count)`, from the store.
     pub counts: Vec<(String, i64)>,
+    /// `(kind, count)` among indexed files.
+    pub counts_by_kind: Vec<(String, i64)>,
     pub failures: Vec<FailureRow>,
     pub skip_reasons: Vec<(String, i64)>,
     /// `(set, complete, missing files)`.
     pub models: Vec<ModelSetRow>,
     pub image_vectors: i64,
     pub text_vectors: i64,
+    /// The OCR engine this build prefers, for Settings.
+    pub ocr_engine: String,
+    /// Pictures whose line geometry has not been read yet. Settings shows one
+    /// quiet line when this is above zero.
+    pub highlight_pending: i64,
+}
+
+/// One indexed folder and how many files it holds, for Settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FolderCountRow {
+    pub path: String,
+    pub count: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -312,10 +384,15 @@ impl AppService {
         Ok(embedders)
     }
 
-    /// The preview pane: the matched tile's text, highlighted, and the image
-    /// path when the hit is an image. A file that has no tile (an image whose
-    /// OCR produced nothing) still previews as an image.
-    pub fn preview(&self, path: &str, query: &str) -> Result<Preview, String> {
+    /// The preview pane: the matched tile's text, highlighted, the image path
+    /// when the hit is an image, and where on the picture the matching lines
+    /// sit. A file that has no tile (an image whose OCR produced nothing) still
+    /// previews as an image.
+    ///
+    /// `page` is the page the result named. A stale number — the file was
+    /// reindexed since the search — falls back to the first tile rather than
+    /// an error: the row is out of date, not the file.
+    pub fn preview(&self, path: &str, query: &str, page: Option<u32>) -> Result<Preview, String> {
         let store = Store::open(&self.data_dir).map_err(|err| format!("{err:#}"))?;
         let file_id = store
             .file_id(Path::new(path))
@@ -329,13 +406,22 @@ impl AppService {
         let terms: Vec<String> = parse_query(&[query.to_string()])
             .map(|parsed| parsed.terms)
             .unwrap_or_default();
-        let page = file.tiles.first().and_then(|tile| tile.page);
-        let text = file
-            .tiles
-            .first()
+        let chosen = page
+            .and_then(|wanted| file.tiles.iter().find(|tile| tile.page == Some(wanted)))
+            .or_else(|| file.tiles.first());
+        let page = chosen.and_then(|tile| tile.page);
+        let text = chosen
             .map(|tile| highlight(&tile.text, &terms))
             .unwrap_or_default();
         let is_image = file.kind == "image";
+        let marks = if is_image {
+            let needles: Vec<&str> = terms.iter().map(String::as_str).collect();
+            chosen
+                .map(|tile| row_marks(&line_marks(&tile.text, &tile.boxes, &needles)))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         Ok(Preview {
             path: file.path.clone(),
             name: file_name(&file.path),
@@ -343,6 +429,7 @@ impl AppService {
             page,
             text,
             image_path: is_image.then_some(file.path),
+            marks,
         })
     }
 
@@ -421,7 +508,7 @@ impl AppService {
             ));
         }
         let mtime = disk_mtime_nanos(&meta).unwrap_or(source.indexed_mtime as u128);
-        let key = format!("{}-{mtime}.jpg", source.file_id);
+        let key = format!("{}-{mtime}-v{THUMBNAIL_VERSION}.jpg", source.file_id);
         let cache_dir = self.data_dir.join("thumbs");
         let cache_file = cache_dir.join(&key);
         if let Ok(bytes) = std::fs::read(&cache_file) {
@@ -455,25 +542,47 @@ impl AppService {
             index_path: index_path.display().to_string(),
             index_mb: (index_mb * 10.0).round() / 10.0,
             folders: Vec::new(),
+            folder_rows: Vec::new(),
+            version: tessera_core::VERSION.to_string(),
             counts: Vec::new(),
+            counts_by_kind: Vec::new(),
             failures: Vec::new(),
             skip_reasons: Vec::new(),
             models: Vec::new(),
             image_vectors: 0,
             text_vectors: 0,
+            ocr_engine: tessera_core::ocr::default_engine_name().to_string(),
+            highlight_pending: 0,
         };
         if !self.index_exists() {
             payload.models = self.model_rows();
             return Ok(payload);
         }
         let store = Store::open(&self.data_dir).map_err(|err| format!("{err:#}"))?;
-        payload.folders = store
-            .roots()
+        let roots = store.roots().map_err(|err| format!("{err:#}"))?;
+        let root_counts: std::collections::HashMap<String, i64> = store
+            .root_counts()
             .map_err(|err| format!("{err:#}"))?
             .into_iter()
-            .map(|path| path.display().to_string())
+            .collect();
+        payload.folder_rows = roots
+            .into_iter()
+            .map(|root| {
+                let path = root.display().to_string();
+                let count = root_counts.get(&path).copied().unwrap_or(0);
+                FolderCountRow { path, count }
+            })
+            .collect();
+        payload.folders = payload
+            .folder_rows
+            .iter()
+            .map(|row| row.path.clone())
             .collect();
         payload.counts = store.stats().map_err(|err| format!("{err:#}"))?;
+        payload.counts_by_kind = store.kind_counts().map_err(|err| format!("{err:#}"))?;
+        payload.highlight_pending = store
+            .image_tiles_missing_boxes_count()
+            .map_err(|err| format!("{err:#}"))?;
         payload.failures = store
             .failures()
             .map_err(|err| format!("{err:#}"))?
@@ -528,6 +637,56 @@ impl AppService {
         Ok(RecentPayload {
             rows,
             indexed,
+            folders,
+        })
+    }
+
+    /// The library: the newest indexed files, optionally narrowed to some
+    /// kinds, with the counts that describe the whole index.
+    ///
+    /// The counts are deliberately not filtered by `kinds`: the home's "12
+    /// pictures, 40 documents" describes the library, not the page it is
+    /// showing. `limit` is clamped here so a caller cannot turn the wall into
+    /// a full-index read.
+    pub fn library(&self, kinds: &[String], limit: usize) -> Result<LibraryPayload, String> {
+        if !self.index_exists() {
+            return Ok(LibraryPayload {
+                rows: Vec::new(),
+                pictures: 0,
+                documents: 0,
+                indexed: 0,
+                folders: 0,
+            });
+        }
+        let store = Store::open(&self.data_dir).map_err(|err| format!("{err:#}"))?;
+        let rows = store
+            .library_files(kinds, limit.clamp(1, 400))
+            .map_err(|err| format!("{err:#}"))?
+            .into_iter()
+            .map(|file| LibraryRow {
+                name: file_name(&file.path),
+                folder: folder_of(&file.path),
+                path: file.path,
+                kind: file.kind,
+                mtime: file.mtime,
+                width: file.width,
+                height: file.height,
+            })
+            .collect();
+        let counts = store.kind_counts().map_err(|err| format!("{err:#}"))?;
+        let count_of = |kind: &str| {
+            counts
+                .iter()
+                .filter(|(name, _)| name == kind)
+                .map(|(_, count)| *count)
+                .sum::<i64>()
+        };
+        let folders = store.roots().map_err(|err| format!("{err:#}"))?.len();
+        Ok(LibraryPayload {
+            rows,
+            pictures: count_of("image"),
+            documents: count_of("pdf") + count_of("docx") + count_of("text"),
+            indexed: counts.iter().map(|(_, count)| count).sum(),
             folders,
         })
     }
@@ -755,7 +914,23 @@ fn row_from_hit(hit: &tessera_core::fusion::FusedHit, terms: &[String]) -> Row {
         page: hit.page,
         snippet: highlight(&hit.snippet, terms),
         arms: hit.arms.names().into_iter().map(str::to_string).collect(),
+        width: hit.width,
+        height: hit.height,
+        marks: row_marks(&hit.marks),
+        name_only: hit.name_only,
     }
+}
+
+fn row_marks(marks: &[Mark]) -> Vec<RowMark> {
+    marks
+        .iter()
+        .map(|mark| RowMark {
+            x0: mark.x0,
+            y0: mark.y0,
+            x1: mark.x1,
+            y1: mark.y1,
+        })
+        .collect()
 }
 
 fn file_name(path: &str) -> String {
@@ -841,7 +1016,8 @@ pub fn highlight(text: &str, terms: &[String]) -> Vec<Segment> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tessera_core::index::Kind;
+    use tessera_core::geometry::NormBox;
+    use tessera_core::index::{Kind, Tile};
 
     #[test]
     fn a_match_is_highlighted_and_the_rest_is_not() {
@@ -931,6 +1107,9 @@ mod tests {
             snippet: "the invoice total".into(),
             arms: Default::default(),
             name_only: false,
+            width: None,
+            height: None,
+            marks: Vec::new(),
         };
         let row = row_from_hit(&hit, &["invoice".into()]);
         assert_eq!(row.name, "invoice.pdf");
@@ -970,6 +1149,234 @@ mod tests {
         assert!(error.contains("not in the index"), "{error}");
     }
 
+    // -- library ----------------------------------------------------------
+
+    #[test]
+    fn library_returns_rows_and_counts() {
+        let temp = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let service = AppService::new(temp.path(), temp.path().join("models"));
+
+        // No index is an empty library, not an error: the home state has to be
+        // able to ask before the first folder is added.
+        let empty = service.library(&[], 40).unwrap();
+        assert!(empty.rows.is_empty());
+        assert_eq!(
+            (
+                empty.pictures,
+                empty.documents,
+                empty.indexed,
+                empty.folders
+            ),
+            (0, 0, 0, 0)
+        );
+
+        let shot = corpus.path().join("samurai.png");
+        png(&shot, 800, 400);
+        let notes = corpus.path().join("notes.txt");
+        std::fs::write(&notes, b"words").unwrap();
+        let paper = corpus.path().join("invoice.pdf");
+        std::fs::write(&paper, b"not really a pdf").unwrap();
+        index_with_tiles(
+            &service,
+            corpus.path(),
+            &shot,
+            Kind::Image,
+            &[picture_tile("samurai.png", "a figure by the bridge")],
+        );
+        index_as(&service, corpus.path(), &notes, Kind::Text);
+        index_as(&service, corpus.path(), &paper, Kind::Pdf);
+
+        let payload = service.library(&[], 40).unwrap();
+        assert_eq!(payload.rows.len(), 3);
+        assert_eq!(payload.pictures, 1);
+        assert_eq!(payload.documents, 2, "pdf and text are documents");
+        assert_eq!(payload.indexed, 3);
+        assert_eq!(payload.folders, 1);
+
+        // The counts describe the whole index; the kinds only narrow the rows.
+        let pictures = service.library(&["image".into()], 40).unwrap();
+        assert_eq!(pictures.rows.len(), 1);
+        assert_eq!(pictures.rows[0].name, "samurai.png");
+        assert_eq!(pictures.pictures, 1);
+        assert_eq!(pictures.documents, 2);
+
+        let one = service.library(&[], 1).unwrap();
+        assert_eq!(one.rows.len(), 1, "the limit is the window's page size");
+    }
+
+    #[test]
+    fn rows_carry_picture_size() {
+        let temp = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let service = AppService::new(temp.path(), temp.path().join("models"));
+        let path = corpus.path().join("wide.png");
+        png(&path, 800, 400);
+        index_as(&service, corpus.path(), &path, Kind::Image);
+        set_size(&service, &path, 800, 400);
+
+        let payload = service.library(&[], 40).unwrap();
+        assert_eq!(payload.rows[0].width, Some(800));
+        assert_eq!(payload.rows[0].height, Some(400));
+    }
+
+    #[test]
+    fn rows_carry_marks_for_the_matched_lines() {
+        let temp = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let service = AppService::new(temp.path(), temp.path().join("models"));
+        let path = corpus.path().join("samurai.png");
+        png(&path, 800, 400);
+        index_with_tiles(
+            &service,
+            corpus.path(),
+            &path,
+            Kind::Image,
+            &[picture_tile(
+                "samurai.png",
+                "a samurai stands by the bridge",
+            )],
+        );
+        set_size(&service, &path, 800, 400);
+
+        let payload = service.search("samurai", SearchMode::Words, 10).unwrap();
+        let row = payload.rows.first().expect("the picture has the word");
+        assert_eq!(row.width, Some(800));
+        assert_eq!(row.height, Some(400));
+        assert!(!row.name_only, "the picture has text beyond its name");
+        assert_eq!(row.marks.len(), 1, "{:?}", row.marks);
+        let mark = &row.marks[0];
+        assert_eq!(
+            (mark.x0, mark.y0, mark.x1, mark.y1),
+            (0.1, 0.25, 0.6, 0.4),
+            "the mark is the line that carried the word"
+        );
+    }
+
+    // -- preview ----------------------------------------------------------
+
+    #[test]
+    fn preview_opens_the_matched_page() {
+        let temp = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let service = AppService::new(temp.path(), temp.path().join("models"));
+        let path = corpus.path().join("report.pdf");
+        std::fs::write(&path, b"not really a pdf").unwrap();
+        index_with_tiles(
+            &service,
+            corpus.path(),
+            &path,
+            Kind::Pdf,
+            &[
+                Tile {
+                    seq: 0,
+                    text: "page twelve".into(),
+                    page: Some(12),
+                    boxes: Vec::new(),
+                },
+                Tile {
+                    seq: 1,
+                    text: "page thirteen".into(),
+                    page: Some(13),
+                    boxes: Vec::new(),
+                },
+            ],
+        );
+
+        let matched = service
+            .preview(&path.to_string_lossy(), "", Some(13))
+            .unwrap();
+        assert_eq!(matched.page, Some(13));
+        let text: String = matched.text.iter().map(|s| s.text.as_str()).collect();
+        assert!(text.contains("thirteen"), "{text}");
+
+        // A page the file no longer has falls back to the first tile rather
+        // than an error: a stale row is not a broken file.
+        let stale = service
+            .preview(&path.to_string_lossy(), "", Some(99))
+            .unwrap();
+        assert_eq!(stale.page, Some(12));
+        let text: String = stale.text.iter().map(|s| s.text.as_str()).collect();
+        assert!(text.contains("twelve"), "{text}");
+    }
+
+    #[test]
+    fn preview_marks_use_the_query_terms() {
+        let temp = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let service = AppService::new(temp.path(), temp.path().join("models"));
+        let path = corpus.path().join("samurai.png");
+        png(&path, 800, 400);
+        index_with_tiles(
+            &service,
+            corpus.path(),
+            &path,
+            Kind::Image,
+            &[picture_tile(
+                "samurai.png",
+                "a SAMURAI stands by the bridge",
+            )],
+        );
+
+        let preview = service
+            .preview(&path.to_string_lossy(), "samurai", None)
+            .unwrap();
+        assert_eq!(preview.page, None);
+        assert!(preview.text.iter().any(|segment| segment.hit));
+        assert_eq!(preview.marks.len(), 1);
+        assert_eq!((preview.marks[0].x0, preview.marks[0].y0), (0.1, 0.25));
+
+        // A word the picture does not contain marks nothing, even though the
+        // file's name is still text on the tile.
+        let miss = service
+            .preview(&path.to_string_lossy(), "zebra", None)
+            .unwrap();
+        assert!(miss.marks.is_empty());
+    }
+
+    // -- status -----------------------------------------------------------
+
+    #[test]
+    fn status_names_the_folders_kinds_and_pending_highlights() {
+        let temp = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let service = AppService::new(temp.path(), temp.path().join("models"));
+        let shot = corpus.path().join("samurai.png");
+        png(&shot, 800, 400);
+        let notes = corpus.path().join("notes.txt");
+        std::fs::write(&notes, b"words").unwrap();
+        let paper = corpus.path().join("invoice.pdf");
+        std::fs::write(&paper, b"not really a pdf").unwrap();
+        index_with_tiles(
+            &service,
+            corpus.path(),
+            &shot,
+            Kind::Image,
+            &[picture_tile("samurai.png", "a figure by the bridge")],
+        );
+        index_as(&service, corpus.path(), &notes, Kind::Text);
+        index_as(&service, corpus.path(), &paper, Kind::Pdf);
+
+        let status = service.status().unwrap();
+        assert_eq!(status.version, tessera_core::VERSION);
+        assert!(!status.ocr_engine.is_empty());
+        assert_eq!(
+            status.counts_by_kind,
+            vec![
+                ("image".to_string(), 1),
+                ("pdf".to_string(), 1),
+                ("text".to_string(), 1)
+            ]
+        );
+        assert_eq!(status.folder_rows.len(), 1);
+        assert_eq!(status.folder_rows[0].count, 3);
+        assert_eq!(status.folder_rows[0].path, corpus.path().to_string_lossy());
+        assert_eq!(
+            status.highlight_pending, 0,
+            "fresh rows already carry their line boxes"
+        );
+    }
+
     // -- thumbnails -------------------------------------------------------
 
     fn facts(path: &Path) -> tessera_core::index::skip::FileFacts {
@@ -983,10 +1390,45 @@ mod tests {
 
     /// Put a file in the service's index the way an index run would.
     fn index_as(service: &AppService, root: &Path, path: &Path, kind: Kind) {
+        index_with_tiles(service, root, path, kind, &[]);
+    }
+
+    fn index_with_tiles(
+        service: &AppService,
+        root: &Path,
+        path: &Path,
+        kind: Kind,
+        tiles: &[Tile],
+    ) {
         let store = Store::open(service.data_dir()).unwrap();
         store
-            .index_file(root, path, kind, &facts(path), None, &[])
+            .index_file(root, path, kind, &facts(path), None, tiles)
             .unwrap();
+    }
+
+    fn set_size(service: &AppService, path: &Path, width: u32, height: u32) {
+        let store = Store::open(service.data_dir()).unwrap();
+        let file_id = store.file_id(path).unwrap();
+        store.set_dimensions(file_id, width, height).unwrap();
+    }
+
+    /// An image tile whose first line is the filename and whose second line is
+    /// a piece of visible text sitting at a known place on the picture.
+    fn picture_tile(name: &str, line: &str) -> Tile {
+        Tile {
+            seq: 0,
+            text: format!("{name}\n{line}"),
+            page: None,
+            boxes: vec![
+                None,
+                Some(NormBox {
+                    x0: 0.1,
+                    y0: 0.25,
+                    x1: 0.6,
+                    y1: 0.4,
+                }),
+            ],
+        }
     }
 
     fn png(path: &Path, width: u32, height: u32) {
@@ -1047,7 +1489,7 @@ mod tests {
     }
 
     #[test]
-    fn a_thumbnail_is_bounded_and_decoded_once_or_read_from_the_cache() {
+    fn thumbnail_is_480() {
         let temp = tempfile::tempdir().unwrap();
         let corpus = tempfile::tempdir().unwrap();
         let service = AppService::new(temp.path(), temp.path().join("models"));
@@ -1065,8 +1507,8 @@ mod tests {
         let decoded = image::load_from_memory(&first).unwrap();
         assert_eq!(
             (decoded.width(), decoded.height()),
-            (THUMBNAIL_EDGE, 213),
-            "the longest edge is capped and the aspect ratio is kept"
+            (480, 320),
+            "the longest edge is 480 and the aspect ratio is kept"
         );
 
         // The second request answers from the cache: the same bytes, one
@@ -1090,6 +1532,15 @@ mod tests {
         let store = Store::open(temp.path()).unwrap();
         let source = store.thumb_source(&path).unwrap().unwrap();
         assert_eq!(source.thumb.as_deref(), Some(entries[0].as_str()));
+
+        // The same cap holds for a picture taller than it is wide.
+        let tall = corpus.path().join("tall.png");
+        png(&tall, 200, 1000);
+        index_as(&service, corpus.path(), &tall, Kind::Image);
+        let tall_bytes = service.thumbnail(&tall.to_string_lossy()).unwrap();
+        let tall_decoded = image::load_from_memory(&tall_bytes).unwrap();
+        assert_eq!((tall_decoded.width(), tall_decoded.height()), (96, 480));
+        assert_eq!(service.thumbnail_decodes(), 2);
     }
 
     #[test]

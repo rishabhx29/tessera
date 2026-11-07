@@ -889,6 +889,19 @@ impl Store {
             .map_err(anyhow::Error::from)
     }
 
+    /// How many image tiles still need line geometry. Settings asks this on a
+    /// timer, so it counts instead of loading every pending tile's text.
+    pub fn image_tiles_missing_boxes_count(&self) -> Result<i64> {
+        let count = self.conn.query_row(
+            "SELECT COUNT(*)
+             FROM tiles t JOIN files f ON f.id = t.file_id
+             WHERE f.status = 'indexed' AND f.kind = 'image' AND t.boxes IS NULL",
+            [],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(count)
+    }
+
     /// Record one tile's line geometry, or `[]` when it has none.
     pub fn set_tile_boxes(&self, tile_id: i64, boxes: &[Option<NormBox>]) -> Result<()> {
         self.conn.execute(
