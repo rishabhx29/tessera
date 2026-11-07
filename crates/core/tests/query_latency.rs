@@ -22,7 +22,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use tessera_core::fusion::{parse_query, search};
+use tessera_core::fusion::{parse_query, search, SearchMode};
 use tessera_core::store::{Filter, Store, TEXT_EMBEDDING_DIM};
 use tessera_core::vectors::{rank, Embedding, TextEmbedder};
 
@@ -214,14 +214,16 @@ fn fused_overhead_is_measured() {
     let query = parse_query(&args).expect("the query parses");
 
     // Warm-up: plans, caches, and the first `Store::open` inside each arm.
-    let _ = search(&dir, &query, None, Some(&embedder), 10).expect("a warm-up search");
+    let _ =
+        search(&dir, &query, SearchMode::All, None, Some(&embedder), 10).expect("a warm-up search");
 
     const REPS: usize = 20;
     let mut fused = Vec::with_capacity(REPS);
     let mut text_arm = Vec::with_capacity(REPS);
     for _ in 0..REPS {
         let started = Instant::now();
-        let outcome = search(&dir, &query, None, Some(&embedder), 10).expect("the fused search");
+        let outcome = search(&dir, &query, SearchMode::All, None, Some(&embedder), 10)
+            .expect("the fused search");
         fused.push(ms(started));
         let timing = outcome
             .timings

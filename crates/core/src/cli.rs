@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
-use crate::fusion::{parse_query, search as fused_search};
+use crate::fusion::{parse_query, search as fused_search, SearchMode};
 use crate::index::{
     docx::DocxPipeline, image::ImagePipeline, index_folder, index_folder_with_text,
     pdf::PdfPipeline, text::TextPipeline, Pipeline,
@@ -95,6 +95,14 @@ enum Command {
         /// How many results to show. Defaults to 10.
         #[arg(long, short, default_value_t = 10)]
         limit: usize,
+        /// Which question to ask: `all`, `pictures`, `words` or `documents`.
+        ///
+        /// `pictures` runs only the image arm and answers with images.
+        /// `words` searches pictures with visible text, `documents` searches
+        /// PDF, Word and text files. Both keep the keyword and meaning arms
+        /// (ADR-0010).
+        #[arg(long, value_name = "LENS", default_value = "all")]
+        mode: String,
     },
     /// Read the text out of one image and print it, with timings. Exists so the
     /// two engines can be compared from a terminal on the same file, which is how
@@ -481,7 +489,11 @@ pub fn run() -> Result<()> {
             describe,
             describe_text,
             limit,
+            mode,
         } => {
+            let mode = SearchMode::parse(&mode).ok_or_else(|| {
+                anyhow::anyhow!("{mode} is not a lens — use all, pictures, words or documents")
+            })?;
             // `--describe` is the other arm, not a rephrasing of this one: it
             // embeds the words and compares them with what each image looks
             // like. The two are not merged, because on files that contain text
@@ -571,12 +583,16 @@ pub fn run() -> Result<()> {
             let models = Models::open(&models_dir(&data_dir, cli.models_dir.as_deref()))?;
             let image = image_query_embedder(&models);
             let text = text_query_embedder(&models);
+            for note in crate::fusion::missing_model_notes(mode, image.is_some(), text.is_some()) {
+                eprintln!("note: {note}");
+            }
             // Measured after the embedders are built: this number is the
             // search, not the model loading a process pays once.
             let started = std::time::Instant::now();
             let outcome = fused_search(
                 &data_dir,
                 &parsed,
+                mode,
                 image
                     .as_deref()
                     .map(|embedder| embedder as &dyn QueryEmbedder),

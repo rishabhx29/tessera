@@ -1162,6 +1162,21 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Files whose extracted text carries more than the filename line: the
+    /// index's answer to "does this file have visible body text".
+    ///
+    /// [`crate::index::with_filename`] puts the name on its own line, so a
+    /// file with body text always holds a newline and a name-only file never
+    /// does. The words and documents lenses use this to keep a picture named
+    /// `samurai.png` out of a search for the words inside pictures.
+    pub fn file_ids_with_body_text(&self) -> Result<HashSet<i64>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT file_id FROM tiles WHERE instr(text, char(10)) > 0")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<HashSet<_>>>()?)
+    }
+
     /// Characters of text each file holds, summed over its tiles: the evidence
     /// the fusion weights are chosen from. A file with no tiles at all — a
     /// photo with nothing to read — is absent from the map, which is the same

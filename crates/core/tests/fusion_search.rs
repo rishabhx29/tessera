@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use tessera_core::fusion::{parse_query, search};
+use tessera_core::fusion::{parse_query, search, SearchMode};
 use tessera_core::index::{
     docx::DocxPipeline, image::ImagePipeline, index_folder_with_text, pdf::PdfPipeline,
     text::TextPipeline, Pipeline,
@@ -169,7 +169,7 @@ fn a_real_folder_answers_one_query_with_every_arm() {
     let mut named: Vec<&'static str> = Vec::new();
     for query in queries() {
         let parsed = parse_query(std::slice::from_ref(&query)).unwrap();
-        let outcome = search(&data, &parsed, image, Some(text), 5).unwrap();
+        let outcome = search(&data, &parsed, SearchMode::All, image, Some(text), 5).unwrap();
         println!("\n-- {query:?} --");
         for hit in &outcome.hits {
             named.extend(hit.arms.names());
@@ -200,7 +200,7 @@ fn a_real_folder_answers_one_query_with_every_arm() {
     // A filter with no terms is a listing, not a search: files of that kind,
     // newest first, wearing no arm label because no arm ran.
     let parsed = parse_query(&["type:image".to_string()]).unwrap();
-    let listing = search(&data, &parsed, image, Some(text), 50).unwrap();
+    let listing = search(&data, &parsed, SearchMode::All, image, Some(text), 50).unwrap();
     assert!(listing.timings.is_empty(), "a listing runs no arms");
     assert!(
         listing.hits.iter().all(|hit| hit.kind == "image"),
@@ -249,7 +249,7 @@ fn fused_search_latency_is_measured() {
         let args = [query.to_string()];
         let parsed = parse_query(&args).unwrap();
         let started = Instant::now();
-        let outcome = search(&index, &parsed, image, Some(text), 10).unwrap();
+        let outcome = search(&index, &parsed, SearchMode::All, image, Some(text), 10).unwrap();
         assert!(
             !outcome.hits.is_empty() || !outcome.notes.is_empty(),
             "a query on the measured index found nothing and said nothing: {query:?}"
@@ -271,7 +271,7 @@ fn fused_search_latency_is_measured() {
         let query = &queries[i % queries.len()];
         let parsed = parse_query(std::slice::from_ref(query)).unwrap();
         let started = Instant::now();
-        let outcome = search(&index, &parsed, image, Some(text), 10).unwrap();
+        let outcome = search(&index, &parsed, SearchMode::All, image, Some(text), 10).unwrap();
         let total = started.elapsed().as_secs_f64() * 1000.0;
         samples.push(total);
         for timing in &outcome.timings {

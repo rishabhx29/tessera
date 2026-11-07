@@ -183,6 +183,60 @@ impl Weights {
     }
 }
 
+/// The pictures lens answers by appearance alone. One arm, one weight in every
+/// evidence class: how much text a picture carries must not reorder a visual
+/// search, because the user did not ask about its text.
+const PICTURES: Weights = Weights {
+    full: ArmWeights {
+        lexical: 0.0,
+        image: 1.0,
+        text: 0.0,
+    },
+    little: ArmWeights {
+        lexical: 0.0,
+        image: 1.0,
+        text: 0.0,
+    },
+    none: ArmWeights {
+        lexical: 0.0,
+        image: 1.0,
+        text: 0.0,
+    },
+};
+
+fn weights_for(mode: SearchMode) -> &'static Weights {
+    match mode {
+        SearchMode::Pictures => &PICTURES,
+        _ => &CHOSEN,
+    }
+}
+
+/// The notes a missing model set earns under a lens. One wording, used by the
+/// window and the CLI, and never a note about an arm the lens does not run.
+pub fn missing_model_notes(
+    mode: SearchMode,
+    image_available: bool,
+    text_available: bool,
+) -> Vec<String> {
+    let mut notes = Vec::new();
+    if mode.runs_image() && !image_available {
+        notes.push(if mode == SearchMode::Pictures {
+            "picture search is off: the siglip models are not installed".to_string()
+        } else {
+            "the image arm is off: the siglip models are not installed".to_string()
+        });
+    }
+    if mode.runs_meaning() && !text_available {
+        notes.push(if mode == SearchMode::All {
+            "the meaning arm is off: the minilm models are not installed".to_string()
+        } else {
+            "meaning search is off: the minilm models are not installed. keywords still work"
+                .to_string()
+        });
+    }
+    notes
+}
+
 /// A file as one arm returned it, in the arm's order. `tile_id` is the tile
 /// the arm found it in, when the arm ranks positions at all; the image arm
 /// ranks files and says `None`.
@@ -276,6 +330,79 @@ pub fn fuse(
 pub struct Query {
     pub terms: Vec<String>,
     pub filter: Filter,
+}
+
+/// Which question the user is asking. A lens selects the arms that run and the
+/// kinds that may answer (ADR-0010).
+///
+/// `All` is the neutral question: every arm over every kind, with the existing
+/// evidence-weighted fusion. The other three are the questions a picture
+/// library has to separate: what a picture looks like, what words are inside
+/// it, and what words are inside a document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SearchMode {
+    #[default]
+    All,
+    Pictures,
+    Words,
+    Documents,
+}
+
+impl SearchMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "all" => Some(Self::All),
+            "pictures" => Some(Self::Pictures),
+            "words" => Some(Self::Words),
+            "documents" => Some(Self::Documents),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Pictures => "pictures",
+            Self::Words => "words",
+            Self::Documents => "documents",
+        }
+    }
+
+    /// The file kinds this lens may answer with. Empty means every kind.
+    pub fn kinds(self) -> &'static [&'static str] {
+        match self {
+            Self::All => &[],
+            Self::Pictures | Self::Words => &["image"],
+            Self::Documents => &["pdf", "docx", "text"],
+        }
+    }
+
+    pub fn runs_lexical(self) -> bool {
+        !matches!(self, Self::Pictures)
+    }
+
+    pub fn runs_image(self) -> bool {
+        matches!(self, Self::All | Self::Pictures)
+    }
+
+    pub fn runs_meaning(self) -> bool {
+        matches!(self, Self::All | Self::Words | Self::Documents)
+    }
+
+    /// Whether only files with body text may answer. The filename line does
+    /// not count as text inside the file.
+    pub fn needs_visible_text(self) -> bool {
+        matches!(self, Self::Words | Self::Documents)
+    }
+
+    /// The lens kinds in the user's filter vocabulary, for a conflict note.
+    fn kinds_phrase(self) -> &'static str {
+        match self {
+            Self::All => "every file",
+            Self::Pictures | Self::Words => "images",
+            Self::Documents => "pdf, docx and text files",
+        }
+    }
 }
 
 impl Query {
@@ -452,6 +579,9 @@ pub struct FusedHit {
     pub page: Option<u32>,
     pub snippet: String,
     pub arms: ArmSet,
+    /// The keyword arm voted, but no term appears in the body text: the file
+    /// matched on its name. The window says "name matches" for this hit.
+    pub name_only: bool,
 }
 
 /// One arm's wall time, in milliseconds. Measured per search, never estimated.
@@ -485,7 +615,7 @@ fn trace_mark(started: Instant, label: &str) {
     }
 }
 
-/// Run every available arm against the index in `data_dir` and fuse.
+/// Run the arms the lens asks for against the index in `data_dir` and fuse.
 ///
 /// The arms run on threads, each opening its own [`Store`] inside its thread:
 /// `rusqlite::Connection` is `Send` but not `Sync`, and the index is in WAL
@@ -493,13 +623,16 @@ fn trace_mark(started: Instant, label: &str) {
 /// connection does the evidence and display passes after the arms land — one
 /// writer-free pass over the fused ids.
 ///
-/// `image` and `text` are the embedders whose model sets are installed; an
-/// arm whose embedder is absent does not run, and the search is still a
-/// search. A call with no terms is a filter-only listing: the files the
-/// filters name, newest first, no arms and no scores.
+/// `mode` is the question the user is asking. It selects the arms that run,
+/// narrows the kinds that may answer, and for `words` and `documents` keeps
+/// name-only files out (ADR-0010). `image` and `text` are the embedders whose
+/// model sets are installed; an arm whose embedder is absent does not run, and
+/// the search is still a search. A call with no terms is a filter-only
+/// listing: the files the filters name, newest first, no arms and no scores.
 pub fn search(
     data_dir: &Path,
     query: &Query,
+    mode: SearchMode,
     image: Option<&dyn QueryEmbedder>,
     text: Option<&dyn TextEmbedder>,
     limit: usize,
@@ -508,11 +641,22 @@ pub fn search(
     let store = Store::open(data_dir).context("opening the index for search")?;
     trace_mark(trace_started, "store opened");
 
+    let effective_filter = match lens_filter(query, mode) {
+        Ok(filter) => filter,
+        Err(note) => {
+            return Ok(SearchOutcome {
+                hits: Vec::new(),
+                timings: Vec::new(),
+                notes: vec![note],
+            });
+        }
+    };
+
     if query.terms.is_empty() {
-        let hits = if query.filter.is_empty() {
+        let hits = if effective_filter.is_empty() {
             Vec::new()
         } else {
-            filter_only(&store, query, limit)?
+            filter_only(&store, &effective_filter, mode, limit)?
         };
         return Ok(SearchOutcome {
             hits,
@@ -522,14 +666,16 @@ pub fn search(
     }
 
     let mut notes = Vec::new();
-    if image.is_some() && !store.has_image_vectors()? {
-        notes.push(
+    if mode.runs_image() && image.is_some() && !store.has_image_vectors()? {
+        notes.push(if mode == SearchMode::Pictures {
+            "no picture has a description yet — run `tessera index` again to embed them".to_string()
+        } else {
             "the image arm has no vectors yet — run `tessera index` to embed the files \
              already indexed"
-                .to_string(),
-        );
+                .to_string()
+        });
     }
-    if text.is_some() && !store.has_text_vectors()? {
+    if mode.runs_meaning() && text.is_some() && !store.has_text_vectors()? {
         notes.push(
             "the meaning arm has no vectors yet — run `tessera index` to embed the files \
              already indexed"
@@ -540,72 +686,93 @@ pub fn search(
 
     let terms: Vec<&str> = query.terms.iter().map(String::as_str).collect();
     let content = query.content();
-    let allowed: Option<HashSet<i64>> = if query.filter.is_empty() {
+    let mut allowed: Option<HashSet<i64>> = if effective_filter.is_empty() {
         None
     } else {
         Some(
             store
-                .filtered_file_ids(&query.filter)?
+                .filtered_file_ids(&effective_filter)?
                 .into_iter()
                 .collect(),
         )
     };
+    if mode.needs_visible_text() {
+        let body = store.file_ids_with_body_text()?;
+        allowed = Some(match allowed {
+            Some(allowed) => allowed.intersection(&body).copied().collect(),
+            None => body,
+        });
+    }
 
     let mut arms: Vec<(Arm, Vec<Ranked>)> = Vec::new();
     let mut timings: Vec<ArmTiming> = Vec::new();
 
     std::thread::scope(|scope| -> Result<()> {
-        let lexical = scope.spawn(|| -> Result<(Vec<Ranked>, f64)> {
-            let store = Store::open(data_dir)?;
-            let started = Instant::now();
-            let ranked = crate::search::lexical_ranked(&store, &terms, &query.filter)?;
-            let ranked = ranked
-                .into_iter()
-                .map(|(file_id, tile_id)| Ranked { file_id, tile_id })
-                .collect();
-            Ok((ranked, started.elapsed().as_secs_f64() * 1000.0))
-        });
-        let image_arm = image.map(|embedder| {
-            scope.spawn(|| -> Result<(Vec<Ranked>, f64)> {
+        let lexical = if mode.runs_lexical() {
+            Some(scope.spawn(|| -> Result<(Vec<Ranked>, f64)> {
                 let store = Store::open(data_dir)?;
                 let started = Instant::now();
-                let vector = embedder.embed_query(&content)?;
-                let ranked = store
-                    .ranked_image_file_ids(&vector, embedder.dim())?
+                let ranked = crate::search::lexical_ranked(&store, &terms, &effective_filter)?;
+                let ranked = ranked
                     .into_iter()
-                    .map(|file_id| Ranked {
-                        file_id,
-                        tile_id: None,
-                    })
+                    .map(|(file_id, tile_id)| Ranked { file_id, tile_id })
                     .collect();
                 Ok((ranked, started.elapsed().as_secs_f64() * 1000.0))
+            }))
+        } else {
+            None
+        };
+        let image_arm = if mode.runs_image() {
+            image.map(|embedder| {
+                scope.spawn(|| -> Result<(Vec<Ranked>, f64)> {
+                    let store = Store::open(data_dir)?;
+                    let started = Instant::now();
+                    let vector = embedder.embed_query(&content)?;
+                    let ranked = store
+                        .ranked_image_file_ids(&vector, embedder.dim())?
+                        .into_iter()
+                        .map(|file_id| Ranked {
+                            file_id,
+                            tile_id: None,
+                        })
+                        .collect();
+                    Ok((ranked, started.elapsed().as_secs_f64() * 1000.0))
+                })
             })
-        });
-        let text_arm = text.map(|embedder| {
-            scope.spawn(|| -> Result<(Vec<Ranked>, f64)> {
-                let store = Store::open(data_dir)?;
-                let started = Instant::now();
-                let vector = embedder.embed_text(&content)?;
-                let ranked = store
-                    .ranked_text_file_tiles(&vector, crate::store::TEXT_EMBEDDING_DIM)?
-                    .into_iter()
-                    .map(|(file_id, tile_id)| Ranked {
-                        file_id,
-                        tile_id: Some(tile_id),
-                    })
-                    .collect();
-                Ok((ranked, started.elapsed().as_secs_f64() * 1000.0))
+        } else {
+            None
+        };
+        let text_arm = if mode.runs_meaning() {
+            text.map(|embedder| {
+                scope.spawn(|| -> Result<(Vec<Ranked>, f64)> {
+                    let store = Store::open(data_dir)?;
+                    let started = Instant::now();
+                    let vector = embedder.embed_text(&content)?;
+                    let ranked = store
+                        .ranked_text_file_tiles(&vector, crate::store::TEXT_EMBEDDING_DIM)?
+                        .into_iter()
+                        .map(|(file_id, tile_id)| Ranked {
+                            file_id,
+                            tile_id: Some(tile_id),
+                        })
+                        .collect();
+                    Ok((ranked, started.elapsed().as_secs_f64() * 1000.0))
+                })
             })
-        });
+        } else {
+            None
+        };
 
-        let (ranked, millis) = lexical
-            .join()
-            .map_err(|_| anyhow!("the lexical arm panicked"))??;
-        timings.push(ArmTiming {
-            arm: Arm::Lexical,
-            millis,
-        });
-        arms.push((Arm::Lexical, ranked));
+        if let Some(handle) = lexical {
+            let (ranked, millis) = handle
+                .join()
+                .map_err(|_| anyhow!("the lexical arm panicked"))??;
+            timings.push(ArmTiming {
+                arm: Arm::Lexical,
+                millis,
+            });
+            arms.push((Arm::Lexical, ranked));
+        }
 
         if let Some(handle) = image_arm {
             let (ranked, millis) = handle
@@ -656,7 +823,7 @@ pub fn search(
         .collect();
     trace_mark(trace_started, "candidates and evidence collected");
 
-    let fused = fuse(&arms, &evidence, &CHOSEN, limit);
+    let fused = fuse(&arms, &evidence, weights_for(mode), limit);
     trace_mark(trace_started, "fused");
 
     let ids: Vec<i64> = fused.iter().map(|hit| hit.file_id).collect();
@@ -692,6 +859,18 @@ pub fn search(
             // No literal words to aim at: a head-of-text preview instead.
             crate::search::snippet_around(text, &[], 160)
         };
+        // A file matches by name when the keyword arm voted but the word is
+        // only on the filename line. A match on any tile after the first is
+        // body text by construction: the name is only prepended to tile one.
+        let name_only = hit.arms.contains(Arm::Lexical)
+            && hit.tile_id.is_some_and(|tile_id| {
+                display
+                    .first_tile
+                    .as_ref()
+                    .is_some_and(|(first_id, _, first_text)| {
+                        tile_id == *first_id && !body_contains_any(first_text, &terms)
+                    })
+            });
         hits.push(FusedHit {
             file_id: hit.file_id,
             path: display.path.clone(),
@@ -699,6 +878,7 @@ pub fn search(
             page,
             snippet,
             arms: hit.arms,
+            name_only,
         });
     }
     trace_mark(trace_started, "hits built");
@@ -710,14 +890,80 @@ pub fn search(
     })
 }
 
+/// The query's filter narrowed by the lens, or the note that explains why the
+/// two cannot both hold. A filter may narrow a lens; it may never widen it.
+fn lens_filter(query: &Query, mode: SearchMode) -> std::result::Result<Filter, String> {
+    let mut filter = query.filter.clone();
+    let kinds = mode.kinds();
+    if kinds.is_empty() {
+        return Ok(filter);
+    }
+    if filter.kinds.is_empty() {
+        filter.kinds = kinds.iter().map(|kind| (*kind).to_string()).collect();
+        return Ok(filter);
+    }
+    let narrowed: Vec<String> = filter
+        .kinds
+        .iter()
+        .filter(|kind| kinds.contains(&kind.as_str()))
+        .cloned()
+        .collect();
+    if narrowed.is_empty() {
+        return Err(format!(
+            "the {} lens searches {} only, so {} cannot narrow it",
+            mode.name(),
+            mode.kinds_phrase(),
+            kind_filter_label(&filter.kinds),
+        ));
+    }
+    filter.kinds = narrowed;
+    Ok(filter)
+}
+
+/// The user's `type:` filter spelled back as they typed it, for the conflict
+/// note. `docx` and `text` are one word to the user.
+fn kind_filter_label(kinds: &[String]) -> String {
+    let mut sorted: Vec<&str> = kinds.iter().map(String::as_str).collect();
+    sorted.sort_unstable();
+    match sorted.as_slice() {
+        ["image"] => "type:image".into(),
+        ["pdf"] => "type:pdf".into(),
+        ["docx", "text"] => "type:doc".into(),
+        _ => sorted
+            .iter()
+            .map(|kind| format!("type:{kind}"))
+            .collect::<Vec<_>>()
+            .join(" or "),
+    }
+}
+
+/// Whether any term appears in the body lines of a tile. The first line is the
+/// filename [`crate::index::with_filename`] prepended, so it never counts.
+fn body_contains_any(text: &str, terms: &[&str]) -> bool {
+    let body = text.split_once('\n').map(|(_, body)| body).unwrap_or("");
+    let lower = body.to_lowercase();
+    terms
+        .iter()
+        .any(|term| lower.contains(&term.to_lowercase()))
+}
+
 /// A query with no terms: the files the filters name, newest first, each
 /// rendered from its first tile. No arm runs, so no hit wears a label.
-fn filter_only(store: &Store, query: &Query, limit: usize) -> Result<Vec<FusedHit>> {
-    let ids: Vec<i64> = store
-        .filtered_file_ids(&query.filter)?
-        .into_iter()
-        .take(limit)
-        .collect();
+///
+/// The words and documents lenses keep name-only files out here too: a
+/// listing is still a search for words inside a file.
+fn filter_only(
+    store: &Store,
+    filter: &Filter,
+    mode: SearchMode,
+    limit: usize,
+) -> Result<Vec<FusedHit>> {
+    let mut ids = store.filtered_file_ids(filter)?;
+    if mode.needs_visible_text() {
+        let body = store.file_ids_with_body_text()?;
+        ids.retain(|file_id| body.contains(file_id));
+    }
+    let ids: Vec<i64> = ids.into_iter().take(limit).collect();
     let displays = store.file_displays(&ids)?;
     let mut hits = Vec::with_capacity(ids.len());
     for file_id in ids {
@@ -740,6 +986,7 @@ fn filter_only(store: &Store, query: &Query, limit: usize) -> Result<Vec<FusedHi
                 crate::search::snippet_around(text, &[], 160)
             },
             arms: ArmSet::default(),
+            name_only: false,
         });
     }
     Ok(hits)
@@ -1085,7 +1332,15 @@ mod tests {
             .unwrap();
 
         let query = parse_query(&["apple".to_string()]).unwrap();
-        let outcome = search(data.path(), &query, Some(&FakeImage), Some(&FakeText), 10).unwrap();
+        let outcome = search(
+            data.path(),
+            &query,
+            SearchMode::All,
+            Some(&FakeImage),
+            Some(&FakeText),
+            10,
+        )
+        .unwrap();
 
         assert!(outcome.notes.is_empty(), "{:?}", outcome.notes);
         assert_eq!(
@@ -1137,7 +1392,15 @@ mod tests {
         );
 
         let query = parse_query(&["apple".to_string()]).unwrap();
-        let outcome = search(data.path(), &query, Some(&FakeImage), Some(&FakeText), 10).unwrap();
+        let outcome = search(
+            data.path(),
+            &query,
+            SearchMode::All,
+            Some(&FakeImage),
+            Some(&FakeText),
+            10,
+        )
+        .unwrap();
 
         let notes = outcome.notes.join("\n");
         assert!(notes.contains("image arm"), "{notes}");
@@ -1178,7 +1441,7 @@ mod tests {
         );
 
         let query = parse_query(&["type:pdf".to_string()]).unwrap();
-        let outcome = search(data.path(), &query, None, None, 10).unwrap();
+        let outcome = search(data.path(), &query, SearchMode::All, None, None, 10).unwrap();
 
         assert!(outcome.timings.is_empty(), "no arm ran");
         assert_eq!(outcome.hits.len(), 2);
@@ -1228,9 +1491,16 @@ mod tests {
             .unwrap();
 
         let arms = |query: &Query| {
-            search(data.path(), query, Some(&FakeImage), Some(&FakeText), 10)
-                .unwrap()
-                .hits
+            search(
+                data.path(),
+                query,
+                SearchMode::All,
+                Some(&FakeImage),
+                Some(&FakeText),
+                10,
+            )
+            .unwrap()
+            .hits
         };
         let unfiltered = arms(&parse_query(&["apple".to_string()]).unwrap());
         assert!(
@@ -1242,5 +1512,265 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert!(filtered[0].path.ends_with("doc.pdf"));
         assert_eq!(filtered[0].arms.names(), vec!["keyword", "meaning"]);
+    }
+
+    // ---- the lenses: which arms run and which kinds answer ----
+
+    fn image_vector(store: &Store, path: &Path, values: [f32; 4]) {
+        let file_id = store.file_id(path).unwrap();
+        store
+            .put_image_embedding(file_id, &Embedding::new(values.to_vec(), 4).unwrap())
+            .unwrap();
+    }
+
+    #[test]
+    fn an_unknown_mode_is_not_a_mode() {
+        assert_eq!(SearchMode::parse("all"), Some(SearchMode::All));
+        assert_eq!(SearchMode::parse("pictures"), Some(SearchMode::Pictures));
+        assert_eq!(SearchMode::parse("words"), Some(SearchMode::Words));
+        assert_eq!(SearchMode::parse("documents"), Some(SearchMode::Documents));
+        assert_eq!(SearchMode::parse("videos"), None);
+        assert_eq!(
+            SearchMode::parse("Pictures"),
+            None,
+            "the command vocabulary is lowercase, like the other filters"
+        );
+    }
+
+    /// `all` is still the one search box: every arm, every kind, and the
+    /// measured evidence weights rather than the pictures-only table.
+    #[test]
+    fn all_lens_keeps_the_current_fused_search() {
+        assert!(SearchMode::All.runs_lexical());
+        assert!(SearchMode::All.runs_image());
+        assert!(SearchMode::All.runs_meaning());
+        assert!(!SearchMode::All.needs_visible_text());
+        assert!(
+            SearchMode::All.kinds().is_empty(),
+            "all is not narrowed to a kind"
+        );
+        assert_eq!(weights_for(SearchMode::All), &CHOSEN);
+    }
+
+    /// The pictures lens asks the image arm and nothing else, even when the
+    /// other embedders are installed.
+    #[test]
+    fn pictures_lens_runs_only_the_image_arm() {
+        let data = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let store = Store::open(data.path()).unwrap();
+
+        let a = index(
+            &store,
+            corpus.path(),
+            "a.png",
+            Kind::Image,
+            &[("a.png\napple chart", None)],
+        );
+        let b = index(&store, corpus.path(), "b.png", Kind::Image, &[]);
+        image_vector(&store, &a, [0.0, 1.0, 0.0, 0.0]);
+        image_vector(&store, &b, [1.0, 0.0, 0.0, 0.0]);
+
+        let query = parse_query(&["apple".to_string()]).unwrap();
+        let outcome = search(
+            data.path(),
+            &query,
+            SearchMode::Pictures,
+            Some(&FakeImage),
+            Some(&FakeText),
+            10,
+        )
+        .unwrap();
+
+        assert_eq!(
+            outcome
+                .timings
+                .iter()
+                .map(|timing| timing.arm.name())
+                .collect::<Vec<_>>(),
+            vec!["image"],
+            "the keyword and meaning arms are off in this lens"
+        );
+        assert_eq!(outcome.hits.len(), 2);
+        assert!(outcome.hits.iter().all(|hit| hit.kind == "image"));
+        assert!(outcome
+            .hits
+            .iter()
+            .all(|hit| hit.arms.names() == vec!["image"]));
+        assert!(
+            outcome.hits[0].path.ends_with("b.png"),
+            "the image arm's cosine order is the order"
+        );
+    }
+
+    /// A text-bearing picture does not outrank a better visual match in the
+    /// pictures lens. The same pair under `all` is exactly what the evidence
+    /// weights are for: the text-bearing file wins.
+    #[test]
+    fn pictures_lens_ignores_text_evidence_in_ordering() {
+        let data = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let store = Store::open(data.path()).unwrap();
+
+        let long = format!("screenshot.png\napple dashboard {}", "words ".repeat(30));
+        let screenshot = index(
+            &store,
+            corpus.path(),
+            "screenshot.png",
+            Kind::Image,
+            &[(&long, None)],
+        );
+        let photo = index(&store, corpus.path(), "photo.png", Kind::Image, &[]);
+        // The image arm prefers the photo; the keyword arm prefers the text.
+        image_vector(&store, &screenshot, [0.0, 1.0, 0.0, 0.0]);
+        image_vector(&store, &photo, [1.0, 0.0, 0.0, 0.0]);
+
+        let query = parse_query(&["apple".to_string()]).unwrap();
+        let pictures = search(
+            data.path(),
+            &query,
+            SearchMode::Pictures,
+            Some(&FakeImage),
+            None,
+            10,
+        )
+        .unwrap();
+        assert!(
+            pictures.hits[0].path.ends_with("photo.png"),
+            "appearance alone orders the pictures lens"
+        );
+
+        let all = search(
+            data.path(),
+            &query,
+            SearchMode::All,
+            Some(&FakeImage),
+            None,
+            10,
+        )
+        .unwrap();
+        assert!(
+            all.hits[0].path.ends_with("screenshot.png"),
+            "all keeps the measured text evidence weights"
+        );
+    }
+
+    #[test]
+    fn words_lens_searches_only_pictures_with_visible_text() {
+        let data = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let store = Store::open(data.path()).unwrap();
+
+        index(
+            &store,
+            corpus.path(),
+            "shot.png",
+            Kind::Image,
+            &[("shot.png\napple pie", None)],
+        );
+        index(
+            &store,
+            corpus.path(),
+            "doc.pdf",
+            Kind::Pdf,
+            &[("doc.pdf\napple pie", None)],
+        );
+
+        let query = parse_query(&["apple".to_string()]).unwrap();
+        let outcome = search(data.path(), &query, SearchMode::Words, None, None, 10).unwrap();
+
+        assert_eq!(outcome.hits.len(), 1);
+        assert!(outcome.hits[0].path.ends_with("shot.png"));
+        assert_eq!(outcome.hits[0].kind, "image");
+    }
+
+    /// `samurai.png` is a picture named samurai; `samurai-notes.png` is a
+    /// picture that says samurai. Only the second answers the words lens.
+    #[test]
+    fn words_lens_skips_a_picture_whose_only_text_is_the_name() {
+        let data = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let store = Store::open(data.path()).unwrap();
+
+        index(
+            &store,
+            corpus.path(),
+            "samurai.png",
+            Kind::Image,
+            &[("samurai.png", None)],
+        );
+        index(
+            &store,
+            corpus.path(),
+            "samurai-notes.png",
+            Kind::Image,
+            &[("samurai-notes.png\nsamurai on a bridge", None)],
+        );
+
+        let query = parse_query(&["samurai".to_string()]).unwrap();
+        let words = search(data.path(), &query, SearchMode::Words, None, None, 10).unwrap();
+        assert_eq!(words.hits.len(), 1);
+        assert!(words.hits[0].path.ends_with("samurai-notes.png"));
+
+        let all = search(data.path(), &query, SearchMode::All, None, None, 10).unwrap();
+        assert_eq!(all.hits.len(), 2, "all still finds both");
+        let name_only = all
+            .hits
+            .iter()
+            .find(|hit| hit.path.ends_with("samurai.png"))
+            .expect("the name-only picture is an all-lens hit");
+        assert!(name_only.name_only);
+        let body = all
+            .hits
+            .iter()
+            .find(|hit| hit.path.ends_with("samurai-notes.png"))
+            .unwrap();
+        assert!(!body.name_only, "a word inside the picture is not its name");
+    }
+
+    #[test]
+    fn documents_lens_excludes_pictures() {
+        let data = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let store = Store::open(data.path()).unwrap();
+
+        index(
+            &store,
+            corpus.path(),
+            "doc.pdf",
+            Kind::Pdf,
+            &[("doc.pdf\napple pie", None)],
+        );
+        index(
+            &store,
+            corpus.path(),
+            "shot.png",
+            Kind::Image,
+            &[("shot.png\napple pie", None)],
+        );
+
+        let query = parse_query(&["apple".to_string()]).unwrap();
+        let outcome = search(data.path(), &query, SearchMode::Documents, None, None, 10).unwrap();
+
+        assert_eq!(outcome.hits.len(), 1);
+        assert!(outcome.hits[0].path.ends_with("doc.pdf"));
+    }
+
+    /// A filter the lens cannot honour is a note, not a silent miss: the user
+    /// typed two things that contradict each other.
+    #[test]
+    fn a_conflicting_type_filter_returns_a_note() {
+        let data = tempfile::tempdir().unwrap();
+        Store::open(data.path()).unwrap();
+
+        let query = parse_query(&["apple".to_string(), "type:pdf".to_string()]).unwrap();
+        let outcome = search(data.path(), &query, SearchMode::Pictures, None, None, 10).unwrap();
+
+        assert!(outcome.hits.is_empty());
+        assert!(outcome.timings.is_empty());
+        let note = outcome.notes.join("\n");
+        assert!(note.contains("pictures"), "{note}");
+        assert!(note.contains("type:pdf"), "{note}");
+        assert!(note.contains("images"), "{note}");
     }
 }
