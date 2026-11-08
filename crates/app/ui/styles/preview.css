@@ -1,0 +1,196 @@
+/* The right sheet: the file at the top, its evidence below. Non-modal. */
+
+.sheet {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--z-sheet);
+  display: flex;
+  flex-direction: column;
+  width: min(600px, 52vw);
+  border-left: 1px solid var(--line);
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sheet);
+  opacity: 0;
+  transform: translateX(12px);
+  transition:
+    opacity var(--dur-sheet) ease,
+    transform var(--dur-sheet) var(--ease-out);
+}
+
+.sheet.open {
+  opacity: 1;
+  transform: none;
+}
+
+.sheet-head {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: 16px 16px 12px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sheet-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.sheet-title h2 {
+  overflow: hidden;
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-path {
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-close {
+  flex: none;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .sheet-close:hover {
+    background: var(--hover);
+  }
+}
+
+.sheet-body {
+  flex: 1;
+  min-height: 0;
+  padding: 16px 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.preview-media {
+  display: flex;
+  justify-content: center;
+  padding-bottom: 16px;
+}
+
+/* Shrink-wrapped so the picture's box is the box the marks are fractions of. */
+.preview-picture {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--inset);
+  line-height: 0;
+}
+
+.preview-picture img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: calc(100vh - 330px);
+}
+
+.preview-wait {
+  padding: 20px 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.preview-missing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 240px;
+  min-height: 220px;
+  padding: 24px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  text-align: center;
+}
+
+.preview-missing .kind-glyph {
+  width: 26px;
+  height: 26px;
+}
+
+.preview-text {
+  padding-top: 2px;
+}
+
+.ocr-line {
+  padding: 4px 0;
+  color: var(--ink-2);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.ocr-line + .ocr-line {
+  border-top: 1px solid var(--line);
+}
+
+.ocr-line mark {
+  padding: 0 1px;
+}
+
+.ocr-empty {
+  padding: 6px 0 14px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.preview-error {
+  color: var(--bad);
+  font-size: var(--text-base);
+  line-height: 1.5;
+}
+
+.sheet-foot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 12px 16px 14px 20px;
+  border-top: 1px solid var(--line);
+}
+
+.sheet-meta {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .sheet {
+    top: 0;
+    width: min(560px, calc(100vw - 32px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet {
+    transform: none;
+  }
+}

@@ -4,180 +4,148 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Tessera</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles/tokens.css" />
+    <link rel="stylesheet" href="styles/base.css" />
+    <link rel="stylesheet" href="styles/header.css" />
+    <link rel="stylesheet" href="styles/library.css" />
+    <link rel="stylesheet" href="styles/results.css" />
+    <link rel="stylesheet" href="styles/preview.css" />
+    <link rel="stylesheet" href="styles/settings.css" />
   </head>
   <body>
-    <div id="app" data-view="search">
-      <aside class="rail" aria-label="Sections">
-        <div class="brand" aria-hidden="true">
-          <svg class="brand-mark" viewBox="0 0 24 24">
+    <div id="app" data-view="library">
+      <header class="top">
+        <div class="top-row">
+          <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
             <rect x="2" y="2" width="9" height="9" rx="2.6" />
             <rect x="13" y="2" width="9" height="9" rx="2.6" />
             <rect x="2" y="13" width="9" height="9" rx="2.6" />
             <rect class="mark-accent" x="13" y="13" width="9" height="9" rx="2.6" />
           </svg>
+          <div class="lenses" id="lenses" role="group" aria-label="Search scope"></div>
+          <div class="top-meta">
+            <p class="meta" id="meta" role="status"></p>
+            <button
+              class="settings-key"
+              id="settings-key"
+              type="button"
+              aria-label="settings"
+              aria-keyshortcuts="Control+Comma"
+              title="settings (ctrl ,)"
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                <path d="M3.5 6h13M3.5 10h13M3.5 14h13" />
+                <circle cx="7.5" cy="6" r="1.7" fill="var(--header)" />
+                <circle cx="12" cy="10" r="1.7" fill="var(--header)" />
+                <circle cx="6.5" cy="14" r="1.7" fill="var(--header)" />
+              </svg>
+              <kbd>ctrl ,</kbd>
+            </button>
+          </div>
         </div>
-        <nav class="rail-nav">
-          <button class="rail-item" data-view="search" aria-label="Search" aria-keyshortcuts="Control+1" aria-current="page" title="Search (Ctrl 1)">
-            <svg class="rail-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5"></circle><path d="M13.2 13.2 17.5 17.5"></path></svg>
-          </button>
-          <button class="rail-item" data-view="settings" aria-label="Settings" aria-keyshortcuts="Control+2" title="Settings (Ctrl 2)">
-            <svg class="rail-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 6h13M3.5 10h13M3.5 14h13"></path><circle cx="7.5" cy="6" r="1.7"></circle><circle cx="12" cy="10" r="1.7"></circle><circle cx="6.5" cy="14" r="1.7"></circle></svg>
-          </button>
-        </nav>
-        <div class="rail-foot">
-          <span class="engine-dot" id="engine-dot" title="Engine state" aria-hidden="true"></span>
-          <span id="engine-label" class="sr-only" role="status">checking…</span>
-        </div>
-      </aside>
 
-      <main class="main">
-        <section class="view view-search" id="view-search" aria-label="Search">
-          <form class="search-bar" id="search-form" role="search">
-            <svg viewBox="0 0 20 20" aria-hidden="true" class="search-icon">
-              <circle cx="9" cy="9" r="6"></circle>
-              <path d="M13.5 13.5 18 18"></path>
+        <form class="field-row" id="search-form" role="search">
+          <svg
+            class="search-glyph"
+            viewBox="0 0 20 20"
+            aria-hidden="true"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+          >
+            <circle cx="9" cy="9" r="5.5" />
+            <path d="M13.2 13.2 17.5 17.5" />
+          </svg>
+          <input
+            id="query"
+            type="search"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="search your screenshots, pictures and documents"
+            aria-label="Search"
+            aria-controls="library-results"
+            aria-autocomplete="list"
+            aria-expanded="false"
+            aria-keyshortcuts="Control+K"
+            autofocus
+          />
+          <button class="clear" id="clear" type="button" aria-label="clear the search" hidden>
+            <svg
+              viewBox="0 0 20 20"
+              aria-hidden="true"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+            >
+              <path d="M5 5l10 10M15 5 5 15" />
             </svg>
-            <input
-              id="query"
-              type="search"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="Search words, meaning, or what a picture shows"
-              aria-label="Search your files"
-              aria-controls="results"
-              aria-autocomplete="list"
-              aria-keyshortcuts="Control+K"
-              autofocus
-            />
-            <kbd class="search-hint" id="search-hint">Ctrl K</kbd>
-          </form>
-          <div class="search-status">
-            <div class="search-meta" id="search-meta" role="status"></div>
-            <div class="filters" id="filters" role="group" aria-label="Filter results" hidden>
-              <button type="button" class="filter" data-filter="all" aria-pressed="true">
-                All <span class="filter-count">0</span>
-              </button>
-              <button type="button" class="filter" data-filter="image" aria-pressed="false">
-                Images <span class="filter-count">0</span>
-              </button>
-              <button type="button" class="filter" data-filter="document" aria-pressed="false">
-                Docs <span class="filter-count">0</span>
-              </button>
-            </div>
+          </button>
+        </form>
+
+        <div class="notes" id="notes" role="status"></div>
+      </header>
+
+      <main class="content" id="content">
+        <section id="view-library" aria-label="Library">
+          <div id="library-results" role="listbox" aria-label="Results">
+            <div class="wall" id="wall" role="group" aria-label="Pictures" hidden></div>
+            <div class="doc-list" id="doc-list" role="group" aria-label="Documents" hidden></div>
           </div>
-          <div class="notes" id="notes" role="status"></div>
-          <div class="results" id="results" role="listbox" aria-label="Results" tabindex="-1"></div>
-          <div class="home" id="home" hidden>
-            <div class="home-head" id="home-head">
-              <p class="home-label" id="home-label">Latest files</p>
-              <p class="home-counts" id="home-counts"></p>
-            </div>
-            <ul class="home-files" id="home-files" aria-labelledby="home-label"></ul>
-            <p class="home-note" id="home-note" hidden></p>
+          <p class="wall-note" id="wall-note" hidden></p>
+
+          <div class="miss" id="miss" hidden>
+            <p class="miss-title" id="miss-title"></p>
+            <p class="miss-hint" id="miss-hint"></p>
+            <div class="miss-lenses" id="miss-lenses"></div>
           </div>
+
           <div class="first-run" id="first-run" hidden>
-            <svg class="first-run-mark" viewBox="0 0 24 24" aria-hidden="true">
+            <svg class="mark" viewBox="0 0 24 24" aria-hidden="true">
               <rect x="2" y="2" width="9" height="9" rx="2.6" />
               <rect x="13" y="2" width="9" height="9" rx="2.6" />
               <rect x="2" y="13" width="9" height="9" rx="2.6" />
               <rect class="mark-accent" x="13" y="13" width="9" height="9" rx="2.6" />
             </svg>
-            <h1>Add a folder to begin.</h1>
+            <h1>add a folder to begin</h1>
             <p>
               Tessera reads the words inside screenshots, PDFs and documents, and
-              remembers what images look like. Nothing leaves this machine.
+              remembers what pictures look like. Nothing leaves this machine.
             </p>
-            <button class="primary" id="first-run-add">Choose a folder</button>
-          </div>
-          <div class="empty" id="empty" role="status" hidden>
-            <p class="empty-title" id="empty-title">No matches</p>
-            <p class="dim" id="empty-hint">Try a different word, or a filter like <code>type:pdf</code>.</p>
-            <button class="ghost" id="empty-clear" type="button">Clear the search</button>
+            <button class="primary" id="first-run-add" type="button">choose a folder</button>
           </div>
         </section>
 
-        <section class="view" id="view-settings" aria-label="Settings" hidden>
-          <header class="view-head">
-            <div>
-              <h1>Settings</h1>
-              <p class="view-sub">Folders, models, startup, and the index itself.</p>
-            </div>
-            <button class="ghost" id="refresh-settings">Refresh</button>
-          </header>
-          <div class="groups">
-            <section class="group">
-              <h2 class="group-label">Folders</h2>
-              <div class="group-box">
-                <ul class="folders" id="settings-folders"></ul>
-                <div class="row-actions">
-                  <button class="primary" id="add-folder">Add folder</button>
-                  <span class="dim" id="indexing-note" role="status"></span>
-                </div>
-              </div>
-            </section>
-            <section class="group">
-              <h2 class="group-label">Models</h2>
-              <div class="group-box">
-                <p class="group-note">
-                  Downloaded once, verified against pinned checksums, then never
-                  fetched again unless you ask.
-                </p>
-                <table class="models" id="models"></table>
-                <p class="note" id="models-note" role="status"></p>
-              </div>
-            </section>
-            <section class="group">
-              <h2 class="group-label">Startup</h2>
-              <div class="group-box">
-                <label class="check">
-                  <span class="check-text">
-                    <span class="row-title">Start Tessera when I sign in</span>
-                    <span class="dim">The watcher runs at idle priority and pauses on battery.</span>
-                  </span>
-                  <input type="checkbox" id="autostart" />
-                </label>
-              </div>
-            </section>
-            <section class="group">
-              <h2 class="group-label">Data</h2>
-              <div class="group-box">
-                <dl class="facts" id="data-facts"></dl>
-                <div class="group-row group-row-split">
-                  <div>
-                    <p class="row-title">Rebuild the index</p>
-                    <p class="dim">
-                      Deletes the index and reads every folder again. Searches are empty
-                      until it finishes. Your files are never touched.
-                    </p>
-                  </div>
-                  <button class="danger-button" id="rebuild">Rebuild…</button>
-                </div>
-              </div>
-            </section>
-          </div>
-        </section>
+        <section id="view-settings" aria-label="Settings" hidden></section>
       </main>
 
-      <aside class="preview" id="preview" aria-label="Preview" hidden>
-        <header class="preview-head">
-          <div>
+      <aside class="sheet" id="preview" aria-label="Preview" hidden>
+        <header class="sheet-head">
+          <div class="sheet-title">
             <h2 id="preview-name"></h2>
-            <p class="path" id="preview-path"></p>
+            <p class="sheet-path" id="preview-path"></p>
           </div>
-          <button class="ghost" id="preview-close" aria-label="Close preview">Esc</button>
+          <button
+            class="sheet-close quiet"
+            id="preview-close"
+            type="button"
+            aria-label="close preview"
+            title="close (esc)"
+          >
+            <kbd>esc</kbd>
+          </button>
         </header>
-        <div class="preview-body" id="preview-body">
-          <div class="preview-text" id="preview-text"></div>
-        </div>
-        <footer class="preview-foot">
-          <span id="preview-meta" class="dim"></span>
-          <button class="ghost" id="reveal">Show in folder</button>
+        <div class="sheet-body" id="preview-body"></div>
+        <footer class="sheet-foot">
+          <span class="sheet-meta" id="preview-meta"></span>
+          <button class="quiet" id="preview-reveal" type="button">show in folder</button>
         </footer>
       </aside>
     </div>
+
     <div class="toast" id="toast" role="alert" hidden></div>
     <script src="dev-mock.js"></script>
-    <script type="module" src="app.js"></script>
+    <script type="module" src="js/app.js"></script>
   </body>
 </html>

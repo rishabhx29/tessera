@@ -1,0 +1,85 @@
+/* Evidence marks, the miss state and the quiet line under the wall. */
+
+.marks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.mark-box {
+  position: absolute;
+  border: 1.5px solid var(--match);
+  border-radius: 2px;
+  background: var(--match-wash);
+  box-shadow: 0 0 0 1px var(--match-edge);
+}
+
+.doc-snippet mark {
+  border-radius: 2px;
+  background: var(--match-wash);
+  color: inherit;
+  box-shadow: inset 0 -1.5px 0 var(--match);
+}
+
+.miss {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 520px;
+  margin: 11vh auto 0;
+  padding: 0 20px;
+}
+
+.miss-title {
+  color: var(--ink);
+  font-size: var(--text-md);
+  font-weight: 550;
+}
+
+.miss-hint {
+  color: var(--muted);
+  font-size: var(--text-base);
+  line-height: 1.55;
+}
+
+.miss-lenses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.miss-lens {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+}
+
+.miss-lens:active {
+  transform: scale(0.98);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .miss-lens:hover {
+    border-color: var(--accent);
+    color: var(--accent-strong);
+  }
+}
+
+.miss-clear {
+  color: var(--accent-text);
+  font-size: var(--text-sm);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .miss-lens:active {
+    transform: none;
+  }
+}

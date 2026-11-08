@@ -2,12 +2,17 @@
 //
 // The packaged app loads this file too, but the first check makes it inert:
 // when the real `window.__TAURI__` is present, the mock never installs. Its
-// purpose is visual review of this window without building the Rust shell —
-// every payload mirrors the shapes in `crates/app/src/engine.rs` (SearchPayload,
-// Preview, StatusPayload) and `main.rs` (WatchStatus), not invented ones.
+// purpose is visual review of this window without building the Rust shell.
 //
-// The corner badge it paints says "mock": a screenshot with it must never be
-// presented as the real window.
+// Payloads mirror the shapes in `crates/app/src/engine.rs` (Row, SearchPayload,
+// Preview, LibraryPayload, StatusPayload) and the lens rules in
+// `crates/core/src/fusion.rs` (SearchMode). The fixtures make the distinction
+// visible: `samurai.jpg` is a picture that looks like a samurai,
+// `samurai-notes.png` is a screenshot that says the word, and `trip.pdf` is a
+// document that discusses one. Each lens answers with only what it may see.
+//
+// The corner badge says "mock": a screenshot with it must never be presented
+// as the real window.
 
 (function () {
   "use strict";
@@ -26,54 +31,177 @@
 
   // ---- fixtures -------------------------------------------------------------
 
-  const hit = (text) => ({ text, hit: true });
-  const miss = (text) => ({ text, hit: false });
+  const HOUR = 3600 * 1000;
+  const now = Date.now();
+  const mtime = (hoursAgo) => (now - hoursAgo * HOUR) * 1e6;
 
-  const ROWS = [
+  const PICTURES = [
     {
-      path: "C:\\Users\\you\\Pictures\\Screenshots\\Screenshot 2026-11-05 094218.png",
-      name: "Screenshot 2026-11-05 094218.png",
+      path: "C:\\Users\\you\\Pictures\\Trips\\kyoto\\samurai.jpg",
+      name: "samurai.jpg",
+      folder: "Pictures\\Trips\\kyoto",
+      kind: "image",
+      width: 1600,
+      height: 1067,
+      mtime: mtime(3),
+      art: "samurai",
+      tags: ["samurai", "warrior", "sword", "armor", "japan", "figure", "silhouette"],
+      lines: ["temple archive — 2024", "scan 04"],
+    },
+    {
+      path: "C:\\Users\\you\\Pictures\\Screenshots\\samurai-notes.png",
+      name: "samurai-notes.png",
       folder: "Pictures\\Screenshots",
       kind: "image",
-      page: null,
-      snippet: [miss("…the invoice from the airline, total due "), hit("€214.60"), miss(" by Nov 18. Booking reference QF-3391…")],
-      arms: ["keyword", "image", "meaning"],
+      width: 900,
+      height: 1400,
+      mtime: mtime(5),
+      art: "page",
+      tags: ["notes", "research", "history", "battle", "study"],
+      lines: [
+        "samurai — research notes",
+        "the samurai served the daimyo",
+        "armour, horse, sword",
+        "read chapter 4 before friday",
+      ],
     },
     {
-      path: "C:\\Users\\you\\Documents\\Finance\\refunds\\airline-refund-policy.pdf",
-      name: "airline-refund-policy.pdf",
-      folder: "Documents\\Finance\\refunds",
-      kind: "pdf",
-      page: 12,
-      snippet: [miss("Refunds are processed to the original payment method within "), hit("14 business days"), miss(" of…")],
-      arms: ["keyword"],
+      path: "C:\\Users\\you\\Pictures\\Trips\\lisbon\\bridge.jpg",
+      name: "bridge.jpg",
+      folder: "Pictures\\Trips\\lisbon",
+      kind: "image",
+      width: 1600,
+      height: 900,
+      mtime: mtime(8),
+      art: "bridge",
+      tags: ["bridge", "water", "river", "dusk", "sky"],
+      lines: [],
     },
     {
-      path: "C:\\Users\\you\\Pictures\\Screenshots\\Screenshot 2026-11-04 171033.png",
-      name: "Screenshot 2026-11-04 171033.png",
+      path: "C:\\Users\\you\\Pictures\\Screenshots\\receipt.png",
+      name: "receipt.png",
       folder: "Pictures\\Screenshots",
       kind: "image",
-      page: null,
-      snippet: [miss("Tessera — searched "), hit("“invoice airline”"), miss(" in 66 ms — keyword 17 · image 36 · meaning 44")],
-      arms: ["keyword", "image"],
+      width: 1000,
+      height: 1400,
+      mtime: mtime(11),
+      art: "receipt",
+      tags: ["receipt", "shop", "paper", "grocery"],
+      lines: ["CITY MARKET", "coffee beans 12.50", "olive oil 9.40", "total 24.90"],
     },
     {
-      path: "C:\\Users\\you\\Documents\\Trips\\lisbon\\booking-confirmation.docx",
-      name: "booking-confirmation.docx",
-      folder: "Documents\\Trips\\lisbon",
-      kind: "docx",
-      page: null,
-      snippet: [miss("Your e-ticket for the "), hit("Lisbon"), miss(" flight is attached. Check-in opens 36 hours before…")],
-      arms: ["keyword", "meaning"],
-    },
-    {
-      path: "C:\\Users\\you\\Pictures\\Camera Roll\\IMG_4471.jpg",
-      name: "IMG_4471.jpg",
+      path: "C:\\Users\\you\\Pictures\\Camera Roll\\garden.jpg",
+      name: "garden.jpg",
       folder: "Pictures\\Camera Roll",
       kind: "image",
-      page: null,
-      snippet: [],
-      arms: ["image"],
+      width: 1200,
+      height: 1600,
+      mtime: mtime(16),
+      art: "garden",
+      tags: ["garden", "plants", "green", "leaves", "flowers"],
+      lines: [],
+    },
+    {
+      path: "C:\\Users\\you\\Pictures\\Camera Roll\\sky.jpg",
+      name: "sky.jpg",
+      folder: "Pictures\\Camera Roll",
+      kind: "image",
+      width: 2400,
+      height: 1000,
+      mtime: mtime(20),
+      art: "sky",
+      tags: ["sky", "clouds", "sunset", "horizon"],
+      lines: [],
+    },
+    {
+      path: "C:\\Users\\you\\Pictures\\Screenshots\\invoice.png",
+      name: "invoice.png",
+      folder: "Pictures\\Screenshots",
+      kind: "image",
+      width: 1000,
+      height: 1300,
+      mtime: mtime(26),
+      art: "receipt",
+      tags: ["invoice", "paper", "billing"],
+      lines: ["INVOICE 2041", "design work 480.00", "total due 480.00", "pay by 30 november"],
+    },
+    {
+      path: "C:\\Users\\you\\Pictures\\Camera Roll\\harbor.jpg",
+      name: "harbor.jpg",
+      folder: "Pictures\\Camera Roll",
+      kind: "image",
+      width: 1600,
+      height: 1200,
+      mtime: mtime(30),
+      art: "harbor",
+      tags: ["harbor", "boat", "water", "sea", "port"],
+      lines: [],
+    },
+    {
+      path: "C:\\Users\\you\\Pictures\\Screenshots\\broken.jpg",
+      name: "broken.jpg",
+      folder: "Pictures\\Screenshots",
+      kind: "image",
+      width: 1400,
+      height: 1050,
+      mtime: mtime(34),
+      art: "field",
+      broken: true,
+      tags: ["field", "grass", "meadow"],
+      lines: [],
+    },
+    {
+      path: "C:\\Users\\you\\Pictures\\Camera Roll\\leaf.jpg",
+      name: "leaf.jpg",
+      folder: "Pictures\\Camera Roll",
+      kind: "image",
+      width: 1200,
+      height: 1200,
+      mtime: mtime(41),
+      art: "garden",
+      tags: ["leaf", "green", "macro", "plant"],
+      lines: [],
+    },
+    {
+      path: "C:\\Users\\you\\Pictures\\Trips\\lisbon\\street.jpg",
+      name: "street.jpg",
+      folder: "Pictures\\Trips\\lisbon",
+      kind: "image",
+      width: 1400,
+      height: 1050,
+      mtime: mtime(49),
+      art: "street",
+      tags: ["street", "city", "night", "lights"],
+      lines: [],
+    },
+    {
+      path: "C:\\Users\\you\\Pictures\\Screenshots\\laptop.png",
+      name: "laptop.png",
+      folder: "Pictures\\Screenshots",
+      kind: "image",
+      width: 1600,
+      height: 1000,
+      mtime: mtime(58),
+      art: "field",
+      tags: ["laptop", "desk", "screen", "work"],
+      lines: [],
+    },
+  ];
+
+  const DOCUMENTS = [
+    {
+      path: "C:\\Users\\you\\Documents\\Trips\\kyoto\\trip.pdf",
+      name: "trip.pdf",
+      folder: "Documents\\Trips\\kyoto",
+      kind: "pdf",
+      page: 7,
+      mtime: mtime(7),
+      tags: ["travel", "japan", "kyoto", "culture"],
+      lines: [
+        "chapter 4 — kyoto",
+        "the samurai class lost its privileges",
+        "the trip ends in osaka",
+      ],
     },
     {
       path: "C:\\Users\\you\\Documents\\Trips\\lisbon\\packing.txt",
@@ -81,378 +209,737 @@
       folder: "Documents\\Trips\\lisbon",
       kind: "text",
       page: null,
-      snippet: [miss("passport, adapters, the travel "), hit("insurance"), miss(" card, and printouts of every booking…")],
-      arms: ["meaning"],
+      mtime: mtime(14),
+      tags: ["travel", "packing", "list"],
+      lines: ["packing list", "passport, charger, adapter", "walking shoes"],
     },
     {
-      path: "C:\\Users\\you\\Pictures\\Screenshots\\Screenshot 2026-11-03 140122.png",
-      name: "Screenshot 2026-11-03 140122.png",
-      folder: "Pictures\\Screenshots",
-      kind: "image",
+      path: "C:\\Users\\you\\Documents\\Work\\summary.docx",
+      name: "summary.docx",
+      folder: "Documents\\Work",
+      kind: "docx",
       page: null,
-      snippet: [miss("Quarterly spend by category — travel "), hit("€1,284"), miss(", software €640, meals €310…")],
-      arms: ["keyword", "image"],
+      mtime: mtime(23),
+      tags: ["work", "report", "revenue", "quarter"],
+      lines: ["quarter summary", "revenue grew 12 percent", "hiring stays flat"],
     },
     {
-      path: "C:\\Users\\you\\Documents\\Finance\\expenses\\2026-q3.pdf",
-      name: "2026-q3.pdf",
-      folder: "Documents\\Finance\\expenses",
+      path: "C:\\Users\\you\\Documents\\Finance\\refund-policy.pdf",
+      name: "refund-policy.pdf",
+      folder: "Documents\\Finance",
       kind: "pdf",
-      page: 3,
-      snippet: [miss("Airline and rail travel reimbursed at cost; see appendix for the "), hit("receipt"), miss(" list…")],
-      arms: ["meaning"],
-    },
-    {
-      path: "C:\\Users\\you\\Pictures\\Camera Roll\\IMG_4402.jpg",
-      name: "IMG_4402.jpg",
-      folder: "Pictures\\Camera Roll",
-      kind: "image",
-      page: null,
-      snippet: [],
-      arms: ["image"],
-    },
-    {
-      path: "C:\\Users\\you\\Documents\\notes\\ocr-notes.md",
-      name: "ocr-notes.md",
-      folder: "Documents\\notes",
-      kind: "text",
-      page: null,
-      snippet: [miss("The recogniser emits an [batch, steps, 18710] tensor, so cost tracks total batched "), hit("width"), miss("…")],
-      arms: ["keyword"],
-    },
-    {
-      path: "C:\\Users\\you\\Pictures\\Screenshots\\Screenshot 2026-10-30 082210.png",
-      name: "Screenshot 2026-10-30 082210.png",
-      folder: "Pictures\\Screenshots",
-      kind: "image",
-      page: null,
-      snippet: [miss("Could not read this one — the row still shows its name, folder and the words that matched.")],
-      arms: ["keyword"],
+      page: 12,
+      mtime: mtime(37),
+      tags: ["finance", "refund", "policy"],
+      lines: [
+        "refund policy",
+        "refunds are processed within 14 days",
+        "keep the original receipt",
+      ],
     },
   ];
 
-  // One fixture is deliberately undecodable so the glyph fallback can be
-  // reviewed, exactly as the real command refuses a corrupt file. It is a
-  // behaviour of the mock, not a field the engine payloads carry.
-  const BROKEN_THUMBS = new Set([
-    "C:\\Users\\you\\Pictures\\Screenshots\\Screenshot 2026-10-30 082210.png",
-  ]);
+  let ALL = PICTURES.concat(DOCUMENTS);
 
+  let roots = [
+    { path: "C:\\Users\\you\\Pictures", count: PICTURES.length },
+    { path: "C:\\Users\\you\\Documents", count: DOCUMENTS.length },
+  ];
 
-  const SEARCH_ARMS = ["keyword", "image", "meaning"];
+  let paused = false;
+  let autostart = false;
 
-  const STATUS = {
-    index_path: "C:\\Users\\you\\AppData\\Local\\Tessera\\index.sqlite",
-    index_mb: 113.7,
-    folders: ["C:\\Users\\you\\Documents", "C:\\Users\\you\\Pictures"],
-    counts: [
-      ["indexed", 4998],
-      ["awaiting_ocr", 0],
-      ["failed", 2],
-    ],
-    failures: [
-      {
-        path: "C:\\Users\\you\\Downloads\\real-pdf-0006.pdf",
-        error: "the file is 0 bytes — invalid file header",
-      },
-      {
-        path: "C:\\Users\\you\\Downloads\\broken-export.docx",
-        error: "the zip could not be opened (encrypted OOXML is not supported)",
-      },
-    ],
-    skip_reasons: [
-      ["cloud placeholder", 31],
-      ["over 50 MB", 4],
-    ],
-    models: [
-      { name: "siglip", complete: true, missing: [] },
-      { name: "minilm", complete: true, missing: [] },
-      { name: "ppocr", complete: true, missing: [] },
-    ],
-    image_vectors: 1800,
-    text_vectors: 17154,
-  };
+  const models = [
+    { name: "text", complete: true, missing: [] },
+    { name: "vision", complete: false, missing: ["image_encoder.onnx", "text_encoder.onnx"] },
+  ];
 
-  function previewFor(path, query) {
-    const row = ROWS.find((candidate) => candidate.path === path);
-    const isImage = row?.kind === "image";
-    const terms = String(query || "")
+  // ---- matching -------------------------------------------------------------
+
+  const terms = (query) =>
+    String(query ?? "")
       .toLowerCase()
       .split(/\s+/)
       .filter(Boolean);
-    const segment = (text) =>
-      terms.some((term) => term.length > 1 && text.toLowerCase().includes(term)) ? hit(text) : miss(text);
-    const text = isImage
-      ? [
-          segment("BOOKING CONFIRMATION"),
-          miss("\nQF-3391 · LIS → LISBON\n"),
-          segment("Total due €214.60 by Nov 18"),
-          miss("\nSeat 14A · Gate 22"),
-        ]
-      : [
-          segment("Refunds are processed to the original payment method"),
-          miss(" within fourteen business days of approval. Partial refunds for "),
-          segment("cancellations within 24 hours"),
-          miss(" carry no fee."),
-        ];
+
+  const bodyHits = (file, query) => {
+    const words = terms(query);
+    if (!words.length) return [];
+    return (file.lines ?? []).filter((line) => {
+      const text = line.toLowerCase();
+      return words.some((word) => text.includes(word));
+    });
+  };
+
+  const nameHit = (file, query) => {
+    const name = file.name.toLowerCase();
+    return terms(query).some((word) => name.includes(word));
+  };
+
+  const tagHit = (file, query) => {
+    const tags = file.tags ?? [];
+    return terms(query).some((word) => tags.some((tag) => tag.includes(word)));
+  };
+
+  // Same gates as SearchMode: pictures runs only the image arm and no lexical
+  // arm; words and documents need text inside the file, so the filename line
+  // alone cannot answer them.
+  function search(query, mode, limit) {
+    const lens = mode || "all";
+    const words = terms(query);
+    const rows = [];
+
+    for (const file of ALL) {
+      const kindOk =
+        lens === "all" ||
+        ((lens === "pictures" || lens === "words") && file.kind === "image") ||
+        (lens === "documents" && file.kind !== "image");
+      if (!kindOk) continue;
+
+      const body = bodyHits(file, query);
+      const named = nameHit(file, query);
+      const tagged = tagHit(file, query);
+      const arms = [];
+
+      if (lens === "pictures") {
+        if (tagged) arms.push("image");
+      } else if (lens === "all") {
+        if (tagged) arms.push("image");
+        if (body.length || named) arms.push("keyword");
+        if (tagged) arms.push("meaning");
+      } else if (lens === "words") {
+        if (body.length) arms.push("keyword");
+        if (tagged) arms.push("meaning");
+      } else {
+        if (body.length || named) arms.push("keyword");
+        if (tagged) arms.push("meaning");
+      }
+
+      const needsText = lens === "words" || lens === "documents";
+      if (needsText && body.length === 0) arms.length = 0;
+      if (!arms.length) continue;
+
+      rows.push({
+        path: file.path,
+        name: file.name,
+        folder: file.folder,
+        kind: file.kind,
+        page: file.page ?? null,
+        snippet: body.length ? highlight(body[0], words) : [],
+        arms: [...new Set(arms)],
+        width: file.width ?? null,
+        height: file.height ?? null,
+        marks: file.kind === "image" ? marksFor(file, words) : [],
+        name_only: Boolean(named && body.length === 0),
+        _rank: arms.length,
+        _mtime: file.mtime,
+      });
+    }
+
+    rows.sort((a, b) => b._rank - a._rank || b._mtime - a._mtime);
+    const answer = rows.slice(0, Math.min(limit || 60, 60));
+    for (const row of answer) {
+      delete row._rank;
+      delete row._mtime;
+    }
     return {
-      path: path,
-      name: row ? row.name : "unknown file",
-      kind: row ? row.kind : "txt",
-      page: row ? row.page : null,
-      text: text,
-      image_path: isImage ? path : null,
+      rows: answer,
+      notes: [],
+      millis: 38 + (answer.length % 7) * 3,
+      engine_millis: 22 + (answer.length % 5) * 2,
+      arms: ["keyword", "image", "meaning"],
+      mode: lens,
     };
   }
 
-  const imageCache = new Map();
-
-  // A canvas-drawn stand-in image, so the preview pane has real pixels to lay
-  // out during review. Photos get the scene the thumbnails use; screenshots
-  // get the document mock.
-  function fakeImageBytes(path) {
-    if (imageCache.has(path)) return Promise.resolve(imageCache.get(path));
-    const canvas = document.createElement("canvas");
-    canvas.width = 880;
-    canvas.height = 560;
-    const ctx = canvas.getContext("2d");
-    if (/IMG_/i.test(path)) {
-      const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
-      sky.addColorStop(0, "#cfe3f0");
-      sky.addColorStop(0.55, "#e9dcc0");
-      sky.addColorStop(1, "#7d8f5a");
-      ctx.fillStyle = sky;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "#f3e2b8";
-      ctx.beginPath();
-      ctx.arc(canvas.width * 0.76, canvas.height * 0.28, 58, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "rgba(70, 80, 45, 0.85)";
-      ctx.beginPath();
-      ctx.ellipse(canvas.width * 0.4, canvas.height * 0.72, 128, 66, 0.1, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(canvas.width * 0.25, canvas.height * 0.62, 48, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      ctx.fillStyle = "#f8f9fb";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "#e6e9ee";
-      ctx.fillRect(0, 0, canvas.width, 36);
-      ctx.fillStyle = "#2f5fe3";
-      ctx.beginPath();
-      ctx.arc(18, 18, 6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#101318";
-      ctx.font = "600 22px system-ui, sans-serif";
-      ctx.fillText("Booking confirmation — QF-3391", 24, 84);
-      ctx.fillStyle = "#3b424e";
-      ctx.font = "15px system-ui, sans-serif";
-      const lines = [
-        "Passenger  ·  R. T.",
-        "Flight     ·  QF-3391  LIS → OPO",
-        "Total due  ·  €214.60 by Nov 18",
-        "Seat       ·  14A          Gate 22",
-      ];
-      lines.forEach((line, index) => ctx.fillText(line, 24, 130 + index * 30));
-      ctx.fillStyle = "#edf2fe";
-      ctx.fillRect(24, 270, 480, 130);
-      ctx.strokeStyle = "#2f5fe3";
-      ctx.strokeRect(24, 270, 480, 130);
-      ctx.fillStyle = "#1e4bc8";
-      ctx.font = "600 14px ui-monospace, Consolas, monospace";
-      ctx.fillText("PAYMENT RECEIPT — 2026-11-05", 40, 300);
-      ctx.fillStyle = "#5a6270";
-      ctx.fillText("airline · invoice · €214.60", 40, 326);
-      ctx.fillStyle = "#cbd1da";
-      ctx.fillRect(24, 440, 832, 1);
-    }
-    return new Promise((resolve) => {
-      canvas.toBlob((blob) => {
-        blob.arrayBuffer().then((buffer) => {
-          const bytes = new Uint8Array(buffer);
-          imageCache.set(path, bytes);
-          resolve(bytes);
-        });
-      }, "image/png");
-    });
-  }
-
-  // ---- result thumbnails -----------------------------------------------------
-  //
-  // The real command returns a 320 px JPEG per image (see
-  // `AppService::thumbnail`). The mock draws one so the list can be reviewed
-  // with real pixels, and refuses the one fixture that stands for an
-  // undecodable file.
-  const thumbCache = new Map();
-
-  function drawFakeThumb(ctx, path, width, height) {
-    if (/IMG_/i.test(path)) {
-      // A photograph: sky, sun, a field and a dark shape reading as a subject.
-      const sky = ctx.createLinearGradient(0, 0, 0, height);
-      sky.addColorStop(0, "#cfe3f0");
-      sky.addColorStop(0.55, "#e9dcc0");
-      sky.addColorStop(1, "#7d8f5a");
-      ctx.fillStyle = sky;
-      ctx.fillRect(0, 0, width, height);
-      ctx.fillStyle = "#f3e2b8";
-      ctx.beginPath();
-      ctx.arc(width * 0.76, height * 0.28, 22, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "rgba(70, 80, 45, 0.85)";
-      ctx.beginPath();
-      ctx.ellipse(width * 0.4, height * 0.72, 48, 26, 0.1, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(width * 0.25, height * 0.62, 18, 0, Math.PI * 2);
-      ctx.fill();
-      return;
-    }
-    // A screenshot: window chrome, a title, and a small chart, so thumbnail
-    // rows read as pictures at 44 px rather than as generic documents.
-    const palettes = [
-      ["#2f5fe3", "#e8eefc"],
-      ["#3f6f8a", "#e1edf3"],
-      ["#4d6b52", "#e6ede6"],
-    ];
-    let hash = 0;
-    for (const ch of path) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
-    const [ink, wash] = palettes[hash % palettes.length];
-    ctx.fillStyle = "#f8f9fb";
-    ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = "#e6e9ee";
-    ctx.fillRect(0, 0, width, 26);
-    ctx.fillStyle = ink;
-    ctx.beginPath();
-    ctx.arc(14, 13, 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#101318";
-    ctx.font = "600 16px system-ui, sans-serif";
-    ctx.fillText("Booking confirmation — QF-3391", 18, 56);
-    ctx.fillStyle = "#3b424e";
-    ctx.font = "11px system-ui, sans-serif";
-    for (let index = 0; index < 3; index += 1) {
-      const y = 76 + index * 16;
-      ctx.fillRect(18, y, index === 1 ? width * 0.42 : width * 0.62, 6);
-    }
-    ctx.fillStyle = wash;
-    ctx.fillRect(18, 124, width - 36, height - 150);
-    ctx.fillStyle = ink;
-    const bars = [0.32, 0.58, 0.44, 0.76, 0.5];
-    bars.forEach((fraction, index) => {
-      const barWidth = (width - 60) / bars.length - 8;
-      const x = 26 + index * (barWidth + 8);
-      const barHeight = (height - 166) * fraction;
-      ctx.fillRect(x, height - 26 - barHeight, barWidth, barHeight);
-    });
-    ctx.strokeStyle = ink;
-    ctx.strokeRect(18, height - 46, width * 0.3, 24);
-  }
-
-  function fakeThumbBytes(path) {
-    if (thumbCache.has(path)) return Promise.resolve(thumbCache.get(path));
-    return new Promise((resolve, reject) => {
-      if (BROKEN_THUMBS.has(path)) {
-        reject(new Error("mock: that image could not be decoded"));
-        return;
+  function highlight(line, words) {
+    const text = String(line);
+    const lower = text.toLowerCase();
+    let first = -1;
+    let length = 0;
+    for (const word of words) {
+      const at = lower.indexOf(word);
+      if (at >= 0 && (first < 0 || at < first)) {
+        first = at;
+        length = word.length;
       }
-      const canvas = document.createElement("canvas");
-      canvas.width = 320;
-      canvas.height = 213;
-      drawFakeThumb(canvas.getContext("2d"), path, canvas.width, canvas.height);
-      canvas.toBlob((blob) => {
-        blob.arrayBuffer().then((buffer) => {
-          const bytes = new Uint8Array(buffer);
-          thumbCache.set(path, bytes);
-          resolve(bytes);
-        });
-      }, "image/jpeg", 0.82);
+    }
+    if (first < 0) return [{ text, hit: false }];
+    const parts = [];
+    if (first > 0) parts.push({ text: text.slice(0, first), hit: false });
+    parts.push({ text: text.slice(first, first + length), hit: true });
+    if (first + length < text.length) {
+      parts.push({ text: text.slice(first + length), hit: false });
+    }
+    return parts;
+  }
+
+  function marksFor(file, words) {
+    const marks = [];
+    (file.lines ?? []).forEach((line, index) => {
+      const lower = line.toLowerCase();
+      if (!words.some((word) => lower.includes(word))) return;
+      const box = lineBox(file, index);
+      marks.push({ x0: box.x0, y0: box.y0, x1: box.x1, y1: box.y1 });
+    });
+    return marks;
+  }
+
+  // The lines' places on the drawn art. The same numbers draw the bars and the
+  // amber marks, so a box always covers the line it claims.
+  function lineBox(file, index) {
+    const page = file.art === "page" || file.art === "receipt";
+    const top = page ? 0.2 + index * 0.105 : 0.32 + index * 0.11;
+    const widths = [0.58, 0.44, 0.68, 0.36];
+    const left = page ? 0.09 : 0.08;
+    return {
+      x0: left,
+      x1: left + widths[index % widths.length],
+      y0: top,
+      y1: top + 0.055,
+    };
+  }
+
+  // ---- preview --------------------------------------------------------------
+
+  function preview(path, query) {
+    const file = ALL.find((item) => item.path === path);
+    if (!file) throw new Error("no file at that path");
+    const words = terms(query);
+    const text = [];
+    // The engine's image text opens with the file's own name line. The sheet
+    // drops it; keeping it here proves the drop works.
+    if (file.kind === "image") text.push({ text: `${file.name}\n`, hit: false });
+    for (const line of file.lines ?? []) {
+      const parts = highlight(line, words);
+      parts.forEach((part, position) => {
+        const last = position === parts.length - 1;
+        text.push({ text: last ? `${part.text}\n` : part.text, hit: part.hit });
+      });
+    }
+    return {
+      path: file.path,
+      name: file.name,
+      kind: file.kind,
+      page: file.page ?? null,
+      text,
+      image_path: file.kind === "image" ? file.path : null,
+      marks: file.kind === "image" ? marksFor(file, words) : [],
+    };
+  }
+
+  // ---- library and status ---------------------------------------------------
+
+  function library(kinds, limit) {
+    const wanted = Array.isArray(kinds) && kinds.length ? kinds : null;
+    const rows = ALL.filter((file) => !wanted || wanted.includes(file.kind))
+      .slice()
+      .sort((a, b) => b.mtime - a.mtime)
+      .slice(0, Math.min(limit || 400, 400))
+      .map((file) => ({
+        path: file.path,
+        name: file.name,
+        folder: file.folder,
+        kind: file.kind,
+        mtime: file.mtime,
+        width: file.width ?? null,
+        height: file.height ?? null,
+      }));
+    const pictures = ALL.filter((file) => file.kind === "image").length;
+    return {
+      rows,
+      pictures,
+      documents: ALL.length - pictures,
+      indexed: ALL.length,
+      folders: roots.length,
+    };
+  }
+
+  function status() {
+    const byKind = (kind) => ALL.filter((file) => file.kind === kind).length;
+    return {
+      index_path: "C:\\Users\\you\\AppData\\Roaming\\tessera\\index",
+      index_mb: 84.7,
+      folders: roots.map((root) => root.path),
+      folder_rows: roots.map((root) => ({ path: root.path, count: root.count })),
+      version: "0.1.0",
+      counts: [
+        ["indexed", ALL.length],
+        ["skipped", 2],
+      ],
+      counts_by_kind: [
+        ["image", byKind("image")],
+        ["pdf", byKind("pdf")],
+        ["docx", byKind("docx")],
+        ["text", byKind("text")],
+      ],
+      failures: [],
+      skip_reasons: [["too large", 2]],
+      models,
+      image_vectors: byKind("image"),
+      text_vectors: ALL.length,
+      ocr_engine: "tesseract 5.3",
+      highlight_pending: 6,
+    };
+  }
+
+  // ---- drawn art ------------------------------------------------------------
+  //
+  // The browser has no files to show. Each fixture gets a small canvas scene at
+  // its own aspect ratio, encoded as JPEG bytes like the engine's thumbnails.
+
+  const thumbnailCache = new Map();
+  const previewCache = new Map();
+
+  function canvasFor(width, height, longest) {
+    const scale = Math.min(1, longest / Math.max(width, height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(2, Math.round(width * scale));
+    canvas.height = Math.max(2, Math.round(height * scale));
+    return canvas;
+  }
+
+  function bytesFromCanvas(canvas) {
+    const base64 = canvas.toDataURL("image/jpeg", 0.82).split(",")[1];
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  const PALETTES = {
+    samurai: ["#1b1410", "#c2571f", "#f0b56a", "#2a1d15"],
+    page: ["#f4f1e9", "#d9d4c7", "#2c2a25", "#8d8778"],
+    receipt: ["#f7f4ec", "#e3ded1", "#2f2d28", "#8a8477"],
+    bridge: ["#101a2b", "#2f5a7a", "#dba766", "#0a1119"],
+    garden: ["#15220f", "#3f6b2a", "#9cc26b", "#0b1408"],
+    sky: ["#2a3550", "#9a5d74", "#f0c089", "#1a2237"],
+    harbor: ["#0c1a20", "#2a6b72", "#d9c9a3", "#081215"],
+    street: ["#0b0d16", "#3d3350", "#e0a75e", "#06070d"],
+    field: ["#1a1c12", "#6d6a3a", "#c9bd7c", "#0e0f09"],
+  };
+
+  function paintArt(file, canvas, detailed) {
+    const ctx = canvas.getContext("2d");
+    const { width: w, height: h } = canvas;
+    const [dark, mid, light, ink] = PALETTES[file.art] ?? PALETTES.field;
+    void ink;
+
+    const sky = ctx.createLinearGradient(0, 0, 0, h);
+    sky.addColorStop(0, mid);
+    sky.addColorStop(0.62, light);
+    sky.addColorStop(1, dark);
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, w, h);
+
+    switch (file.art) {
+      case "page":
+      case "receipt":
+        paintPage(ctx, w, h, file, dark);
+        break;
+      case "samurai":
+        paintSamurai(ctx, w, h, dark, h);
+        break;
+      case "bridge":
+        paintBridge(ctx, w, h, mid, light, dark, h);
+        break;
+      case "garden":
+        paintGarden(ctx, w, h, dark, mid, light, h);
+        break;
+      case "sky":
+        paintSky(ctx, w, h, dark, light, h);
+        break;
+      case "harbor":
+        paintHarbor(ctx, w, h, dark, mid, light, h);
+        break;
+      case "street":
+        paintStreet(ctx, w, h, dark, h);
+        break;
+      default:
+        paintField(ctx, w, h, dark, mid, light, h);
+    }
+
+    if (!detailed) {
+      const vignette = ctx.createRadialGradient(w / 2, h / 2, h * 0.2, w / 2, h / 2, h);
+      vignette.addColorStop(0, "rgba(0,0,0,0)");
+      vignette.addColorStop(1, "rgba(0,0,0,0.34)");
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, 0, w, h);
+    }
+  }
+
+  function paintPage(ctx, w, h, file) {
+    ctx.fillStyle = "rgba(250,248,242,0.94)";
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = "rgba(120,112,96,0.08)";
+    for (let y = 0; y < h; y += Math.max(2, Math.round(h / 120))) {
+      ctx.fillRect(0, y, w, 1);
+    }
+    (file.lines ?? []).forEach((line, index) => {
+      const box = lineBox(file, index);
+      ctx.fillStyle = index === 0 ? "rgba(30,28,24,0.78)" : "rgba(48,45,38,0.52)";
+      ctx.fillRect(box.x0 * w, box.y0 * h, (box.x1 - box.x0) * w, 0.018 * h);
+      ctx.fillStyle = "rgba(48,45,38,0.22)";
+      ctx.fillRect(box.x0 * w, (box.y0 + 0.028) * h, (box.x1 - box.x0) * w * 0.9, 0.012 * h);
+      void line;
     });
   }
 
-  // ---- the mock IPC ----------------------------------------------------------
+  function paintSamurai(ctx, w, h, dark, unit) {
+    const sun = ctx.createRadialGradient(w * 0.72, h * 0.3, 0, w * 0.72, h * 0.3, h * 0.5);
+    sun.addColorStop(0, "rgba(255,226,170,0.95)");
+    sun.addColorStop(0.5, "rgba(226,150,70,0.45)");
+    sun.addColorStop(1, "rgba(226,150,70,0)");
+    ctx.fillStyle = sun;
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.fillStyle = dark;
+    ctx.beginPath();
+    ctx.moveTo(0, h * 0.78);
+    ctx.lineTo(w * 0.22, h * 0.62);
+    ctx.lineTo(w * 0.46, h * 0.74);
+    ctx.lineTo(w * 0.7, h * 0.6);
+    ctx.lineTo(w, h * 0.72);
+    ctx.lineTo(w, h);
+    ctx.lineTo(0, h);
+    ctx.closePath();
+    ctx.fill();
+
+    const cx = w * 0.42;
+    const base = h * 0.82;
+    const bodyH = h * 0.3;
+    ctx.fillStyle = "#1a120d";
+    ctx.beginPath();
+    ctx.moveTo(cx - w * 0.055, base);
+    ctx.lineTo(cx - w * 0.038, base - bodyH * 0.72);
+    ctx.lineTo(cx + w * 0.038, base - bodyH * 0.72);
+    ctx.lineTo(cx + w * 0.062, base);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx, base - bodyH * 0.83, unit * 0.052, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(cx, base - bodyH * 0.88, unit * 0.085, unit * 0.022, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "#1a120d";
+    ctx.lineWidth = Math.max(1.5, unit * 0.008);
+    ctx.beginPath();
+    ctx.moveTo(cx + w * 0.03, base - bodyH * 0.6);
+    ctx.lineTo(cx + w * 0.17, base - bodyH * 1.02);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(255,230,190,0.55)";
+    ctx.lineWidth = Math.max(1, unit * 0.003);
+    ctx.beginPath();
+    ctx.moveTo(cx + w * 0.031, base - bodyH * 0.6);
+    ctx.lineTo(cx + w * 0.171, base - bodyH * 1.02);
+    ctx.stroke();
+  }
+
+  function paintBridge(ctx, w, h, mid, light, dark) {
+    const water = ctx.createLinearGradient(0, h * 0.62, 0, h);
+    water.addColorStop(0, light);
+    water.addColorStop(1, dark);
+    ctx.fillStyle = water;
+    ctx.fillRect(0, h * 0.62, w, h * 0.38);
+
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "rgba(20,18,16,0.9)";
+    ctx.lineWidth = Math.max(2, h * 0.012);
+    ctx.beginPath();
+    ctx.moveTo(-w * 0.05, h * 0.72);
+    ctx.quadraticCurveTo(w * 0.5, h * 0.42, w * 1.05, h * 0.72);
+    ctx.stroke();
+    ctx.lineWidth = Math.max(1, h * 0.005);
+    ctx.beginPath();
+    ctx.moveTo(-w * 0.05, h * 0.6);
+    ctx.quadraticCurveTo(w * 0.5, h * 0.3, w * 1.05, h * 0.6);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(20,18,16,0.7)";
+    ctx.lineWidth = Math.max(1, h * 0.004);
+    for (let x = 0.04; x < 1; x += 0.06) {
+      const y = 0.6 + 0.12 * Math.sin(Math.PI * x);
+      ctx.beginPath();
+      ctx.moveTo(x * w, (y - 0.11) * h);
+      ctx.lineTo(x * w, y * h);
+      ctx.stroke();
+    }
+
+    const glow = ctx.createRadialGradient(w * 0.5, h * 0.6, 0, w * 0.5, h * 0.6, w * 0.5);
+    glow.addColorStop(0, "rgba(255,232,190,0.5)");
+    glow.addColorStop(1, "rgba(255,232,190,0)");
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, h * 0.5, w, h * 0.5);
+    void mid;
+  }
+
+  function paintGarden(ctx, w, h, dark, mid, light, unit) {
+    ctx.fillStyle = dark;
+    ctx.fillRect(0, h * 0.55, w, h * 0.45);
+    for (let i = 0; i < 42; i++) {
+      const x = ((i * 0.618) % 1) * w;
+      const y = h * (0.2 + ((i * 0.37) % 1) * 0.8);
+      const r = unit * (0.06 + ((i * 0.13) % 1) * 0.14);
+      ctx.fillStyle = i % 3 === 0 ? light : i % 3 === 1 ? mid : dark;
+      ctx.globalAlpha = 0.55 + (i % 4) * 0.1;
+      ctx.beginPath();
+      ctx.ellipse(x, y, r * 1.25, r * 0.7, (i % 7) * 0.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    const shaft = ctx.createLinearGradient(w * 0.2, 0, w * 0.8, h);
+    shaft.addColorStop(0, "rgba(255,244,200,0.22)");
+    shaft.addColorStop(1, "rgba(255,244,200,0)");
+    ctx.fillStyle = shaft;
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  function paintSky(ctx, w, h, dark, light, unit) {
+    ctx.fillStyle = dark;
+    ctx.fillRect(0, h * 0.72, w, h * 0.28);
+    for (let i = 0; i < 14; i++) {
+      const cx = ((i * 0.37 + 0.05) % 1) * w;
+      const cy = h * (0.12 + ((i * 0.29) % 1) * 0.5);
+      const rx = w * (0.08 + ((i * 0.17) % 1) * 0.16);
+      ctx.fillStyle = i % 3 === 0 ? light : "rgba(255,246,232,0.6)";
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, rx, rx * 0.24, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = "rgba(255,214,150,0.85)";
+    ctx.beginPath();
+    ctx.arc(w * 0.8, h * 0.3, unit * 0.075, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function paintHarbor(ctx, w, h, dark, mid, light, unit) {
+    const water = ctx.createLinearGradient(0, h * 0.55, 0, h);
+    water.addColorStop(0, mid);
+    water.addColorStop(1, dark);
+    ctx.fillStyle = water;
+    ctx.fillRect(0, h * 0.55, w, h * 0.45);
+    ctx.fillStyle = "rgba(10,16,20,0.9)";
+    for (let i = 0; i < 3; i++) {
+      const x = w * (0.16 + i * 0.32);
+      const y = h * (0.52 + (i % 2) * 0.07);
+      const bw = w * 0.16;
+      ctx.beginPath();
+      ctx.moveTo(x - bw / 2, y);
+      ctx.lineTo(x + bw / 2, y);
+      ctx.lineTo(x + bw * 0.36, y + h * 0.1);
+      ctx.lineTo(x - bw * 0.36, y + h * 0.1);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "rgba(10,16,20,0.9)";
+      ctx.lineWidth = Math.max(1, unit * 0.004);
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x, y - h * 0.2);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = "rgba(255,236,200,0.35)";
+    for (let i = 0; i < 5; i++) {
+      ctx.lineWidth = Math.max(1, unit * 0.004);
+      ctx.beginPath();
+      ctx.moveTo(w * 0.08, h * (0.66 + i * 0.06));
+      ctx.bezierCurveTo(
+        w * 0.4,
+        h * (0.64 + i * 0.06),
+        w * 0.6,
+        h * (0.7 + i * 0.06),
+        w * 0.92,
+        h * (0.66 + i * 0.06),
+      );
+      ctx.stroke();
+    }
+    void light;
+  }
+
+  function paintStreet(ctx, w, h, dark, unit) {
+    ctx.fillStyle = dark;
+    ctx.fillRect(0, h * 0.5, w, h * 0.5);
+    for (let i = 0; i < 18; i++) {
+      const x = ((i * 0.31) % 1) * w;
+      const y = h * (0.3 + ((i * 0.19) % 1) * 0.5);
+      const r = unit * (0.02 + ((i * 0.11) % 1) * 0.05);
+      const glow = ctx.createRadialGradient(x, y, 0, x, y, r * 4);
+      glow.addColorStop(0, "rgba(255,196,110,0.8)");
+      glow.addColorStop(1, "rgba(255,196,110,0)");
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(x, y, r * 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.strokeStyle = "rgba(255,240,210,0.14)";
+    ctx.lineWidth = Math.max(1, unit * 0.004);
+    for (let x = 0.1; x < 1; x += 0.14) {
+      ctx.beginPath();
+      ctx.moveTo(w * x, h * 0.62);
+      ctx.lineTo(w * x, h);
+      ctx.stroke();
+    }
+  }
+
+  function paintField(ctx, w, h, dark, mid, light, unit) {
+    ctx.fillStyle = mid;
+    ctx.fillRect(0, h * 0.62, w, h * 0.38);
+    ctx.strokeStyle = light;
+    ctx.lineWidth = Math.max(1, unit * 0.003);
+    for (let i = 0; i < 26; i++) {
+      const x = ((i * 0.73) % 1) * w;
+      const y = h * (0.6 + ((i * 0.41) % 1) * 0.4);
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.quadraticCurveTo(x + w * 0.01, y - h * 0.06, x + w * 0.03, y - h * 0.09);
+      ctx.stroke();
+    }
+    const haze = ctx.createLinearGradient(0, h * 0.2, 0, h * 0.7);
+    haze.addColorStop(0, "rgba(255,246,220,0.2)");
+    haze.addColorStop(1, "rgba(255,246,220,0)");
+    ctx.fillStyle = haze;
+    ctx.fillRect(0, 0, w, h);
+    void dark;
+  }
+
+  function imageBytes(file, mode) {
+    const cache = mode === "preview" ? previewCache : thumbnailCache;
+    const known = cache.get(file.path);
+    if (known) return known;
+    const canvas = canvasFor(file.width, file.height, mode === "preview" ? 1400 : 480);
+    paintArt(file, canvas, mode === "preview");
+    const bytes = bytesFromCanvas(canvas);
+    cache.set(file.path, bytes);
+    return bytes;
+  }
+
+  // ---- commands -------------------------------------------------------------
 
   const handlers = {
-    search({ query }) {
-      const q = String(query || "").toLowerCase();
-      let rows = ROWS;
-      if (q.includes("nothing")) rows = [];
-      // "a dog on grass" is the picture-arm example: show the image-heavy set.
-      if (q.includes("dog")) rows = ROWS.filter((row) => row.kind === "image");
-      const notes = [];
-      if (q.includes("noimg")) notes.push("the image arm has no vectors to rank yet");
-      return Promise.resolve({
-        rows: rows,
-        notes: notes,
-        millis: 1240,
-        engine_millis: 66,
-        arms: SEARCH_ARMS,
-      });
+    async search({ query, mode, limit }) {
+      await wait(24);
+      return search(query, mode, limit);
     },
-    preview({ path, query }) {
-      return wait(30).then(() => previewFor(path, query));
+    async preview({ path, query }) {
+      await wait(18);
+      return preview(path, query);
     },
-    preview_image({ path }) {
-      return wait(40).then(() => fakeImageBytes(path));
+    async preview_image({ path }) {
+      await wait(30);
+      const file = ALL.find((item) => item.path === path);
+      if (!file) throw new Error("no file at that path");
+      if (file.broken) throw new Error("image decoding failed");
+      return imageBytes(file, "preview");
     },
-    thumbnail({ path }) {
-      // A little latency, so the skeleton is a real state rather than a
-      // below-the-fold myth.
-      return wait(70).then(() => fakeThumbBytes(path));
+    async thumbnail({ path }) {
+      await wait(12);
+      const file = ALL.find((item) => item.path === path);
+      if (!file) throw new Error("no file at that path");
+      if (file.broken) throw new Error("image decoding failed");
+      return imageBytes(file, "thumbnail");
     },
-    status() {
-      return Promise.resolve(STATUS);
+    async library({ kinds, limit }) {
+      await wait(8);
+      return library(kinds, limit);
     },
-    // The home state's newest-files list. The fixtures become the six newest
-    // rows, spread from a minute ago to over a week, so the relative labels
-    // exercise every form the real window can print. Counts match STATUS.
-    recent({ limit }) {
-      const now = Date.now() / 1000;
-      const ages = [40, 22 * 60, 3.2 * 3600, 29 * 3600, 4 * 86400, 11 * 86400, 16 * 86400, 23 * 86400];
-      const rows = ROWS.slice(0, limit ?? 6).map((row, index) => ({
-        path: row.path,
-        name: row.name,
-        folder: row.folder,
-        kind: row.kind,
-        mtime: (now - ages[index % ages.length]) * 1e9,
-      }));
-      return wait(20).then(() => ({ rows, indexed: 4998, folders: 2 }));
+    async status() {
+      await wait(16);
+      return status();
     },
-    index_folder({ path }) {
-      return wait(900).then(
-        () => `Indexed 128 files from ${path} (3 skipped, 1 failed, 0 awaiting OCR)`,
+    async watch_status() {
+      return { running: true, paused, log: [], summary: null };
+    },
+    async set_paused({ paused: next }) {
+      paused = Boolean(next);
+    },
+    async pick_folder() {
+      await wait(40);
+      return "C:\\Users\\you\\Pictures\\Archive";
+    },
+    async index_folder({ path }) {
+      await wait(320);
+      if (!roots.some((root) => root.path === path)) {
+        roots = roots.concat({ path, count: 0 });
+      }
+      return `read 0 new files in ${path}.`;
+    },
+    async remove_folder({ path }) {
+      await wait(60);
+      const prefix = String(path).toLowerCase();
+      ALL = ALL.filter((file) => !file.path.toLowerCase().startsWith(prefix));
+      roots = roots.filter((root) => root.path !== path);
+    },
+    async confirm_remove_folder({ path }) {
+      const name = String(path).split(/[\\/]/).pop();
+      return window.confirm(
+        `Remove “${name}” from the index?\n\nTessera stops reading this folder. Your files are not touched.`,
       );
     },
-    rebuild_index() {
-      return wait(400).then(() => STATUS.folders);
+    async clear_thumbnails() {
+      await wait(120);
+      const removed = thumbnailCache.size;
+      thumbnailCache.clear();
+      previewCache.clear();
+      return removed;
     },
-    confirm_rebuild() {
-      return Promise.resolve(window.confirm("Rebuild the index? (mock)"));
+    async rebuild_index() {
+      await wait(180);
+      return roots.map((root) => root.path);
     },
-    install_models({ sets }) {
-      return wait(1500).then(() => sets.map((set) => `${set}: downloaded and verified (mock)`));
+    async confirm_rebuild() {
+      return window.confirm(
+        "Rebuild the index?\n\nSearches are empty until it finishes. Your files are not touched.",
+      );
     },
-    pick_folder() {
-      return Promise.resolve("C:\\Users\\you\\Pictures\\Screenshots");
+    async install_models({ sets }) {
+      await wait(900);
+      for (const set of models) {
+        if ((sets ?? []).includes(set.name)) {
+          set.complete = true;
+          set.missing = [];
+        }
+      }
+      return ["models installed", "checksums verified"];
     },
-    autostart_enabled() {
-      return Promise.resolve(false);
+    async autostart_enabled() {
+      return autostart;
     },
-    set_autostart() {
-      return Promise.resolve();
+    async set_autostart({ enabled }) {
+      autostart = Boolean(enabled);
     },
-    reveal() {
-      return Promise.resolve();
+    async reveal() {
+      await wait(40);
     },
   };
 
+  const invoke = (command, args) => {
+    const handler = handlers[command];
+    if (!handler) {
+      return Promise.reject(new Error(`the ${command} command is unavailable here`));
+    }
+    return Promise.resolve(handler(args ?? {}));
+  };
+
+  const listeners = new Map();
+
   window.__TAURI__ = {
-    core: {
-      invoke(command, args = {}) {
-        const handler = handlers[command];
-        if (!handler) return Promise.reject(new Error(`mock: no handler for ${command}`));
-        return handler(args);
+    core: { invoke },
+    event: {
+      listen(event, handler) {
+        const set = listeners.get(event) ?? new Set();
+        set.add(handler);
+        listeners.set(event, set);
+        return Promise.resolve(() => set.delete(handler));
       },
     },
+  };
+
+  // The Rust shell will emit this when the window is shown (D9). The browser
+  // has no window manager, so the review flow calls the hook by hand.
+  window.__tesseraShow = () => {
+    for (const handler of listeners.get("tessera-show") ?? []) {
+      handler({ event: "tessera-show", payload: null });
+    }
   };
 })();

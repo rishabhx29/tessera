@@ -1,0 +1,170 @@
+/* Colour, type, space, shape and motion. The window's whole palette. */
+
+:root {
+  color-scheme: light;
+
+  --canvas: #f5f5f7;
+  --surface: #ffffff;
+  --surface-2: #ededf0;
+  --inset: #f2f2f4;
+  --raised: #ffffff;
+  --header: rgb(245 245 247 / 88%);
+
+  --hover: rgb(0 0 0 / 4%);
+  --line: #e3e3e8;
+  --line-strong: #c9c9cf;
+
+  --ink: #1d1d1f;
+  --ink-2: #424245;
+  --muted: #545458;
+  --faint: #6e6e73;
+
+  --accent: #0071e3;
+  --accent-strong: #0059b3;
+  --accent-text: #0059b3;
+  --accent-soft: #e3effd;
+  --on-accent: #ffffff;
+
+  --match: #ff9f0a;
+  --match-wash: rgb(255 159 10 / 12%);
+  --match-edge: rgb(0 0 0 / 20%);
+
+  --ok: #1b7a3d;
+  --warn: #8a5a00;
+  --bad: #c7251c;
+
+  --font:
+    -apple-system, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --mono: "Cascadia Code", "Cascadia Mono", ui-monospace, Consolas, monospace;
+
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 15px;
+  --text-lg: 20px;
+  --text-xl: 24px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius-tile: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 3px rgb(0 0 0 / 10%);
+  --shadow-sheet: -18px 0 60px rgb(0 0 0 / 16%);
+  --shadow-float: 0 16px 40px rgb(0 0 0 / 22%);
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --dur-fast: 120ms;
+  --dur-sheet: 180ms;
+  --dur-toast: 200ms;
+
+  --z-header: 10;
+  --z-sheet: 20;
+  --z-toast: 40;
+
+  --column: 1000px;
+  --page: 640px;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --canvas: #141416;
+  --surface: #1d1d1f;
+  --surface-2: #2a2a2d;
+  --inset: #18181a;
+  --raised: #47474a;
+  --header: rgb(20 20 22 / 88%);
+
+  --hover: rgb(255 255 255 / 6%);
+  --line: #2e2e31;
+  --line-strong: #424245;
+
+  --ink: #f5f5f7;
+  --ink-2: #c7c7cc;
+  --muted: #a1a1a6;
+  --faint: #8e8e93;
+
+  --accent: #0a84ff;
+  --accent-strong: #4da3ff;
+  --accent-text: #9cc7ff;
+  --accent-soft: rgb(10 132 255 / 16%);
+  --on-accent: #0b1420;
+
+  --match: #ffb340;
+  --match-wash: rgb(255 179 64 / 14%);
+  --match-edge: rgb(0 0 0 / 40%);
+
+  --ok: #30d158;
+  --warn: #ffd60a;
+  --bad: #ff5f56;
+
+  --shadow-sheet: -18px 0 60px rgb(0 0 0 / 55%);
+  --shadow-float: 0 16px 40px rgb(0 0 0 / 55%);
+}
+
+/* Before the theme module runs, follow the OS so a dark desktop does not see a
+   white flash. An explicit choice replaces these values at once. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+
+    --canvas: #141416;
+    --surface: #1d1d1f;
+    --surface-2: #2a2a2d;
+    --inset: #18181a;
+    --raised: #47474a;
+    --header: rgb(20 20 22 / 88%);
+
+    --hover: rgb(255 255 255 / 6%);
+    --line: #2e2e31;
+    --line-strong: #424245;
+
+    --ink: #f5f5f7;
+    --ink-2: #c7c7cc;
+    --muted: #a1a1a6;
+    --faint: #8e8e93;
+
+    --accent: #0a84ff;
+    --accent-strong: #4da3ff;
+    --accent-text: #9cc7ff;
+    --accent-soft: rgb(10 132 255 / 16%);
+    --on-accent: #0b1420;
+
+    --match: #ffb340;
+    --match-wash: rgb(255 179 64 / 14%);
+    --match-edge: rgb(0 0 0 / 40%);
+
+    --ok: #30d158;
+    --warn: #ffd60a;
+    --bad: #ff5f56;
+
+    --shadow-sheet: -18px 0 60px rgb(0 0 0 / 55%);
+    --shadow-float: 0 16px 40px rgb(0 0 0 / 55%);
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --line: #b8b8bf;
+    --line-strong: #9a9aa2;
+    --muted: #3c3c40;
+    --faint: #4a4a4e;
+  }
+
+  :root[data-theme="dark"] {
+    --line: #4a4a4e;
+    --line-strong: #5e5e63;
+    --muted: #d1d1d6;
+    --faint: #b8b8bd;
+  }
+}
