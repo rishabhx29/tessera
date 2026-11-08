@@ -182,6 +182,17 @@
   line-height: 40px;
 }
 
+/* The field is the page. A ring around it adds nothing the caret and the
+   glyph do not already say. */
+#query:focus,
+#query:focus-visible {
+  outline: none;
+}
+
+.field:focus-within .search-glyph {
+  color: var(--ink-2);
+}
+
 #query::placeholder {
   color: var(--muted);
   opacity: 1;
