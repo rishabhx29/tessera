@@ -196,10 +196,9 @@ export function renderNotes(container, notes) {
 
 // -- pictures ---------------------------------------------------------------
 //
-// A tile is the picture, not a card: the frame fills the button, the caption
-// only appears over the picture on hover or keyboard focus. The fallback stays
-// under the image, so a slow or broken thumbnail is a neutral named frame
-// rather than a hole in the wall.
+// A tile is the picture, not a card: the frame fills the button and nothing is
+// written under it. The fallback stays inside the frame, so a slow or broken
+// thumbnail is a neutral named frame rather than a hole in the wall.
 
 const THUMB_CACHE_LIMIT = 420;
 const thumbCache = new Map(); // path -> { url } | { failed: true } | { promise }
@@ -329,10 +328,10 @@ export function aspectOf(row) {
   return width > 0 && height > 0 ? width / height : null;
 }
 
-// A tile is a labelled specimen: the picture, then a permanent plate that
-// names it and states the evidence that put it on the wall. Nothing is hidden
-// on hover — the wall is the proof, not a preview of it. The full path is the
-// only thing kept back; the plate carries it as the native title.
+// A tile is the picture alone. The wall stays a wall of pictures: the name and
+// folder live in the option's accessible label and the native title, and the
+// reason is the only text allowed beneath a frame, because it is the proof
+// that put the picture there.
 export function pictureTile(row, { index, reason = "" } = {}) {
   const button = el("button", "tile");
   button.type = "button";
@@ -343,6 +342,7 @@ export function pictureTile(row, { index, reason = "" } = {}) {
   button.setAttribute("aria-selected", "false");
   button.tabIndex = -1;
   button.title = row.path;
+  button.setAttribute("aria-label", reason ? `${row.name}, ${reason}` : row.name);
 
   const frame = el("span", "tile-frame");
   frame.dataset.path = row.path;
@@ -354,24 +354,14 @@ export function pictureTile(row, { index, reason = "" } = {}) {
 
   if (row.marks?.length) frame.append(markLayer(row.marks));
 
-  const plate = el("span", "tile-plate");
-  const top = el("span", "tile-plate-top");
-  top.append(el("span", "tile-name", row.name));
-  if (row.page) top.append(el("span", "tile-page mono", `p.${row.page}`));
-  plate.append(top);
-
-  const meta = el("span", "tile-meta");
-  if (row.folder) meta.append(el("span", "tile-folder", row.folder));
-  if (reason) meta.append(el("span", "tile-reason", reason));
-  plate.append(meta);
-
-  button.append(frame, plate);
+  button.append(frame);
+  if (reason) button.append(el("span", "tile-reason", reason));
   return button;
 }
 
 // `rows` are laid out at their true aspect ratio: a full row takes the width it
 // is given, the last row keeps the target height and stays left aligned. The
-// picture keeps that height; the plate adds its own below it.
+// picture is the whole tile; a reason, when there is one, sits just below it.
 export function renderWall(container, rows, { startIndex = 0, reasonOf = null } = {}) {
   container.classList.remove("evidence");
   const style = getComputedStyle(container);

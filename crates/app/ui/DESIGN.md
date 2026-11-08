@@ -3,8 +3,9 @@
 The window is an **instrument that returns proof**. It does not hand back a
 grid of thumbnails and ask the user to guess why each one is there. Every
 result carries its evidence on the page: the picture is shown where it was
-found, the line is shown beside it, the file is named under it, and the reason
-is stated in the same breath. The wall is the answer.
+found, the line is shown beside it, the reason is stated in the same breath,
+and the file is named in the accessible label and the preview. The wall is the
+answer.
 
 That is the line between Tessera and a gallery. A gallery shows pictures. A
 proof sheet shows pictures **and the reason they are on the sheet**. The
@@ -116,8 +117,10 @@ scope, never a filter applied after the fact.
 The three result materials exist so the user never has to ask which question
 was answered:
 
-1. **The picture wall** is for likeness. Each picture keeps its true aspect and
-   carries a permanent plate naming it.
+1. **The picture wall** is for likeness. Each picture keeps its true aspect
+   and is the tile. The frame carries no caption; the name and folder travel in
+   the option's accessible label and native title. A search result may print
+   one mono reason line under the frame, because the reason is the proof.
 2. **The evidence card** is for text inside a picture. It crops the picture
    around the matched line, overlays the amber box, and prints the OCR line
    directly under it.
@@ -128,9 +131,10 @@ was answered:
 
 1. **Keyboard actions never animate.** `Ctrl+K`, `Esc`, `Ctrl+1..4`, arrow-key
    selection — all instant. Tiles and cards repaint at keystroke speed.
-2. **Hover changes one hairline, never content.** The plate is always visible;
-   hover only darkens the frame outline. Nothing is revealed on hover that a
-   keyboard user cannot see.
+2. **Hover changes one hairline, never content.** A tile shows only its
+   picture; a result reason line, when present, is always visible. Hover only
+   darkens the frame outline. Nothing is revealed on hover that a keyboard user
+   cannot see.
 3. **Selection is an ink ring in the gap.** A selected tile or card draws a 2px
    ink ring outside a 2px canvas gap, so the picture is never tinted, scaled or
    trimmed. Document rows use the `accent-soft` wash and an ink name.
@@ -163,13 +167,12 @@ was answered:
 
 ## Result anatomy
 
-**Picture tile.** The frame sits in normal flow at the justified height; the
-plate adds 38px beneath it. The plate has two lines: the file name (and a mono
-page badge when there is one), then the folder and the reason. The reason is
-prefixed by a 5px amber square and set in mono; on the home state it is absent
-and the line carries the folder alone. The full path is the option's native
-title. A failed decode leaves the glyph and "no preview" inside the frame; the
-plate still names the file.
+**Picture tile.** The frame sits in normal flow at the justified height and is
+the whole tile: no name, no folder, no page badge underneath. The option's
+accessible label carries the file name; its native title carries the full path.
+A search result may add one mono reason line 6px under the frame, prefixed by a
+5px amber square. The home wall has no reason and no caption. A failed decode
+leaves the glyph and "no preview" inside the frame.
 
 **Evidence card.** A 3:2 frame crops the source around the first row mark. The
 crop keeps the card's aspect, clamps inside the picture, and never shows more
@@ -198,15 +201,17 @@ OCR line is dropped when it only repeats the file name.
   The input points at the selection with `aria-activedescendant`, so arrows
   from the field move selection without moving focus.
 - **Pictures are decoration; text is the answer.** Every `<img>` has `alt=""`
-  and every mark layer is `aria-hidden`. The plate, the OCR line and the
-  reason are real text inside the option. A picture never becomes the only
-  label for a file.
+  and every mark layer is `aria-hidden`. A tile has no visible caption, so its
+  accessible label names the file and its native title carries the full path.
+  The OCR line and the reason are real text inside the option. A picture never
+  becomes the only label for a file.
 - **Marks are not the only evidence.** An amber box is repeated in words by
   the reason, the OCR snippet and the preview label. Colour never carries
   meaning alone.
-- **Plates are permanent.** Name, folder and reason do not wait for hover or
-  focus, so keyboard and low-vision users get the same information as a
-  pointer user. Hover adds only a hairline.
+- **The name never depends on hover.** A tile is named by its accessible
+  label, which screen readers announce through `aria-activedescendant`. The
+  preview sheet shows the name and the path on screen. The reason line, when
+  present, does not wait for hover or focus. Hover adds only a hairline.
 - **Focus is always visible and never trapped.** One `:focus-visible` style
   (2px ink) on lenses, tiles, cards, rows, settings controls and the sheet. The
   preview is a non-modal complementary pane; `Esc` closes it and no overlay
@@ -232,8 +237,9 @@ notes at the foot of the header. The wall is the width of the window, with 20px
 side padding; at 720px and below that becomes 12px.
 
 Picture rows are justified at a 160px target height and 6px horizontal gap; a
-full row stretches to the content width, the last row stays left aligned. The
-plate adds 38px under each picture, and the wall leaves 12px between rows.
+full row stretches to the content width, the last row stays left aligned. A
+tile is the frame alone; a result reason line adds its own height, and the wall
+leaves 12px between rows.
 
 The evidence grid is `repeat(auto-fill, minmax(280px, 1fr))` with a 24px row
 gap and an 18px column gap, so a 1000px column holds three cards.
@@ -254,9 +260,9 @@ the same 20px wall gutter.
   segment is a solid ink pill with canvas-coloured text; other segments are
   ink-2. Counts are not repeated in the track; the meta line carries them.
 - **Wall**: `display: flex` rows, 6px gap, tiles shrink-wrapped. A tile is a
-  button with a frame in flow and a plate below. The frame has a 6% black
-  hairline, the picture develops over 200ms, and the fallback is the kind glyph
-  plus "no preview". The plate is 38px, two lines, never hidden.
+  button around one frame and nothing else. The frame has a 6% black hairline,
+  the picture develops over 200ms, and the fallback is the kind glyph plus "no
+  preview". A search result may print one mono reason line under the frame.
 - **Evidence**: a grid of cards. Each has a 3:2 frame with a clipped full-size
   picture positioned by the crop geometry, the amber mark layer, and a plate of
   name, meta and OCR text. Selection and focus ring the frame, not the text.
@@ -290,11 +296,12 @@ the same 20px wall gutter.
 ## Do not
 
 - Do not add a third accent colour, a gradient text fill, or a blue focus ring.
-- Do not hide the plate, the reason or the page badge on hover.
+- Do not hide the reason, the OCR line or the page badge on hover.
 - Do not put a reason behind a tooltip; a tooltip is not proof.
 - Do not animate the response to a keystroke.
 - Do not crop a picture without a mark and claim the crop is evidence.
-- Do not show a card, row or tile with no file name in text.
+- Do not show a card or row with no file name in text, or a tile with no file
+  name in its accessible label.
 
 ## The dev mock
 

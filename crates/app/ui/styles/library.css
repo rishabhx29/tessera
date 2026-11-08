@@ -19,8 +19,9 @@
   min-width: 0;
 }
 
-/* A tile is a specimen: the picture, then a plate that stays on the page.
-   The frame is in flow so the plate adds its own height below it. */
+/* A tile is the picture. The frame is in flow; nothing sits under it on the
+   home wall. A search result may carry one mono reason line, the proof that
+   placed the picture, and nothing else. */
 .tile {
   position: relative;
   flex: none;
@@ -82,66 +83,16 @@
   display: none;
 }
 
-.tile-plate {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  height: 38px;
-  padding: 6px 2px 0;
-  overflow: hidden;
-}
-
-.tile-plate-top {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  min-width: 0;
-}
-
-.tile-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--ink);
-  font-size: var(--text-base);
-  font-weight: 550;
-  line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tile-page {
-  flex: none;
-  color: var(--muted);
-}
-
-.tile-meta {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  min-width: 0;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  line-height: 1.3;
-  white-space: nowrap;
-}
-
-.tile-folder {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* The reason is the one amber mark on the plate: the same colour and shape as
-   the evidence boxes on the picture. */
 .tile-reason {
-  flex: 0 1 auto;
-  min-width: 0;
+  display: block;
   overflow: hidden;
+  margin-top: 6px;
+  padding: 0 2px;
   color: var(--match-deep);
   font-family: var(--mono);
+  font-size: var(--text-xs);
   letter-spacing: 0.01em;
+  line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
