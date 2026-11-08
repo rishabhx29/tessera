@@ -74,6 +74,10 @@ $("query").focus();
 refreshLibrary(true);
 startHomePolling();
 
+// The window is created hidden and revealed once the page has something to
+// paint, so the first frame is Tessera, not an empty rectangle.
+call("boot").catch(() => {});
+
 // ---- header ---------------------------------------------------------------
 
 function buildLenses() {
@@ -523,7 +527,10 @@ function handleEscape() {
   }
   if (state.query) {
     clearQuery();
+    return;
   }
+  // A floating summon leaves with Escape, like any transient panel.
+  call("hide_window").catch(() => {});
 }
 
 function onResultsWidth(width) {

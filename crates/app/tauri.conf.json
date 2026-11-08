@@ -12,13 +12,13 @@
       {
         "label": "main",
         "title": "Tessera",
-        "width": 1080,
-        "height": 720,
+        "width": 920,
+        "height": 640,
         "minWidth": 820,
         "minHeight": 560,
         "center": true,
         "resizable": true,
-        "visible": true
+        "visible": false
       }
     ],
     "security": {

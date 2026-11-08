@@ -15,11 +15,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewWindow, WindowEvent,
+};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt as _, ShortcutState};
@@ -33,12 +36,27 @@ use tessera_app::watcher::{WatchHandle, WatchStatus};
 /// the settings shortcut list, so all three surfaces name the same chord.
 const HOTKEY: &str = "CTRL+ALT+T";
 
+/// The floating size a summon lands at, in logical pixels. It is deliberately
+/// smaller than the configured window: the app the user came from stays
+/// visible around the field and its results.
+const FLOAT_WIDTH: f64 = 920.0;
+const FLOAT_HEIGHT: f64 = 640.0;
+
+/// Breathing room between the floating window and the edge of the work area.
+const FLOAT_MARGIN: f64 = 24.0;
+
 /// What the window is allowed to ask for.
 struct Shell {
     service: AppService,
     /// `None` until the first folder is indexed, and `Some` while a run owns
     /// the connector. Guarded because the commands arrive on webview threads.
     watch: Mutex<Option<WatchHandle>>,
+    /// True between a summon and the moment the window is hidden again. The
+    /// late placement pass reads it so it never reopens a dismissed window.
+    summon_open: AtomicBool,
+    /// Whether the window has ever been shown. The startup fallback uses it to
+    /// tell a slow first frame from an app that is already running.
+    shown_once: AtomicBool,
 }
 
 impl Shell {
@@ -325,15 +343,109 @@ fn reveal(path: String) -> Result<(), String> {
 
 // -- shell ------------------------------------------------------------------
 
+/// A summon is a floating palette over the app the user came from, not a
+/// second workspace. It leaves a maximized or fullscreen state behind, takes a
+/// compact size on the monitor under the pointer, and stays above the window
+/// that was in front. The shell also opens the window this way on launch, so
+/// the app never appears at a frame the OS remembered from an earlier run.
 fn show_window(app: &AppHandle) {
+    app.state::<Shell>()
+        .summon_open
+        .store(true, Ordering::SeqCst);
+    app.state::<Shell>()
+        .shown_once
+        .store(true, Ordering::SeqCst);
     if let Some(window) = app.get_webview_window("main") {
+        let _ = window.set_fullscreen(false);
+        let _ = window.unmaximize();
+        // While the window is hidden this sets the frame it will appear in. A
+        // minimized window ignores it, so the same placement runs again after
+        // the restore and once more when the restore has settled.
+        place_floating(&window);
         let _ = window.show();
         let _ = window.unminimize();
+        place_floating(&window);
+        let _ = window.set_always_on_top(true);
         let _ = window.set_focus();
+
+        // Windows finishes a minimize or maximize restore a few frames after
+        // `show` returns and can put the old frame back. One late pass puts the
+        // compact frame in place again, unless the summon was dismissed first.
+        let settle = window.clone();
+        let handle = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            if !handle.state::<Shell>().summon_open.load(Ordering::SeqCst) {
+                return;
+            }
+            let _ = settle.show();
+            let _ = settle.unminimize();
+            let _ = settle.unmaximize();
+            place_floating(&settle);
+            let _ = settle.set_always_on_top(true);
+            let _ = settle.set_focus();
+        });
     }
     // Every open starts at home: the window drops the query, results,
     // selection and preview it had, so the tool is ready for a new question.
     let _ = app.emit("tessera-show", ());
+}
+
+/// Centre the compact window in the work area of the monitor the pointer is
+/// on, so a summon arrives where the user is looking rather than on whichever
+/// screen the window happened to occupy last.
+fn place_floating(window: &WebviewWindow) {
+    let monitor = window
+        .cursor_position()
+        .ok()
+        .and_then(|point| window.monitor_from_point(point.x, point.y).ok().flatten())
+        .or_else(|| window.current_monitor().ok().flatten())
+        .or_else(|| window.primary_monitor().ok().flatten());
+
+    let Some(monitor) = monitor else {
+        let _ = window.set_size(tauri::LogicalSize::new(FLOAT_WIDTH, FLOAT_HEIGHT));
+        let _ = window.center();
+        return;
+    };
+
+    let area = monitor.work_area();
+    let scale = monitor.scale_factor();
+    let margin = FLOAT_MARGIN * scale;
+    let width = (FLOAT_WIDTH * scale).min((area.size.width as f64 - margin * 2.0).max(320.0));
+    let height = (FLOAT_HEIGHT * scale).min((area.size.height as f64 - margin * 2.0).max(240.0));
+    let _ = window.set_size(PhysicalSize::new(
+        width.round() as u32,
+        height.round() as u32,
+    ));
+
+    // The size above is the canvas; the frame adds a border. Centre the whole
+    // frame in the work area so the visible block sits level.
+    let frame = window.outer_size().unwrap_or(PhysicalSize::new(
+        width.round() as u32,
+        height.round() as u32,
+    ));
+    let x = area.position.x as f64 + (area.size.width as f64 - frame.width as f64) / 2.0;
+    let y = area.position.y as f64 + (area.size.height as f64 - frame.height as f64) / 2.0;
+    let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+}
+
+/// The window is created hidden; the page calls this once it has rendered, so
+/// the app never appears as a half-painted frame.
+#[tauri::command]
+fn boot(app: AppHandle) {
+    show_window(&app);
+}
+
+/// Hide the window without stopping the service, the same state the close
+/// button leaves behind. A floating summon leaves with Escape.
+#[tauri::command]
+fn hide_window(app: AppHandle) {
+    app.state::<Shell>()
+        .summon_open
+        .store(false, Ordering::SeqCst);
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
 }
 
 fn main() {
@@ -342,6 +454,8 @@ fn main() {
     let shell = Shell {
         service: AppService::new(&data_dir, &models_dir),
         watch: Mutex::new(None),
+        summon_open: AtomicBool::new(false),
+        shown_once: AtomicBool::new(false),
     };
 
     tauri::Builder::default()
@@ -379,7 +493,9 @@ fn main() {
             pick_folder,
             autostart_enabled,
             set_autostart,
-            reveal
+            reveal,
+            boot,
+            hide_window
         ])
         .setup(|app| {
             let search = MenuItem::with_id(app, "search", "Search", true, Some(HOTKEY))?;
@@ -410,6 +526,18 @@ fn main() {
             app.global_shortcut()
                 .register(HOTKEY)
                 .map_err(|err| format!("registering {HOTKEY}: {err}"))?;
+
+            // The window is created hidden and shown only once the page
+            // reports that it is ready, so the first frame the user sees is
+            // the compact summon and not the rectangle the OS remembered from
+            // an earlier run.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                if !handle.state::<Shell>().shown_once.load(Ordering::SeqCst) {
+                    show_window(&handle);
+                }
+            });
 
             // Reading the roots and verifying the model files is I/O the first
             // frame must not wait for: the window paints, then the watcher
@@ -445,6 +573,11 @@ fn main() {
             // closing it must not stop indexing. Quit is in the tray menu.
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
+                window
+                    .app_handle()
+                    .state::<Shell>()
+                    .summon_open
+                    .store(false, Ordering::SeqCst);
                 let _ = window.hide();
             }
         })
