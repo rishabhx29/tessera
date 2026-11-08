@@ -210,7 +210,7 @@ export const Demo: React.FC = () => {
           <ul className="space-y-4">
             {[
               ['Search by what you saw', 'Describe the picture, or type the words that were inside it. Both arms run.'],
-              ['Summon it anywhere', 'The app binds Ctrl+Alt+Space globally, so the box arrives over whatever you are doing.'],
+              ['Summon it anywhere', 'The app binds Ctrl+Alt+T globally, so the box arrives over whatever you are doing.'],
               ['Keyboard before mouse', 'Arrows move, Enter opens, Escape leaves. Every row says which arm found it.'],
             ].map(([title, body]) => (
               <li key={title} className="border-t border-line pt-4">

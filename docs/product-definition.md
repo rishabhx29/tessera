@@ -33,7 +33,7 @@ No account, no telemetry, no network calls at query time.
 
 ## 2. The v0.1 demo (must land in 10 seconds)
 
-The user presses `Alt+Space`, types **"the invoice from the airline"**, and one
+The user presses `Ctrl+Alt+T`, types **"the invoice from the airline"**, and one
 results grid returns:
 
 - the **screenshot** (OCR text, matched words highlighted),
@@ -96,7 +96,7 @@ and counted in the diagnostics page — never silently skipped.
 
 ### 3.4 UI (Tauri + React)
 
-- Global hotkey (`Alt+Space` default) summoning a centered search window.
+- Global hotkey (`Ctrl+Alt+T` default) summoning a centered search window.
 - Results grid: thumbnails for images, type badges for documents, folder,
   match reason.
 - Preview pane: image → OCR text with matches highlighted, one-click copy;

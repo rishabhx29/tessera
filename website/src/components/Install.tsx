@@ -167,7 +167,7 @@ export const Install: React.FC = () => {
                   'Point it at the folders you want watched.',
                   'It downloads about 1.3 GB of models, once, and checks the hashes.',
                   'It indexes at idle priority, newest file first.',
-                  'Ctrl+Alt+Space opens the box from anywhere.',
+                  'Ctrl+Alt+T opens the box from anywhere.',
                 ].map((step, index) => (
                   <li key={step} className="flex gap-3 text-[12.5px] leading-relaxed text-night-muted">
                     <span className="font-mono text-[10px] text-[#E8A87C]">

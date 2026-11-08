@@ -8,7 +8,9 @@
 //!
 //! Two behaviours are shell-only and belong here: closing the window hides it
 //! instead of quitting (a search tool that the hotkey cannot reach is not a
-//! search tool), and `Ctrl+Alt+Space` brings it back.
+//! search tool), and `Ctrl+Alt+T` brings it back. The key deliberately avoids
+//! `Ctrl+T`: a system-wide registration of that chord would take "new tab"
+//! away from every browser and terminal on the machine.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -26,8 +28,10 @@ use tessera_app::engine::{
 };
 use tessera_app::watcher::{WatchHandle, WatchStatus};
 
-/// The hotkey, in the one place it is written down.
-const HOTKEY: &str = "CTRL+ALT+SPACE";
+/// The summon hotkey, in the one place it is written down. It is also the
+/// accelerator printed beside the tray menu's Search item and the first row of
+/// the settings shortcut list, so all three surfaces name the same chord.
+const HOTKEY: &str = "CTRL+ALT+T";
 
 /// What the window is allowed to ask for.
 struct Shell {

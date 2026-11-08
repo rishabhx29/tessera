@@ -148,6 +148,12 @@ was answered:
 9. **Hovers are gated behind `@media (hover: hover) and (pointer: fine)`.**
 10. **The frame develops, it does not blink.** A thumbnail starts at 30%
     opacity behind an 8px blur and resolves over 200ms.
+11. **The window answers `Ctrl+Alt+T` from anywhere.** The chord is registered
+    with the OS, so it reaches Tessera while another app owns the screen. It
+    shows, unminimizes and focuses the window, and every summon starts at
+    home. The tray menu prints the same chord and Settings lists it first.
+    The key is not `Ctrl+T`: a global registration of that chord would take
+    "new tab" from every browser and terminal on the machine.
 
 ## Result anatomy
 

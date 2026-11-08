@@ -243,6 +243,7 @@ function fact(parent, label) {
 function shortcutKeys() {
   const list = el("dl", "keys");
   const rows = [
+    ["ctrl alt t", "open tessera from anywhere"],
     ["ctrl k", "focus the field"],
     ["ctrl ,", "settings"],
     ["esc", "close, clear or go back"],
