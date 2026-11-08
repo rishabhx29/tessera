@@ -12,6 +12,7 @@ import {
   renderDocumentList,
   renderWall,
 } from "./dom.js";
+import { renderEvidence } from "./evidence.js";
 
 export const SEARCH_LIMIT = 60;
 
@@ -40,13 +41,23 @@ export function render(payload) {
   const documents = rows.filter((row) => !isImageKind(row.kind));
   state.visibleRows = pictures.concat(documents);
 
+  const words = state.lens === "words";
   const reasonOf =
     state.lens === "all" ? (row) => reasonFor(row, state.resultQuery) : null;
 
   nodes.wall.hidden = !pictures.length;
   nodes.documents.hidden = !documents.length;
   nodes.note.hidden = true;
-  if (pictures.length) {
+  if (words) {
+    if (pictures.length) {
+      renderEvidence(nodes.wall, pictures, {
+        startIndex: 0,
+        reasonOf: (row) => reasonFor(row, state.resultQuery),
+      });
+    } else {
+      nodes.wall.replaceChildren();
+    }
+  } else if (pictures.length) {
     renderWall(nodes.wall, pictures, { startIndex: 0, reasonOf });
   } else {
     nodes.wall.replaceChildren();
@@ -68,6 +79,7 @@ export function render(payload) {
 export function clear() {
   if (!nodes) return;
   nodes.wall.replaceChildren();
+  nodes.wall.classList.remove("evidence");
   nodes.documents.replaceChildren();
   nodes.wall.hidden = true;
   nodes.documents.hidden = true;

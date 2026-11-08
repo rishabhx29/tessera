@@ -52,6 +52,7 @@
   overflow: hidden;
   margin-top: 2px;
   color: var(--muted);
+  font-family: var(--mono);
   font-size: var(--text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -134,6 +135,24 @@
   padding-top: 2px;
 }
 
+/* The preview names what it is showing: the line the query matched, then the
+   lines themselves with the amber marks on the words. */
+.preview-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0 6px;
+  color: var(--match-deep);
+}
+
+.preview-label::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 1px;
+  background: var(--match);
+  content: "";
+}
+
 .ocr-line {
   padding: 4px 0;
   color: var(--ink-2);
@@ -149,6 +168,10 @@
 
 .ocr-line mark {
   padding: 0 1px;
+}
+
+.ocr-line:has(mark) {
+  color: var(--ink);
 }
 
 .ocr-empty {
@@ -177,7 +200,9 @@
 .sheet-meta {
   overflow: hidden;
   color: var(--muted);
-  font-size: var(--text-sm);
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

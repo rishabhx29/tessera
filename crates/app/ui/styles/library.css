@@ -8,46 +8,54 @@
 .wall {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 12px;
   padding: 14px 20px 0;
 }
 
 .wall-row {
   display: flex;
+  align-items: flex-start;
   gap: 6px;
   min-width: 0;
 }
 
+/* A tile is a specimen: the picture, then a plate that stays on the page.
+   The frame is in flow so the plate adds its own height below it. */
 .tile {
   position: relative;
   flex: none;
   display: block;
-  overflow: visible;
-  border-radius: var(--radius-tile);
-  background: var(--inset);
+  min-width: 0;
   text-align: left;
 }
 
 .tile-frame {
-  position: absolute;
-  inset: 0;
+  position: relative;
   display: block;
+  height: var(--tile-h, 160px);
   overflow: hidden;
   border-radius: var(--radius-tile);
   background: var(--inset);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 6%);
   line-height: 0;
 }
 
+/* The picture develops into place instead of popping, so a loaded wall reads
+   as prints coming up rather than frames blinking on. */
 .tile-frame img {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  opacity: 0;
-  transition: opacity var(--dur-fast) ease;
+  opacity: 0.3;
+  filter: blur(8px);
+  transition:
+    opacity var(--dur-develop) ease,
+    filter var(--dur-develop) var(--ease-out);
 }
 
 .tile-frame[data-state="ready"] img {
   opacity: 1;
+  filter: none;
 }
 
 .tile-fallback {
@@ -70,89 +78,100 @@
   height: 22px;
 }
 
-.tile-fallback-name {
-  display: -webkit-box;
-  max-width: 100%;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow-wrap: anywhere;
-  transition: opacity var(--dur-fast) ease;
-}
-
 .tile-frame[data-state="ready"] .tile-fallback {
   display: none;
 }
 
-.tile-caption {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
+.tile-plate {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  padding: 30px 9px 8px;
-  background: linear-gradient(to top, rgb(0 0 0 / 76%), rgb(0 0 0 / 34%) 55%, transparent);
-  color: #fff;
-  line-height: 1.35;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--dur-fast) ease;
+  height: 38px;
+  padding: 6px 2px 0;
+  overflow: hidden;
+}
+
+.tile-plate-top {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
 }
 
 .tile-name {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
+  color: var(--ink);
   font-size: var(--text-base);
   font-weight: 550;
+  line-height: 1.3;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tile-page {
+  flex: none;
+  color: var(--muted);
+}
+
+.tile-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.3;
   white-space: nowrap;
 }
 
 .tile-folder {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
-  color: rgb(255 255 255 / 78%);
-  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+}
+
+/* The reason is the one amber mark on the plate: the same colour and shape as
+   the evidence boxes on the picture. */
+.tile-reason {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--match-deep);
+  font-family: var(--mono);
+  letter-spacing: 0.01em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.tile-reason {
-  color: rgb(255 255 255 / 88%);
-  font-size: var(--text-sm);
+.tile-reason::before {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 5px;
+  border-radius: 1px;
+  background: var(--match);
+  content: "";
+  vertical-align: 1px;
 }
 
 .tile:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.tile:focus-visible .tile-caption {
-  opacity: 1;
-}
-
-/* The caption names the file too; keep one name on screen at a time. */
-.tile:focus-visible .tile-fallback-name {
-  opacity: 0;
-}
-
-.tile-frame {
-  box-shadow: 0 0 0 1px rgb(0 0 0 / 6%);
+  border-radius: var(--radius-tile);
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
 }
 
 .tile[aria-selected="true"] .tile-frame {
   box-shadow:
     0 0 0 2px var(--canvas),
-    0 0 0 4px var(--accent);
+    0 0 0 4px var(--ink);
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .tile:hover .tile-caption {
-    opacity: 1;
-  }
-
-  .tile:hover .tile-fallback-name {
-    opacity: 0;
+  .tile:hover .tile-frame {
+    box-shadow: 0 0 0 1px var(--line-strong);
   }
 }
 
@@ -238,8 +257,11 @@
 
 .doc-page {
   flex: none;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
   color: var(--muted);
-  font-size: var(--text-xs);
+  line-height: 1.2;
 }
 
 .doc-snippet {
@@ -270,7 +292,21 @@
 
 .doc-reason {
   flex: none;
-  color: var(--ink-2);
+  color: var(--match-deep);
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.01em;
+}
+
+.doc-reason::before {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 5px;
+  border-radius: 1px;
+  background: var(--match);
+  content: "";
+  vertical-align: 1px;
 }
 
 .doc-time {
@@ -301,5 +337,13 @@
   .wall-note {
     padding-right: 12px;
     padding-left: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tile-frame img {
+    opacity: 1;
+    filter: none;
+    transition: none;
   }
 }

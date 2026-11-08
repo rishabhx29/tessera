@@ -216,6 +216,7 @@ function renderOcr(preview, row) {
     );
     return;
   }
+  if (hasHit(lines)) nodes.body.append(matchedLabel());
   const box = el("div", "preview-text");
   for (const line of lines) {
     const node = el("p", "ocr-line");
@@ -237,6 +238,7 @@ function renderText(preview, { dropName }) {
     );
     return;
   }
+  if (hasHit(lines)) nodes.body.append(matchedLabel());
   const box = el("div", "preview-text");
   for (const line of lines) {
     const node = el("p", "ocr-line");
@@ -244,6 +246,14 @@ function renderText(preview, { dropName }) {
     box.append(node);
   }
   nodes.body.append(box);
+}
+
+function hasHit(lines) {
+  return lines.some((line) => line.some((part) => part.hit));
+}
+
+function matchedLabel() {
+  return el("p", "preview-label mono", "matched line");
 }
 
 // The engine's image text starts with the file's own name. That line is never

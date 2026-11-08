@@ -8,7 +8,7 @@
 
 .mark-box {
   position: absolute;
-  border: 1.5px solid var(--match);
+  border: 2px solid var(--match);
   border-radius: 2px;
   background: var(--match-wash);
   box-shadow: 0 0 0 1px var(--match-edge);

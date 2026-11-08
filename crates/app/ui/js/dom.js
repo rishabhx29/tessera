@@ -329,6 +329,10 @@ export function aspectOf(row) {
   return width > 0 && height > 0 ? width / height : null;
 }
 
+// A tile is a labelled specimen: the picture, then a permanent plate that
+// names it and states the evidence that put it on the wall. Nothing is hidden
+// on hover — the wall is the proof, not a preview of it. The full path is the
+// only thing kept back; the plate carries it as the native title.
 export function pictureTile(row, { index, reason = "" } = {}) {
   const button = el("button", "tile");
   button.type = "button";
@@ -338,31 +342,38 @@ export function pictureTile(row, { index, reason = "" } = {}) {
   button.setAttribute("role", "option");
   button.setAttribute("aria-selected", "false");
   button.tabIndex = -1;
+  button.title = row.path;
 
   const frame = el("span", "tile-frame");
   frame.dataset.path = row.path;
   frame.dataset.state = "idle";
 
   const fallback = el("span", "tile-fallback");
-  fallback.append(kindGlyph("image"));
-  fallback.append(el("span", "tile-fallback-name", row.name));
+  fallback.append(kindGlyph("image"), el("span", "", "no preview"));
   frame.append(fallback);
 
   if (row.marks?.length) frame.append(markLayer(row.marks));
 
-  const caption = el("span", "tile-caption");
-  caption.append(el("span", "tile-name", row.name));
-  if (row.folder) caption.append(el("span", "tile-folder", row.folder));
-  if (reason) caption.append(el("span", "tile-reason", reason));
-  frame.append(caption);
+  const plate = el("span", "tile-plate");
+  const top = el("span", "tile-plate-top");
+  top.append(el("span", "tile-name", row.name));
+  if (row.page) top.append(el("span", "tile-page mono", `p.${row.page}`));
+  plate.append(top);
 
-  button.append(frame);
+  const meta = el("span", "tile-meta");
+  if (row.folder) meta.append(el("span", "tile-folder", row.folder));
+  if (reason) meta.append(el("span", "tile-reason", reason));
+  plate.append(meta);
+
+  button.append(frame, plate);
   return button;
 }
 
 // `rows` are laid out at their true aspect ratio: a full row takes the width it
-// is given, the last row keeps the target height and stays left aligned.
+// is given, the last row keeps the target height and stays left aligned. The
+// picture keeps that height; the plate adds its own below it.
 export function renderWall(container, rows, { startIndex = 0, reasonOf = null } = {}) {
+  container.classList.remove("evidence");
   const style = getComputedStyle(container);
   const width =
     container.clientWidth -
@@ -370,7 +381,7 @@ export function renderWall(container, rows, { startIndex = 0, reasonOf = null } 
     (parseFloat(style.paddingRight) || 0);
   const items = rows.map((row) => ({ row, aspect: aspectOf(row) }));
   container.replaceChildren();
-  layoutRows(items, width, 168, 6).forEach((line) => {
+  layoutRows(items, width, 160, 6).forEach((line) => {
     const rowNode = el("div", "wall-row");
     rowNode.setAttribute("role", "presentation");
     line.items.forEach(({ item, width: tileWidth, height }) => {
@@ -380,7 +391,7 @@ export function renderWall(container, rows, { startIndex = 0, reasonOf = null } 
         reason: reasonOf ? reasonOf(item.row) : "",
       });
       button.style.width = `${tileWidth}px`;
-      button.style.height = `${height}px`;
+      button.style.setProperty("--tile-h", `${height}px`);
       rowNode.append(button);
     });
     container.append(rowNode);
@@ -402,13 +413,14 @@ export function documentRow(
   button.setAttribute("role", "option");
   button.setAttribute("aria-selected", "false");
   button.tabIndex = -1;
+  button.title = row.path;
 
   button.append(kindGlyph(row.kind));
 
   const main = el("span", "doc-main");
   const head = el("span", "doc-head");
   head.append(el("span", "doc-name", row.name));
-  if (row.page) head.append(el("span", "doc-page numeric", `page ${row.page}`));
+  if (row.page) head.append(el("span", "doc-page mono", `page ${row.page}`));
   main.append(head);
 
   if (snippet && row.snippet?.length) {
@@ -421,7 +433,7 @@ export function documentRow(
   if (row.folder) sub.append(el("span", "doc-folder", row.folder));
   if (reason) sub.append(el("span", "doc-reason", reason));
   if (time) {
-    const when = el("time", "doc-time");
+    const when = el("time", "doc-time mono");
     const at = new Date(Number(row.mtime) / 1e6);
     if (!Number.isNaN(at.getTime())) {
       when.dateTime = at.toISOString();

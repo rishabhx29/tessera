@@ -1,0 +1,192 @@
+/* The words lens: a specimen crop around the line, then the line itself. */
+
+.evidence {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  align-items: start;
+  gap: 24px 18px;
+  padding: 14px 20px 0;
+}
+
+.evidence-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  text-align: left;
+}
+
+.evidence-frame {
+  position: relative;
+  display: block;
+  aspect-ratio: 3 / 2;
+  overflow: hidden;
+  border-radius: var(--radius-tile);
+  background: var(--inset);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 6%);
+}
+
+.evidence-image {
+  position: absolute;
+  display: block;
+  line-height: 0;
+}
+
+.evidence-image.whole {
+  inset: 0;
+}
+
+.evidence-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.3;
+  filter: blur(8px);
+  transition:
+    opacity var(--dur-develop) ease,
+    filter var(--dur-develop) var(--ease-out);
+}
+
+.evidence-frame[data-state="ready"] .evidence-image img {
+  opacity: 1;
+  filter: none;
+}
+
+.evidence-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--faint);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+}
+
+.evidence-fallback .kind-glyph {
+  width: 22px;
+  height: 22px;
+}
+
+.evidence-frame[data-state="ready"] .evidence-fallback {
+  display: none;
+}
+
+.evidence-plate {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 2px 0;
+}
+
+.evidence-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.evidence-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--text-base);
+  font-weight: 550;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidence-page {
+  flex: none;
+  color: var(--muted);
+}
+
+.evidence-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.evidence-folder {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.evidence-reason {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--match-deep);
+  font-family: var(--mono);
+  letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidence-reason::before {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 5px;
+  border-radius: 1px;
+  background: var(--match);
+  content: "";
+  vertical-align: 1px;
+}
+
+.evidence-text {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: var(--text-base);
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.evidence-card:focus-visible {
+  border-radius: var(--radius-tile);
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
+}
+
+.evidence-card[aria-selected="true"] .evidence-frame {
+  box-shadow:
+    0 0 0 2px var(--canvas),
+    0 0 0 4px var(--ink);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .evidence-card:hover .evidence-frame {
+    box-shadow: 0 0 0 1px var(--line-strong);
+  }
+}
+
+@media (max-width: 720px) {
+  .evidence {
+    grid-template-columns: 1fr;
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .evidence-image img {
+    opacity: 1;
+    filter: none;
+    transition: none;
+  }
+}

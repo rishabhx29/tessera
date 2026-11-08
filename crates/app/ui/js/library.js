@@ -122,6 +122,9 @@ function renderNote({ documents, pictures, files, library }) {
     }
   } else if (!pictures.length) {
     text = "pictures appear here as they are read.";
+  } else if (ctx.state.lens === "words") {
+    text =
+      "words searches the text inside pictures. type a word to find the line it appears on.";
   } else if ((library.pictures ?? 0) > pictures.length) {
     text = `showing the newest ${count(pictures.length)} pictures.`;
   }

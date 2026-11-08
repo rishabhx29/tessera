@@ -37,7 +37,7 @@ const state = {
   firstRunChecked: false,
   showFirstRun: false,
   pollTimer: null,
-  resizeFrame: null,
+  resultsWidth: 0,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -92,6 +92,7 @@ function buildLenses() {
 }
 
 function paintLenses() {
+  $("app").dataset.lens = state.lens;
   for (const button of $("lenses").querySelectorAll("[data-lens]")) {
     button.setAttribute("aria-pressed", button.dataset.lens === state.lens ? "true" : "false");
   }
@@ -427,7 +428,14 @@ function bindEvents() {
   });
 
   document.addEventListener("keydown", onKeyDown);
-  window.addEventListener("resize", onResize);
+  // The wall is justified against its own width, so observe the results
+  // column itself. A window-resize event can be dropped while the window is
+  // minimized, which would leave every later resize ignored.
+  if ("ResizeObserver" in window) {
+    new ResizeObserver(([entry]) => onResultsWidth(entry.contentRect.width)).observe(
+      $("library-results"),
+    );
+  }
 }
 
 function onKeyDown(event) {
@@ -518,19 +526,18 @@ function handleEscape() {
   }
 }
 
-function onResize() {
-  if (state.resizeFrame) return;
-  state.resizeFrame = requestAnimationFrame(() => {
-    state.resizeFrame = null;
-    if (state.view !== "library" || state.showFirstRun) return;
-    if (state.query && state.searchPayload) {
-      results.render(state.searchPayload);
-    } else if (!state.query) {
-      library.clearSignature();
-      library.render();
-    }
-    paintSelection();
-  });
+function onResultsWidth(width) {
+  const rounded = Math.round(width);
+  if (!rounded || rounded === state.resultsWidth) return;
+  state.resultsWidth = rounded;
+  if (state.view !== "library" || state.showFirstRun) return;
+  if (state.query && state.searchPayload) {
+    results.render(state.searchPayload);
+  } else if (!state.query) {
+    library.clearSignature();
+    library.render();
+  }
+  paintSelection();
 }
 
 function closePreview() {

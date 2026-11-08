@@ -66,11 +66,19 @@
   flex: none;
   width: 20px;
   height: 20px;
+}
+
+/* One tile of the mark is the question in force: it lights amber for the
+   active lens and stays ink for the other three. */
+.mark rect {
   fill: var(--ink);
 }
 
-.mark .mark-accent {
-  fill: var(--accent);
+#app[data-lens="all"] .mark-q4,
+#app[data-lens="pictures"] .mark-q1,
+#app[data-lens="words"] .mark-q2,
+#app[data-lens="documents"] .mark-q3 {
+  fill: var(--match);
 }
 
 .lenses {
@@ -94,12 +102,11 @@
   white-space: nowrap;
 }
 
+/* The active lens is a solid ink pill. It reads as the one control currently
+   in force, not as a raised card. */
 .lens[aria-pressed="true"] {
-  background: var(--raised);
-  box-shadow:
-    0 1px 3px rgb(0 0 0 / 10%),
-    inset 0 0 0 1px var(--line);
-  color: var(--ink);
+  background: var(--ink);
+  color: var(--canvas);
   font-weight: 550;
 }
 
@@ -120,7 +127,9 @@
 .meta {
   overflow: hidden;
   color: var(--muted);
-  font-size: var(--text-sm);
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
