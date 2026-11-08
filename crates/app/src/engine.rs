@@ -534,6 +534,49 @@ impl AppService {
         Ok(bytes)
     }
 
+    /// Forget one indexed folder. The files on disk are untouched; only the
+    /// index rows, tiles and vectors that describe them go.
+    ///
+    /// Returns the number of rows removed, so Settings can say what changed.
+    pub fn remove_root(&self, path: &str) -> Result<usize, String> {
+        if !self.index_exists() {
+            return Ok(0);
+        }
+        let store = Store::open(&self.data_dir).map_err(|err| format!("{err:#}"))?;
+        store
+            .remove_root(Path::new(path))
+            .map_err(|err| format!("{err:#}"))
+    }
+
+    /// Delete the thumbnail cache and the index records that name its entries.
+    ///
+    /// Returns how many cache files were removed. The pictures on disk and
+    /// their index rows stay; the next wall request decodes them again.
+    pub fn clear_thumbnails(&self) -> Result<usize, String> {
+        let dir = self.data_dir.join("thumbs");
+        let mut removed = 0;
+        match std::fs::read_dir(&dir) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = entry.map_err(|err| format!("reading {}: {err}", dir.display()))?;
+                    let path = entry.path();
+                    if path.is_file() {
+                        std::fs::remove_file(&path)
+                            .map_err(|err| format!("removing {}: {err}", path.display()))?;
+                        removed += 1;
+                    }
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(format!("reading {}: {err}", dir.display())),
+        }
+        if self.index_exists() {
+            let store = Store::open(&self.data_dir).map_err(|err| format!("{err:#}"))?;
+            store.clear_thumbs().map_err(|err| format!("{err:#}"))?;
+        }
+        Ok(removed)
+    }
+
     pub fn status(&self) -> Result<StatusPayload, String> {
         let index_path = self.data_dir.join("index.sqlite");
         let index_mb = std::fs::metadata(&index_path)
@@ -1597,6 +1640,66 @@ mod tests {
         let error = service.thumbnail(&path.to_string_lossy()).unwrap_err();
         assert!(error.contains("larger than"), "{error}");
         assert_eq!(service.thumbnail_decodes(), 0);
+    }
+
+    #[test]
+    fn removing_a_folder_forgets_its_rows_and_keeps_its_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let service = AppService::new(temp.path(), temp.path().join("models"));
+        let shot = first.path().join("shot.png");
+        png(&shot, 40, 20);
+        let notes = second.path().join("notes.txt");
+        std::fs::write(&notes, b"words").unwrap();
+        index_as(&service, first.path(), &shot, Kind::Image);
+        index_as(&service, second.path(), &notes, Kind::Text);
+        assert_eq!(service.status().unwrap().folder_rows.len(), 2);
+
+        let removed = service
+            .remove_root(&first.path().to_string_lossy())
+            .unwrap();
+        assert_eq!(removed, 1);
+        assert!(shot.exists(), "the picture on disk is untouched");
+
+        // Only the named folder is forgotten; the other keeps its rows.
+        let status = service.status().unwrap();
+        assert_eq!(status.folder_rows.len(), 1);
+        assert_eq!(status.folder_rows[0].path, second.path().to_string_lossy());
+        let pictures = service.library(&["image".to_string()], 10).unwrap();
+        assert!(pictures.rows.is_empty());
+        assert_eq!(pictures.pictures, 0);
+    }
+
+    #[test]
+    fn clearing_thumbnails_removes_only_the_cache() {
+        let temp = tempfile::tempdir().unwrap();
+        let corpus = tempfile::tempdir().unwrap();
+        let service = AppService::new(temp.path(), temp.path().join("models"));
+        let path = corpus.path().join("shot.png");
+        png(&path, 120, 80);
+        index_as(&service, corpus.path(), &path, Kind::Image);
+        service.thumbnail(&path.to_string_lossy()).unwrap();
+        let cache = temp.path().join("thumbs");
+        assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 1);
+
+        assert_eq!(service.clear_thumbnails().unwrap(), 1);
+        assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 0);
+        {
+            let store = Store::open(temp.path()).unwrap();
+            assert!(store.thumb_source(&path).unwrap().unwrap().thumb.is_none());
+        }
+        assert!(path.exists(), "the picture on disk is untouched");
+        assert_eq!(
+            service
+                .library(&["image".to_string()], 10)
+                .unwrap()
+                .rows
+                .len(),
+            1,
+            "the index row stays; only its cache entry is gone"
+        );
+        assert_eq!(service.clear_thumbnails().unwrap(), 0);
     }
 
     #[test]

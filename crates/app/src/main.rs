@@ -17,7 +17,7 @@ use std::sync::Mutex;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, State, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_autostart::ManagerExt as _;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt as _, ShortcutState};
@@ -44,10 +44,16 @@ impl Shell {
     /// is watched without restarting the app, and a wiped index has a watcher
     /// that re-walks the folders it used to hold.
     fn restart_watch(&self) {
-        let folders = self
+        let roots: Vec<PathBuf> = self
             .service
             .status()
-            .map(|status| status.folders)
+            .map(|status| {
+                status
+                    .folder_rows
+                    .into_iter()
+                    .map(|row| PathBuf::from(row.path))
+                    .collect()
+            })
             .unwrap_or_default();
         let mut slot = self
             .watch
@@ -56,10 +62,9 @@ impl Shell {
         if let Some(mut handle) = slot.take() {
             handle.stop();
         }
-        if folders.is_empty() {
+        if roots.is_empty() {
             return;
         }
-        let roots: Vec<PathBuf> = folders.into_iter().map(PathBuf::from).collect();
         match WatchHandle::start(self.service.data_dir(), self.service.models_dir(), roots) {
             Ok(handle) => *slot = Some(handle),
             // Not fatal: searching still works, and the pane shows "stopped".
@@ -219,6 +224,46 @@ fn confirm_rebuild(app: AppHandle) -> bool {
 }
 
 #[tauri::command]
+fn confirm_remove_folder(app: AppHandle, path: String) -> bool {
+    app.dialog()
+        .message(format!(
+            "Tessera stops watching {path} and drops its files from the index. \
+             Search results from it will be gone. Your files are not touched."
+        ))
+        .title("Remove this folder?")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Remove".to_string(),
+            "Cancel".to_string(),
+        ))
+        .blocking_show()
+}
+
+/// Stop watching one folder and drop its rows from the index. The files on
+/// disk are untouched.
+#[tauri::command]
+async fn remove_folder(shell: State<'_, Shell>, path: String) -> Result<usize, String> {
+    // Stop first: a watcher still holding a store handle would write rows
+    // back while the folder is being forgotten.
+    {
+        let mut slot = shell
+            .watch
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(mut handle) = slot.take() {
+            handle.stop();
+        }
+    }
+    let removed = shell.service.remove_root(&path);
+    shell.restart_watch();
+    removed
+}
+
+#[tauri::command]
+async fn clear_thumbnails(shell: State<'_, Shell>) -> Result<usize, String> {
+    shell.service.clear_thumbnails()
+}
+
+#[tauri::command]
 async fn install_models(shell: State<'_, Shell>, sets: Vec<String>) -> Result<Vec<String>, String> {
     let lines = shell.service.install_models(&sets)?;
     // A newly installed set can change which arms exist, so the watcher is
@@ -290,6 +335,9 @@ fn show_window(app: &AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+    // Every open starts at home: the window drops the query, results,
+    // selection and preview it had, so the tool is ready for a new question.
+    let _ = app.emit("tessera-show", ());
 }
 
 fn main() {
@@ -329,6 +377,9 @@ fn main() {
             index_folder,
             rebuild_index,
             confirm_rebuild,
+            remove_folder,
+            confirm_remove_folder,
+            clear_thumbnails,
             install_models,
             pick_folder,
             autostart_enabled,

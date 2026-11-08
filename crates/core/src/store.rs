@@ -1743,6 +1743,15 @@ impl Store {
         Ok(())
     }
 
+    /// Forget every recorded thumbnail cache entry: index data only. The
+    /// cache files are the caller's to delete; this call is what stops the
+    /// index from naming entries that no longer exist.
+    pub fn clear_thumbs(&self) -> Result<usize> {
+        self.conn
+            .execute("UPDATE files SET thumb = NULL WHERE thumb IS NOT NULL", [])
+            .map_err(Into::into)
+    }
+
     /// Whether the image arm holds any vector at all.
     ///
     /// One indexed probe, for the hot path: asking `COUNT(*)` here reads every
