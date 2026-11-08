@@ -134,7 +134,7 @@
 /* The caption names the file too; keep one name on screen at a time. */
 .tile:focus-visible .tile-fallback-name {
   opacity: 0;
-}"
+}
 
 .tile-frame {
   box-shadow: 0 0 0 1px rgb(0 0 0 / 6%);

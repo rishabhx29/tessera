@@ -25,7 +25,10 @@ tessera/
 ```
 
 `tessera-core` never depends on `tessera-app`. The shell calls core through a
-small API: `add_folder`, `search(query, filters)`, `index_status()`.
+small service (`crates/app/src/engine.rs`): `index_folder`, `search(query,
+lens, limit)`, `library(kinds, limit)`, `status`, `preview`, `thumbnail`,
+`remove_root` and `clear_thumbnails`. The window in `crates/app/ui` is vanilla
+ES modules over those commands; it has no framework and no bundler.
 
 ## The Indexer trait (the seam that makes formats cheap)
 
@@ -182,7 +185,9 @@ files(
                              -- last *attempt*, which the retry deadline counts from
   attempts INTEGER,          -- consecutive non-indexed attempts; the retry backoff
                              -- is exponential in this, and an extraction clears it
-  thumb TEXT                 -- thumbnail path in the cache dir
+  thumb TEXT,                -- name of this file's entry in <data_dir>/thumbs
+  width INTEGER,             -- picture width from the header; NULL until read
+  height INTEGER             -- picture height from the header; NULL until read
 );
 
 tiles(
@@ -190,7 +195,8 @@ tiles(
   file_id INTEGER REFERENCES files(id),
   seq INTEGER,               -- 0-based position within the file
   page INTEGER,              -- 1-based page for paged formats, NULL otherwise
-  text TEXT                  -- OCR text or document chunk text
+  text TEXT,                 -- OCR text or document chunk text
+  boxes TEXT                 -- JSON line boxes in picture fractions; NULL until read
 );
 
 tiles_fts  -- FTS5 external-content over tiles, trigram tokenizer
@@ -314,10 +320,11 @@ on one.
 
 ```
 query
+ ├─ lens          → all | pictures | words | documents
  ├─ lexical arm   → FTS5 trigram BM25 over tiles_fts        (filenames + OCR + doc text)
  ├─ image arm     → SigLIP text query → img_vec cosine        (description queries)
  ├─ text arm      → MiniLM query   → txt_vec cosine             (meaning over documents)
- └─ filters       → type / folder / date, applied inside every arm
+ └─ filters       → type:, folder:, date: narrow the lens kinds, never widen them
         │
         ▼
  weighted Reciprocal Rank Fusion (rank-based; score scales are incomparable)
@@ -327,15 +334,16 @@ query
  surfaced it
 ```
 
-One search box. The user does not choose modes: the three arms run on
+One search box with four lenses (ADR-0010). `all` runs the three arms on
 threads, one store connection each (WAL lets them read together), and
 `fusion::fuse` merges their lists with each arm's vote scaled by how much
 text the file carries — the measured answer to what an equal image voice
 costs on text-bearing files (0.964 → 0.375 top-1; ADR-0003's amendment holds
-the table). `--describe` and `--describe-text` remain as arm-isolating
-diagnostics, not modes. The text arm embeds every tile the store
-holds, so a document chunk, an OCR line and a file name are all findable by
-meaning. Typo tolerance has two layers: the trigram
+the table). `pictures` runs the image arm alone; `words` and `documents` run
+the keyword and meaning arms over files with visible body text. `--describe`
+and `--describe-text` remain as arm-isolating diagnostics, not modes. The text
+arm embeds every tile the store holds, so a document chunk, an OCR line and a
+file name are all findable by meaning. Typo tolerance has two layers: the trigram
 tokenizer makes partial words match (`invoic` finds `invoice`), and each query
 term is expanded into its lookalike variants (`0`↔`o`, `1`↔`l`↔`i`, `5`↔`s`,
 `8`↔`b`) and OR-ed, so `inv0ice` finds `invoice`. Trigram alone cannot do this

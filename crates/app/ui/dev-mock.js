@@ -460,7 +460,6 @@
     return {
       index_path: "C:\\Users\\you\\AppData\\Roaming\\tessera\\index",
       index_mb: 84.7,
-      folders: roots.map((root) => root.path),
       folder_rows: roots.map((root) => ({ path: root.path, count: root.count })),
       version: "0.1.0",
       counts: [

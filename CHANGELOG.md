@@ -20,13 +20,12 @@ releases begin.
 - The workspace and app bundle carry version **0.1.0** — the first shippable
   number; the scaffold's 0.0.0 never shipped anything.
 - The window's design direction, written down where the UI lives
-  (`crates/app/ui/DESIGN.md`): a launcher-class instrument rather than a page.
-  The chrome is Apple-neutral — system greys, true surfaces and one blue
-  accent (`#0071E3` light, `#0A84FF` dark) — with one system sans family and
-  mono only for inline code — plus the interaction rules
-  the window follows: keyboard actions never animate, hovers change color
-  only, presses answer with a 0.98 scale, and everything else stays under
-  200 ms and gated on reduced-motion.
+  (`crates/app/ui/DESIGN.md`): system greys, true surfaces and one blue
+  accent (`#0071E3` light, `#0A84FF` dark), one system sans family with mono
+  only for inline code, and the interaction rules the window follows:
+  keyboard actions never animate, hovers change color only, presses answer
+  with a 0.98 scale, and everything else stays under 300 ms and gated on
+  reduced-motion.
 - The app icon is the same mosaic on the instrument's graphite plate: three
   near-white tiles and one blue (`#F5F5F7` / `#0071E3` on `#1D1D1F`), with a
   vector source (`crates/app/icons/icon.svg`) and 16–256 px entries in
@@ -39,13 +38,21 @@ releases begin.
   preview, first-run, no-match, settings, dark theme — can now be
   rendered and screenshotted without building the shell. The mock paints a
   corner badge so its screenshots are never mistaken for the real window.
-- The empty-query state is real index content: a "Latest files" list of the
-  newest indexed files — kind thumbnail or glyph, name, mono folder, relative
-  time — with mono file and folder counts, served by the new `recent`
-  command. A row opens the same preview as a search hit; a click or
-  `ArrowDown` from the box reaches it. The miss state names its cause and
-  suggests a filter. An empty models note no longer renders as a stray
-  bordered pill.
+- The window is now a lens over a library. Four lenses — all, pictures, words,
+  documents — scope the arms and the kinds, so a samurai photograph, a
+  screenshot that says "samurai" and a PDF about samurai answer different
+  questions. The home state is a justified wall of real indexed pictures at
+  their own aspect, with document rows for the documents lens. Results reuse
+  the wall and add a reason to each caption.
+- The preview is a non-modal right sheet that opens the matched tile or page,
+  draws amber line marks on the picture and highlights the same words in the
+  OCR text. A picture that cannot be decoded says so instead of showing a
+  blank frame.
+- Settings is one lowercase page: folders, look, reading, models, storage,
+  shortcuts and about. Removing a folder stops its watcher, drops its index
+  rows and leaves the files on disk; clearing thumbnails deletes only the
+  cache.
+- The old rail, filter chips, latest-files list and `recent` command are gone.
 - CI now also runs on Linux and macOS. Linux is where the non-Windows paths are
   compiled at all; macOS is the only place `ocr/vision.rs` exists, since it is
   `#[cfg(target_os = "macos")]` and no other runner can see that code. The
