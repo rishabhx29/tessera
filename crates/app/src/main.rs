@@ -223,8 +223,12 @@ async fn rebuild_index(shell: State<'_, Shell>) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-fn confirm_rebuild(app: AppHandle) -> bool {
-    app.dialog()
+async fn confirm_rebuild(app: AppHandle) -> bool {
+    // Owned by the main window: the window floats above everything else when
+    // summoned, and an unowned dialog would open behind it.
+    let window = app.get_webview_window("main");
+    let mut dialog = app
+        .dialog()
         .message(
             "This deletes the index and rebuilds it from your folders. Search \
              is unavailable until it finishes. Your files are not touched.",
@@ -233,13 +237,18 @@ fn confirm_rebuild(app: AppHandle) -> bool {
         .buttons(MessageDialogButtons::OkCancelCustom(
             "Rebuild".to_string(),
             "Cancel".to_string(),
-        ))
-        .blocking_show()
+        ));
+    if let Some(window) = &window {
+        dialog = dialog.parent(window);
+    }
+    dialog.blocking_show()
 }
 
 #[tauri::command]
-fn confirm_remove_folder(app: AppHandle, path: String) -> bool {
-    app.dialog()
+async fn confirm_remove_folder(app: AppHandle, path: String) -> bool {
+    let window = app.get_webview_window("main");
+    let mut dialog = app
+        .dialog()
         .message(format!(
             "Tessera stops watching {path} and drops its files from the index. \
              Search results from it will be gone. Your files are not touched."
@@ -248,8 +257,11 @@ fn confirm_remove_folder(app: AppHandle, path: String) -> bool {
         .buttons(MessageDialogButtons::OkCancelCustom(
             "Remove".to_string(),
             "Cancel".to_string(),
-        ))
-        .blocking_show()
+        ));
+    if let Some(window) = &window {
+        dialog = dialog.parent(window);
+    }
+    dialog.blocking_show()
 }
 
 /// Stop watching one folder and drop its rows from the index. The files on
@@ -287,8 +299,13 @@ async fn install_models(shell: State<'_, Shell>, sets: Vec<String>) -> Result<Ve
 }
 
 #[tauri::command]
-fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
-    let folder = app.dialog().file().blocking_pick_folder();
+async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
+    let window = app.get_webview_window("main");
+    let mut dialog = app.dialog().file();
+    if let Some(window) = &window {
+        dialog = dialog.set_parent(window);
+    }
+    let folder = dialog.blocking_pick_folder();
     Ok(folder
         .and_then(|path| path.into_path().ok())
         .map(|path| path.display().to_string()))
