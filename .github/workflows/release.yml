@@ -40,26 +40,55 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "Tessera ${{ github.ref_name }}"
           releaseBody: |
-            One search bar for everything your PC can't search — images,
-            screenshots, PDFs, and documents — offline, free, and open source.
+            One search bar for everything your PC can't search: images,
+            screenshots, PDFs and documents. Offline, free and open source.
 
-            Install with `Tessera_x64-setup.exe`. The first launch downloads the
-            models once (checksum-pinned, no account); after that the app never
-            touches the network at query time.
+            **Install:** download `Tessera_x64-setup.exe` below and run it. It
+            installs for the current user, so Windows does not ask for an
+            administrator. The installer is not code-signed yet, so SmartScreen
+            may ask you to confirm: choose **More info**, then **Run anyway**.
+
+            **First launch:** Tessera downloads its on-device models once, about
+            1.6 GB, and verifies every file against a checksum pinned in the
+            binary. This is the only network access the app makes. After that
+            it stays offline, including at search time.
+
+            **Then:** choose a folder, let Tessera read it, and press
+            **Ctrl+Alt+T** from anywhere to search.
+
+            Requires Windows 10 or 11 on x64. WebView2 ships with Windows 11 and
+            current Windows 10; if it is missing, Tessera offers the Microsoft
+            download. The same checksum is in `SHA256SUMS.txt` and
+            `Tessera_x64-setup.exe.sha256`.
+
+            Full details, the measured numbers and the privacy page:
+            https://tesseraweb.vercel.app
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: false
 
-      - name: Checksums
+      # The asset names carry the version, which is wrong for a website link
+      # that has to keep working after 0.2.0. A copy with a fixed name is
+      # uploaded next to them, so /releases/latest/download/Tessera_x64-setup.exe
+      # always answers with the newest build.
+      - name: Checksums and stable asset names
         shell: pwsh
         run: |
-          $dir = "crates/app/target/release/bundle/nsis"
-          Get-ChildItem $dir -Filter *.exe | ForEach-Object {
-            (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + "  " + $_.Name
-          } | Out-File "$dir/SHA256SUMS.txt"
+          $dir = @("target/release/bundle/nsis", "crates/app/target/release/bundle/nsis") |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $dir) { throw "the NSIS bundle directory was not found" }
+          $exe = Get-ChildItem $dir -Filter "Tessera_*-setup.exe" | Select-Object -First 1
+          if (-not $exe) { throw "no setup executable in $dir" }
+          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($exe.Name)" | Out-File "$dir/SHA256SUMS.txt" -Encoding ascii
+          Copy-Item $exe.FullName (Join-Path $dir "Tessera_x64-setup.exe")
+          "$hash  Tessera_x64-setup.exe" |
+            Out-File "$dir/Tessera_x64-setup.exe.sha256" -Encoding ascii
+
           $tag = "${{ github.ref_name }}"
-          $rel = (Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag" -Headers @{ Authorization = "Bearer ${{ secrets.GITHUB_TOKEN }}" })
-          $asset = $rel.assets | Where-Object { $_.name -like "*-setup.exe" } | Select-Object -First 1
-          $upload = "https://uploads.github.com/repos/${{ github.repository }}/releases/$($rel.id)/assets?name=SHA256SUMS.txt"
-          $headers = @{ Authorization = "Bearer ${{ secrets.GITHUB_TOKEN }}"; "Content-Type" = "text/plain" }
-          Invoke-RestMethod -Uri $upload -Method Post -Headers $headers -InFile "$dir/SHA256SUMS.txt"
+          $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag" -Headers @{ Authorization = "Bearer ${{ secrets.GITHUB_TOKEN }}" }
+          $headers = @{ Authorization = "Bearer ${{ secrets.GITHUB_TOKEN }}"; "Content-Type": "application/octet-stream" }
+          foreach ($name in @("Tessera_x64-setup.exe", "Tessera_x64-setup.exe.sha256", "SHA256SUMS.txt")) {
+            $upload = "https://uploads.github.com/repos/${{ github.repository }}/releases/$($rel.id)/assets?name=$name"
+            Invoke-RestMethod -Uri $upload -Method Post -Headers $headers -InFile (Join-Path $dir $name)
+          }

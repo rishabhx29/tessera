@@ -8,13 +8,21 @@ releases begin.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-23
+
 ### Added
 
+- First launch sets itself up. When a model set is missing, the window says so,
+  downloads and verifies it against the pins in the binary, and only then asks
+  for a folder. Nobody has to find the settings page to make search work, and
+  there is still exactly one network access in the product.
 - The release pipeline: a `v*` tag builds the Windows NSIS installer on
   GitHub's MSVC runner (the GNU toolchain constraint is a dev-machine quirk,
   not a product one), attaches it to a GitHub release, and uploads
-  `SHA256SUMS.txt`. The installer is 10.3 MB and carries no model weights —
-  the first-run model download is checksum-pinned in the binary.
+  `SHA256SUMS.txt` plus a version-stable `Tessera_x64-setup.exe` copy so the
+  website's download link survives later tags. The installer is about 15 MB
+  and carries no model weights — the first-run model download is
+  checksum-pinned in the binary.
 - `scoop/tessera.json`: a scoop manifest wired to GitHub Releases with
   `checkver`/`autoupdate`, its hash taken from the release's SHA256SUMS.txt.
 - The workspace and app bundle carry version **0.1.0** — the first shippable
