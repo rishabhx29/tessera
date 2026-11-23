@@ -39,6 +39,10 @@
   margin-top: 10px;
 }
 
+.field-row input:disabled {
+  opacity: 0.55;
+}
+
 .notes {
   display: flex;
   flex-direction: column;

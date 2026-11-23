@@ -78,6 +78,56 @@ startHomePolling();
 // paint, so the first frame is Tessera, not an empty rectangle.
 call("boot").catch(() => {});
 
+// ---- models ---------------------------------------------------------------
+
+// The installer carries the runtime, not the models: about 1.6 GB is too much
+// for a setup file. Fetch and verify them here, on the first launch, so nobody
+// has to find the settings page before the app works. This is the only network
+// access the app ever makes, and it happens exactly once.
+async function ensureModels() {
+  let status;
+  try {
+    status = await call("status");
+  } catch {
+    return;
+  }
+
+  const pending = (status.models ?? []).filter((set) => !set.complete);
+  if (!pending.length) return;
+
+  const note = $("first-run-note");
+  const addButton = $("first-run-add");
+  const field = $("query");
+  const say = (text) => {
+    note.textContent = text;
+    note.hidden = !text;
+    // The first-run panel is only on screen when no folder exists yet. Anyone
+    // else sees the same message under the search field.
+    if ($("first-run").hidden && text) renderNotes($("notes"), [{ text }]);
+  };
+
+  say(
+    "setting up. downloading the on-device models, about 1.6 GB once. it is the only network access tessera makes.",
+  );
+  addButton.disabled = true;
+  field.disabled = true;
+
+  try {
+    await call("install_models", { sets: pending.map((set) => set.name) });
+    say("models installed. tessera stays offline from here.");
+    toast("The on-device models are ready. Tessera is offline from here.");
+  } catch (error) {
+    say(`setup did not finish: ${error}. settings can retry the download.`);
+  } finally {
+    addButton.disabled = false;
+    field.disabled = false;
+    field.focus();
+    refreshLibrary(true).catch(() => {});
+  }
+}
+
+ensureModels();
+
 // ---- header ---------------------------------------------------------------
 
 function buildLenses() {

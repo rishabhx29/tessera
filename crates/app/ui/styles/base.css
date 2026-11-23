@@ -243,6 +243,12 @@ dd {
   padding: 0 18px;
 }
 
+.first-run .first-run-note {
+  max-width: 38ch;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
 .toast {
   position: fixed;
   bottom: 22px;
