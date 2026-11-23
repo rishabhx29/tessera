@@ -6,6 +6,8 @@ A *tessera* is one tile in a mosaic: every screenshot, image, page, and document
 
 > **Status: pre-alpha.** The product definition and repository scaffold land first; the first release has not shipped. No performance claims are made anywhere in this repo until they are measured on real hardware — see [`docs/performance.md`](docs/performance.md).
 
+**Website:** [tesseraweb.vercel.app](https://tesseraweb.vercel.app) — the hero story, the demo, the measured numbers and the install steps in one page.
+
 ## The problem
 
 Windows treats images as pictures and a thousands-of-files folder as a maze:
