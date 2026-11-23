@@ -12,9 +12,10 @@ hairlines, spacing and type, not from a stack of cards.
 - Accent: terracotta `#C2410C` for action and emphasis only.
 - One dark band: the install section, where the page stops describing and
   starts asking for a command.
-- Honesty: the hero still is the real app window. The demo is a fixed sample
-  and says so. The illustration panels are labelled by their content, not
-  passed off as footage.
+- Honesty: the hero story is a coded simulation, labelled as such on the
+  stage and in its accessible name; the photos in it are cropped from the real
+  app. The demo is a fixed sample and says so. The illustration panels are
+  labelled by their content, not passed off as footage.
 
 ## 2. References studied
 
@@ -111,20 +112,36 @@ the hero and 65ch elsewhere.
 - The hero intro is CSS: two clipped lines rise, the lede and buttons fade up,
   the app window settles, all from the first paint. It never waits for
   hydration, and `backwards` fill means no animation style is left behind.
+- The hero story is one coded loop, not a video: a friend's question types
+  itself, the reply lands, Ctrl + Alt + T summons a Tessera window over the
+  chat, the query types, results arrive, the grid selects itself and the
+  album drops back into the chat. A single phase clock drives all of it.
+  When the question lands, a floating card states the punchline: don't scroll
+  12,400 photos, launch Tessera and describe the picture. Playback pauses on
+  hover (mouse only), when the stage leaves the viewport, when the tab is
+  hidden, and from the visible Pause button. Each step is a CSS transition or
+  a small bubble-in, never a scrubbed timeline.
 - The hero tile field is one Three.js shader on one plane, lazily imported
   after idle on desktop only. It clamps device pixel ratio, stops drawing when
   it leaves the viewport and renders one still frame when reduced motion is set.
   Below 1024 px, or on a coarse pointer, three.js is never fetched.
 - Under `prefers-reduced-motion: reduce`, Lenis and GSAP never start, the tile
-  field draws a still, and CSS transitions and animations collapse to their end
+  field draws a still, the hero story renders its final frame statically with
+  no pause control, and CSS transitions and animations collapse to their end
   state. The page scrolls natively.
 - Interface transitions stay at 140 to 200 ms. Buttons scale to `0.98` on press.
-  There are no marquees, parallax text layers or autoplaying video.
+  There are no marquees or parallax text layers. The only autoplaying motion
+  is the hero story, which stops on hover, offscreen, a hidden tab or the
+  Pause button, and never autoplays video.
 
 ## 7. Proof and numbers
 
-- The hero still is a screenshot of the real app, captioned as such. The same
-  image appears in the product story.
+- The hero story is a replica of the app window. The chat, the shortcut and
+  the send are simulated; neutral chat copy ("Maya", the camera roll line)
+  keeps the scenario generic. Its photos are crops of a real app screenshot,
+  captioned "Photos cropped from the real app", and the result counter keeps
+  the measured "60 shown · 52 ms". The stage sits in a rounded frame over an
+  original painted Bali scene, credited "Painted backdrop" beside the stage.
 - The demo is ten fixed files, five of them sample photos, filtered in the
   page by typed words. It is labelled as a fixed sample with no engine and no
   simulated timings.
@@ -144,9 +161,10 @@ Numbers come from `docs/performance.md` and carry their machine and sample:
 1. **`Nav`**: hairline header, section links, release pill, GitHub link, a
    scroll progress rule, and a mobile menu with `aria-expanded` and Escape to
    close.
-2. **`Hero`**: status pill, serif headline with an italic accent line, plain
-   lede, two actions, a shortcut hint, and the real app still. The tile field
-   sits behind it.
+2. **`Hero`**: serif headline with an italic accent line, plain lede, two
+   actions, a shortcut hint, and `HeroStage`, the chat-to-send story in a
+   rounded frame over a painted backdrop, with its pause control. The tile
+   field sits behind it.
 3. **`Problem`**: two contrasting file cards, three named failure modes, and a
    comparison table that becomes stacked rows below `md`.
 4. **`ProductStory`**: five stages from watch to answer, a sticky stage rail on
@@ -175,6 +193,9 @@ Numbers come from `docs/performance.md` and carry their machine and sample:
   `aria-pressed`. Thumbnails are decorative because the file name is adjacent.
 - Tables carry captions, and their mobile replacements keep the reading order.
 - Images either have a real description or `alt=""` plus adjacent text.
+- The hero story is decorative to assistive tech (`aria-hidden`, no focusable
+  inner controls) and carries one figure label describing the whole sequence.
+  It has a Pause control, and reduced motion shows the final frame without one.
 - Every text pair used for body copy meets 4.5:1. Metadata that does not carry
   essential copy stays at `ink.muted` or above.
 
@@ -185,6 +206,7 @@ Numbers come from `docs/performance.md` and carry their machine and sample:
 | Use paper, ink, hairlines and one terracotta accent. | Use neon gradients, glassmorphism or a decorative dark section. |
 | Keep the night band for install only. | Flip the whole page dark for style. |
 | Label the sample demo and the illustrations as such. | Present a sample or a mockup as app footage. |
+| Credit the painted backdrop and the real-app photo crops beside the stage. | Stage a mockup without saying it is one, or use real people's photos. |
 | Quote `docs/performance.md` with machine, sample and caveat. | Round up, project, or turn a target into a result. |
 | Say the first release is being prepared. | Claim a shipped v0.1 or a downloadable build. |
 | Keep primary controls at least 44 px high. | Hide focus rings or animate keyboard actions. |

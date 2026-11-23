@@ -1,110 +1,182 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { FileText, Image as ImageIcon, Search, X } from 'lucide-react';
+import { FileText, Search, X } from 'lucide-react';
 import { Section, SectionHead } from './ui';
 
-type RowType = 'image' | 'pdf' | 'docx' | 'txt';
+type Lens = 'pictures' | 'words' | 'documents';
+type DocType = 'pdf' | 'docx' | 'txt';
 
-interface Row {
+interface Picture {
+  kind: 'picture';
   file: string;
-  type: RowType;
-  thumb?: string;
-  detail: string;
-  snippet: string;
-  arms: readonly string[];
+  src: string;
+  width: number;
+  height: number;
+  text?: string;
+  reasons: string;
   keywords: string;
 }
 
-const ROWS: readonly Row[] = [
+interface Doc {
+  kind: 'document';
+  file: string;
+  type: DocType;
+  page: string;
+  folder: string;
+  snippet: string;
+  reasons: string;
+  keywords: string;
+}
+
+type Item = Picture | Doc;
+
+const PICTURES: readonly Picture[] = [
   {
+    kind: 'picture',
     file: '12-the-brown-dog-waiting-at-the-gate.jpg',
-    type: 'image',
-    thumb: '/media/corpus/dog.jpg',
-    detail: 'Pictures / Photos · 412 KB',
-    snippet: 'the brown dog waiting at the gate',
-    arms: ['image', 'keyword'],
+    src: '/media/corpus/dog.jpg',
+    width: 480,
+    height: 480,
+    reasons: 'looks like this',
     keywords: 'dog grass garden pet animal',
   },
   {
+    kind: 'picture',
     file: '15-a-white-van-parked-outside-a-bakery.jpg',
-    type: 'image',
-    thumb: '/media/corpus/van.jpg',
-    detail: 'Pictures / Photos · 388 KB',
-    snippet: 'a white van parked outside a bakery',
-    arms: ['image', 'keyword'],
+    src: '/media/corpus/van.jpg',
+    width: 480,
+    height: 480,
+    reasons: 'looks like this',
     keywords: 'van vehicle white street',
   },
   {
+    kind: 'picture',
     file: '07-an-orange-cat-asleep-on-a-radiator.jpg',
-    type: 'image',
-    thumb: '/media/corpus/cat.jpg',
-    detail: 'Pictures / Photos · 356 KB',
-    snippet: 'an orange cat asleep on a radiator',
-    arms: ['image', 'keyword'],
+    src: '/media/corpus/cat.jpg',
+    width: 480,
+    height: 480,
+    reasons: 'looks like this',
     keywords: 'cat orange pet radiator',
   },
   {
+    kind: 'picture',
     file: '01-a-red-bicycle-leaning-on-a-brick-wall.jpg',
-    type: 'image',
-    thumb: '/media/corpus/bicycle.jpg',
-    detail: 'Pictures / Photos · 430 KB',
-    snippet: 'a red bicycle leaning on a brick wall',
-    arms: ['image', 'keyword'],
+    src: '/media/corpus/bicycle.jpg',
+    width: 480,
+    height: 480,
+    reasons: 'looks like this',
     keywords: 'bicycle red bike wall',
   },
   {
+    kind: 'picture',
     file: '05-a-silver-train-crossing-a-stone-bridge.jpg',
-    type: 'image',
-    thumb: '/media/corpus/train.jpg',
-    detail: 'Pictures / Photos · 447 KB',
-    snippet: 'a silver train crossing a stone bridge',
-    arms: ['image', 'keyword'],
+    src: '/media/corpus/train.jpg',
+    width: 480,
+    height: 480,
+    reasons: 'looks like this',
     keywords: 'train silver bridge railway',
   },
   {
+    kind: 'picture',
+    file: '1904-dog-licence-stamp-13320792.jpg',
+    src: '/media/corpus/licence.jpg',
+    width: 800,
+    height: 672,
+    text: 'LICENSE TWO SHILLINGS',
+    reasons: 'mentions this',
+    keywords: 'licence license two shillings stamp dog tax 1904',
+  },
+  {
+    kind: 'picture',
+    file: 'brown-dog-11-march-1910-2-43312784.jpg',
+    src: '/media/corpus/brown-dog.jpg',
+    width: 800,
+    height: 546,
+    text: 'EXIT THE “BROWN DOG.”',
+    reasons: 'mentions this',
+    keywords: 'brown dog exit banner memorial london',
+  },
+  {
+    kind: 'picture',
+    file: '2024-11-16-ho-chi-minh-city-at-night-4-156974857.jpg',
+    src: '/media/corpus/chill.jpg',
+    width: 800,
+    height: 534,
+    text: 'CHILL • WHERE',
+    reasons: 'mentions this',
+    keywords: 'neon chill saigon night city sign',
+  },
+  {
+    kind: 'picture',
+    file: 'banks-street-mid-city-new-orleans-7-march-2020-k-101163602.jpg',
+    src: '/media/corpus/banks-street.jpg',
+    width: 800,
+    height: 600,
+    text: '504-482-5771',
+    reasons: 'mentions this',
+    keywords: 'banks street new orleans live music zitos phone',
+  },
+];
+
+const DOCUMENTS: readonly Doc[] = [
+  {
+    kind: 'document',
     file: 'Travel_Expense_Policy_2026.pdf',
     type: 'pdf',
-    detail: 'Documents / Policy · page 3 of 18',
+    page: 'page 3 of 18',
+    folder: 'Policy',
     snippet: 'Attach the original airline invoice and boarding receipts within 14 days.',
-    arms: ['meaning', 'keyword'],
+    reasons: 'mentions this',
     keywords: 'invoice airline travel policy expenses receipts',
   },
   {
+    kind: 'document',
     file: 'October_Expense_Claim_Final.docx',
     type: 'docx',
-    detail: 'Documents / Claims · paragraph 4',
+    page: 'paragraph 4',
+    folder: 'Claims',
     snippet: 'Airline invoice attached as a digital voucher. Flights to the summit.',
-    arms: ['keyword'],
+    reasons: 'name matches',
     keywords: 'invoice airline claim expenses flight',
   },
   {
+    kind: 'document',
     file: 'Board_Meeting_Deck_Q3.pdf',
     type: 'pdf',
-    detail: 'Documents / Board · page 12 of 32',
+    page: 'page 12 of 32',
+    folder: 'Board',
     snippet: 'Consolidated quarterly revenue with red deficit callouts on operating cash flow.',
-    arms: ['meaning', 'image'],
+    reasons: 'mentions this',
     keywords: 'q3 quarterly revenue red chart board deck deficit',
   },
   {
+    kind: 'document',
     file: 'Q3_Financial_Analysis_Memo.docx',
     type: 'docx',
-    detail: 'Documents / Finance · paragraph 2',
+    page: 'paragraph 2',
+    folder: 'Finance',
     snippet: 'Q3 budget update: the red waterfall chart shows unexpected hardware amortisation.',
-    arms: ['keyword', 'meaning'],
+    reasons: 'mentions this',
     keywords: 'q3 budget red waterfall chart finance',
   },
   {
+    kind: 'document',
     file: 'lease-agreement.txt',
     type: 'txt',
-    detail: 'Text · 2 KB',
+    page: '2 KB',
+    folder: 'Home',
     snippet: 'Rent is due on the first of each month. The deposit is held in escrow.',
-    arms: ['keyword'],
+    reasons: 'name matches',
     keywords: 'lease rent deposit apartment',
   },
 ];
 
+const ITEMS: readonly Item[] = [...PICTURES, ...DOCUMENTS];
+
+const LENSES: readonly Lens[] = ['pictures', 'words', 'documents'];
+
 const QUERIES = [
   'a dog on grass',
-  'the white van',
+  'two shillings',
   'invoice from the airline',
   'Q3 budget',
 ] as const;
@@ -117,8 +189,7 @@ const tokensFor = (query: string): string[] =>
     .split(/[^a-z0-9]+/)
     .filter((token) => token.length > 1 && !STOPWORDS.has(token));
 
-const typeLabel: Record<RowType, string> = {
-  image: 'Photo',
+const typeLabel: Record<DocType, string> = {
   pdf: 'PDF',
   docx: 'Word',
   txt: 'Text',
@@ -143,24 +214,41 @@ const Highlighted: React.FC<{ text: string; tokens: string[] }> = ({ text, token
   );
 };
 
+const Reason: React.FC<{ text: string }> = ({ text }) => (
+  <span className="flex min-w-0 items-center gap-1.5 font-mono text-[9.5px] leading-snug text-accent-deep">
+    <span className="h-1 w-1 shrink-0 bg-accent" aria-hidden="true" />
+    <span className="truncate">{text}</span>
+  </span>
+);
+
+const inLens = (item: Item, lens: Lens): boolean => {
+  if (lens === 'pictures') return item.kind === 'picture';
+  if (lens === 'words') return item.kind === 'picture' && Boolean(item.text);
+  return item.kind === 'document';
+};
+
+const haystackFor = (item: Item): string =>
+  `${item.file} ${item.kind === 'picture' ? item.text ?? '' : item.snippet} ${item.keywords}`.toLowerCase();
+
 export const Demo: React.FC = () => {
   const [query, setQuery] = useState<string>('');
+  const [lens, setLens] = useState<Lens>('pictures');
   const [hasMore, setHasMore] = useState(false);
-  const listRef = useRef<HTMLUListElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const tokens = useMemo(() => tokensFor(query), [query]);
-  const rows = useMemo(
+  const results = useMemo(
     () =>
-      tokens.length === 0
-        ? ROWS
-        : ROWS.filter((row) => {
-            const haystack = `${row.file} ${row.snippet} ${row.keywords}`.toLowerCase();
-            return tokens.every((token) => haystack.includes(token));
-          }),
-    [tokens],
+      ITEMS.filter(
+        (item) => inLens(item, lens) && tokens.every((token) => haystackFor(item).includes(token)),
+      ),
+    [lens, tokens],
   );
+  const pictures = results.filter((item): item is Picture => item.kind === 'picture');
+  const documents = results.filter((item): item is Doc => item.kind === 'document');
+  const showingReasons = tokens.length > 0;
 
-  // The list is capped in height, so say so with a fade instead of ending on a
+  // The sheet is capped in height, so say so with a fade instead of ending on a
   // half row. It only shows when there is actually more below.
   useEffect(() => {
     const el = listRef.current;
@@ -176,7 +264,7 @@ export const Demo: React.FC = () => {
       el.removeEventListener('scroll', update);
       observer.disconnect();
     };
-  }, [rows.length]);
+  }, [results.length, lens]);
 
   return (
     <Section id="demo" labelledBy="demo-title">
@@ -191,7 +279,7 @@ export const Demo: React.FC = () => {
               you actually remember.
             </>
           }
-          lede="A colour. An object. A line from the middle of a page. Tessera searches the text it read and the picture it saw, then merges the two ranked lists into one."
+          lede="One box, three lenses. Type a few words, switch lens, and the sample answers instantly, with a reason on every result."
           aside={
             <p className="font-mono text-[11px] uppercase tracking-[0.1em] text-ink-muted">
               A fixed sample, filtered in your browser
@@ -200,7 +288,7 @@ export const Demo: React.FC = () => {
         />
       </div>
 
-      <div className="mt-14 grid gap-10 md:mt-20 lg:grid-cols-[minmax(0,0.72fr)_minmax(0,1.28fr)] lg:gap-14">
+      <div className="mt-14 grid gap-10 md:mt-20 lg:grid-cols-[minmax(0,0.58fr)_minmax(0,1.42fr)] lg:gap-16">
         <div className="space-y-8" data-reveal>
           <p className="font-display text-[1.6rem] leading-[1.25] text-ink sm:text-[1.85rem]">
             The search bar is the whole product. Everything else is there to make
@@ -209,45 +297,47 @@ export const Demo: React.FC = () => {
 
           <ul className="space-y-4">
             {[
-              ['Search by what you saw', 'Describe the picture, or type the words that were inside it. Both arms run.'],
-              ['Summon it anywhere', 'The app binds Ctrl+Alt+T globally, so the box arrives over whatever you are doing.'],
-              ['Keyboard before mouse', 'Arrows move, Enter opens, Escape leaves. Every row says which arm found it.'],
+              ['Summon it anywhere', 'Ctrl+Alt+T brings the box over whatever is on screen.'],
+              ['Keyboard before mouse', 'Arrows move, Enter opens, Escape leaves. Every hit says why it is there.'],
             ].map(([title, body]) => (
               <li key={title} className="border-t border-line pt-4">
-                <p className="text-[15px] font-medium text-ink">{title}</p>
-                <p className="mt-1.5 text-[14px] leading-relaxed text-ink-soft">{body}</p>
+                <p className="text-[14.5px] font-medium text-ink">{title}</p>
+                <p className="mt-1 text-[13.5px] leading-relaxed text-ink-soft">{body}</p>
               </li>
             ))}
           </ul>
 
-          <div className="rounded-lg border border-line bg-paper-card p-5 text-[12px]">
-            <p className="kicker">This demo, next to the app</p>
-            <dl className="mt-4 space-y-2.5">
-              {[
-                ['Corpus', 'Ten sample files', 'Your own folders'],
-                ['Runs', 'In this page', 'Local engine, no network'],
-                ['Speed', 'Not measured', '65 ms p50 at 5,000 files'],
-                ['Opens files', 'No', 'Yes, or reveals in folder'],
-              ].map(([label, demo, app]) => (
-                <div key={label} className="grid grid-cols-[4.5rem_minmax(0,1fr)_minmax(0,1fr)] gap-2">
-                  <dt className="font-mono text-[10px] uppercase tracking-[0.06em] text-ink-muted">
-                    {label}
-                  </dt>
-                  <dd className="text-ink-muted">{demo}</dd>
-                  <dd className="text-ink">{app}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
+          <p className="text-[12px] leading-relaxed text-ink-muted">
+            Fourteen fixed sample files, filtered in your browser. The real app
+            runs the same lenses on your own folders.
+          </p>
         </div>
 
         <div className="flex flex-col overflow-hidden rounded-xl border border-line-strong bg-paper-card shadow-lift">
-          <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
             <span className="inline-flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-ink-muted">
               <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden="true" />
               Sample search
             </span>
-            <span className="font-mono text-[10px] text-ink-muted">10 files</span>
+            <div
+              role="group"
+              aria-label="Search scope"
+              className="inline-flex items-center gap-0.5 rounded-full border border-line bg-paper p-0.5"
+            >
+              {LENSES.map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setLens(value)}
+                  aria-pressed={lens === value}
+                  className={`flex h-6 items-center rounded-full px-2.5 text-[11px] transition-colors duration-150 ${
+                    lens === value ? 'bg-ink text-paper-card' : 'text-ink-soft hover:text-ink'
+                  }`}
+                >
+                  {value}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="border-b border-line bg-paper px-4 py-4">
@@ -301,98 +391,145 @@ export const Demo: React.FC = () => {
           </div>
 
           <div className="flex items-center justify-between border-b border-line px-4 py-2 font-mono text-[10px] text-ink-muted">
-            <span aria-live="polite">
-              {rows.length} {rows.length === 1 ? 'result' : 'results'}
-            </span>
-            <span>ranked by weighted RRF</span>
+            <span aria-live="polite">{results.length} shown</span>
+            <span>scoped to {lens}</span>
           </div>
 
           <div className="relative flex min-h-0 flex-1 flex-col">
-          <ul
-            ref={listRef}
-            className="max-h-[30rem] flex-1 overflow-y-auto"
-            data-lenis-prevent
-          >
-            {rows.map((row) => (
-              <li key={row.file} className="border-b border-line px-4 py-4 last:border-b-0">
-                <div className="grid grid-cols-[3.5rem_minmax(0,1fr)] gap-3.5 sm:grid-cols-[4rem_minmax(0,1fr)]">
-                  {row.thumb ? (
-                    <img
-                      src={row.thumb}
-                      alt=""
-                      width={64}
-                      height={64}
-                      loading="lazy"
-                      className="h-14 w-14 rounded border border-line object-cover sm:h-16 sm:w-16"
-                    />
-                  ) : (
-                    <span className="flex h-14 w-14 items-center justify-center rounded border border-line bg-paper text-ink-muted sm:h-16 sm:w-16">
-                      <FileText className="h-5 w-5" aria-hidden="true" />
-                    </span>
-                  )}
-
-                  <div className="min-w-0">
-                    <div className="flex items-start justify-between gap-3">
-                      <p className="min-w-0 truncate font-mono text-[11.5px] text-ink">{row.file}</p>
-                      <span className="hidden shrink-0 gap-1 sm:flex">
-                        {row.arms.map((arm) => (
-                          <span
-                            key={arm}
-                            className="rounded-sm border border-line bg-paper px-1.5 py-0.5 font-mono text-[9px] text-ink-muted"
-                          >
-                            {arm}
-                          </span>
-                        ))}
-                      </span>
-                    </div>
-                    <p className="mt-1 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.06em] text-ink-muted">
-                      {row.type === 'image' ? (
-                        <ImageIcon className="h-3 w-3" aria-hidden="true" />
-                      ) : (
-                        <FileText className="h-3 w-3" aria-hidden="true" />
-                      )}
-                      {typeLabel[row.type]} · {row.detail}
-                    </p>
-                    <p className="mt-1.5 text-[13.5px] leading-relaxed text-ink-soft">
-                      <Highlighted text={row.snippet} tokens={tokens} />
-                    </p>
-                    <p className="mt-1 flex gap-1 sm:hidden">
-                      {row.arms.map((arm) => (
-                        <span
-                          key={arm}
-                          className="rounded-sm border border-line px-1.5 py-0.5 font-mono text-[9px] text-ink-muted"
-                        >
-                          {arm}
-                        </span>
-                      ))}
-                    </p>
+            <div
+              ref={listRef}
+              className="max-h-[30rem] flex-1 overflow-y-auto"
+              data-lenis-prevent
+            >
+              {results.length === 0 && (
+                <div className="px-5 py-12 text-center">
+                  <p className="font-display text-[1.5rem] text-ink">
+                    Nothing in this sample{query ? ` matches “${query}”` : ''}.
+                  </p>
+                  <p className="mx-auto mt-2 max-w-[36ch] text-[13px] leading-relaxed text-ink-muted">
+                    The real app answers from your folders, and names the cause
+                    when nothing matches instead of inventing a result.
+                  </p>
+                  <div className="mt-5 flex flex-wrap items-center justify-center gap-1.5">
+                    {LENSES.filter((value) => value !== lens).map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setLens(value)}
+                        className="flex min-h-8 items-center rounded-sm border border-line px-2.5 text-[11px] text-ink-soft transition-colors duration-150 hover:border-line-strong hover:text-ink"
+                      >
+                        try {value}
+                      </button>
+                    ))}
                   </div>
                 </div>
-              </li>
-            ))}
+              )}
 
-            {rows.length === 0 && (
-              <li className="px-5 py-12 text-center">
-                <p className="font-display text-[1.5rem] text-ink">Nothing in this sample.</p>
-                <p className="mx-auto mt-2 max-w-[34ch] text-[13px] leading-relaxed text-ink-muted">
-                  The real app answers from your folders, and says when it has no
-                  match instead of inventing one.
-                </p>
-              </li>
-            )}
-          </ul>
-          <div
-            aria-hidden="true"
-            className={`pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-paper-card to-transparent transition-opacity duration-200 ${
-              hasMore ? 'opacity-100' : 'opacity-0'
-            }`}
-          />
+              {pictures.length > 0 && lens !== 'words' && (
+                <ul className="flex flex-wrap gap-1.5 px-4 pb-4 pt-4">
+                  {pictures.map((picture) => (
+                    <li key={picture.file} className="min-w-0 max-w-full">
+                      <div
+                        className="h-[96px] overflow-hidden rounded-[5px] border border-line bg-paper sm:h-[118px]"
+                        style={{ aspectRatio: `${picture.width} / ${picture.height}` }}
+                      >
+                        <img
+                          src={picture.src}
+                          alt={picture.file}
+                          width={picture.width}
+                          height={picture.height}
+                          loading="lazy"
+                          className="h-full w-full object-cover"
+                        />
+                      </div>
+                      {showingReasons && (
+                        <div className="mt-1.5 max-w-full">
+                          <Reason text={picture.reasons} />
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {pictures.length > 0 && lens === 'words' && (
+                <ul className="grid gap-4 px-4 pb-4 pt-4 sm:grid-cols-2">
+                  {pictures.map((picture) => (
+                    <li key={picture.file}>
+                      <div className="aspect-[3/2] overflow-hidden rounded-[6px] border border-line bg-paper">
+                        <img
+                          src={picture.src}
+                          alt={picture.file}
+                          width={picture.width}
+                          height={picture.height}
+                          loading="lazy"
+                          className="h-full w-full object-cover"
+                        />
+                      </div>
+                      <div className="mt-2">
+                        <p className="truncate text-[12.5px] font-medium text-ink">{picture.file}</p>
+                        <p className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.06em] text-ink-muted">
+                          words in the picture
+                        </p>
+                        <p className="mt-1 font-mono text-[10.5px] leading-snug text-ink-soft">
+                          <Highlighted text={picture.text ?? ''} tokens={tokens} />
+                        </p>
+                        {showingReasons && (
+                          <div className="mt-1.5">
+                            <Reason text={picture.reasons} />
+                          </div>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {documents.length > 0 && (
+                <ul className={pictures.length > 0 || lens === 'documents' ? 'border-t border-line' : ''}>
+                  {documents.map((doc) => (
+                    <li key={doc.file} className="border-b border-line px-4 py-3.5 last:border-b-0">
+                      <div className="grid grid-cols-[20px_minmax(0,1fr)] gap-3">
+                        <FileText className="mt-0.5 h-5 w-5 text-ink-muted" aria-hidden="true" />
+                        <div className="min-w-0">
+                          <div className="flex items-baseline gap-2">
+                            <p className="min-w-0 truncate text-[13px] font-medium text-ink">{doc.file}</p>
+                            <span className="shrink-0 rounded border border-line px-1 font-mono text-[9px] leading-4 text-ink-muted">
+                              {doc.page}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-[12.5px] leading-relaxed text-ink-soft">
+                            <Highlighted text={doc.snippet} tokens={tokens} />
+                          </p>
+                          <div className="mt-1.5 flex items-center gap-1.5 font-mono text-[9.5px] text-ink-muted">
+                            <span>{typeLabel[doc.type]}</span>
+                            <span aria-hidden="true">·</span>
+                            <span className="truncate">{doc.folder}</span>
+                            {showingReasons && (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <Reason text={doc.reasons} />
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div
+              aria-hidden="true"
+              className={`pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-paper-card to-transparent transition-opacity duration-200 ${
+                hasMore ? 'opacity-100' : 'opacity-0'
+              }`}
+            />
           </div>
 
           <p className="border-t border-line bg-paper px-4 py-3 text-[11px] leading-relaxed text-ink-muted">
-            Ten fixed sample files: five photos and five documents. Type to
-            filter them, or pick a query. No engine, no network, and no timings
-            are simulated here.
+            The lens scopes the sample the way it scopes the app; the query
+            filters it. No engine, no network, no simulated timings.
           </p>
         </div>
       </div>

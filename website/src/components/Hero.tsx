@@ -2,13 +2,13 @@ import React, { useEffect, useRef } from 'react';
 import { ArrowDown, ArrowUpRight } from 'lucide-react';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
+import { HeroStage } from './HeroStage';
 import { HeroTiles } from './HeroTiles';
 import { FORMAT_RAIL, RELEASES } from '../data/site';
 import { prefersReducedMotion } from '../lib/motion';
 
 export const Hero: React.FC = () => {
   const sectionRef = useRef<HTMLElement>(null);
-  const windowRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (prefersReducedMotion()) return;
@@ -49,12 +49,15 @@ export const Hero: React.FC = () => {
           >
             <span className="block overflow-hidden pb-1">
               <span className="hero-line block" style={{ animationDelay: '0.1s' }}>
-                Ctrl F for the files
+                A thousand photos.
               </span>
             </span>
             <span className="block overflow-hidden pb-2">
-              <span className="hero-line block italic text-accent" style={{ animationDelay: '0.19s' }}>
-                your PC can&rsquo;t search.
+              <span
+                className="hero-line hero-mark block italic text-accent"
+                style={{ animationDelay: '0.19s' }}
+              >
+                One search bar.
               </span>
             </span>
           </h1>
@@ -63,9 +66,9 @@ export const Hero: React.FC = () => {
             className="hero-fade mt-7 max-w-[36rem] text-[1.0625rem] leading-[1.7] text-ink-soft sm:text-[1.1875rem]"
             style={{ animationDelay: '0.57s' }}
           >
-            Tessera reads the words inside screenshots, PDFs and Word documents, then
-            finds them with one search bar. Local, offline, and fast on the machine
-            you already own.
+            Describe the picture — the Bali trip from last year, the dog in a blanket — and
+            Tessera finds it while your chat stays open. It reads the text inside screenshots,
+            PDFs and Word too. Local, offline, and fast on the machine you already own.
           </p>
 
           <div
@@ -95,36 +98,12 @@ export const Hero: React.FC = () => {
             <span className="inline-flex items-center gap-1">
               <kbd className="kbd">Ctrl</kbd>
               <kbd className="kbd">Alt</kbd>
-              <kbd className="kbd">Space</kbd>
+              <kbd className="kbd">T</kbd>
             </span>
           </p>
         </div>
 
-        <figure className="relative mx-auto max-w-[68rem]">
-          <div
-            ref={windowRef}
-            className="hero-window window-frame overflow-hidden"
-          >
-            <img
-              src="/media/app-results.webp"
-              width={768}
-              height={916}
-              alt="Tessera's search window showing 24 image results for the query a dog on grass. Each row has a picture thumbnail, the file path, and the OCR text that matched."
-              className="max-h-[70vh] w-full rounded-[7px] object-cover object-top"
-              loading="eager"
-              decoding="async"
-            />
-          </div>
-          <figcaption className="mt-5 flex flex-col gap-3 border-t border-line pt-4 text-[13px] text-ink-muted sm:flex-row sm:items-start sm:justify-between">
-            <p className="max-w-[42ch]">
-              The real app, searching a local test folder. 24 results in 48 ms,
-              with the match arm printed on every row.
-            </p>
-            <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-ink-muted">
-              Actual app window
-            </p>
-          </figcaption>
-        </figure>
+        <HeroStage />
       </div>
 
       <div className="mt-16 border-y border-line bg-paper-card/60">

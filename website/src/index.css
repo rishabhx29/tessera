@@ -261,28 +261,6 @@
   transform: translateY(0);
 }
 
-/* The OCR illustration scans a line down the page. Motion only, never state. */
-@keyframes scan-line {
-  0% {
-    transform: translateY(-8%);
-    opacity: 0;
-  }
-  12% {
-    opacity: 1;
-  }
-  88% {
-    opacity: 1;
-  }
-  100% {
-    transform: translateY(308%);
-    opacity: 0;
-  }
-}
-
-.scan-line {
-  animation: scan-line 4.8s cubic-bezier(0.65, 0, 0.35, 1) infinite;
-}
-
 /* Hero intro. Runs from the first paint, so the prerendered markup animates
    in on load instead of appearing and then being re-animated by hydration.
    `backwards` fill only holds the from-state through the delay. */
@@ -321,12 +299,58 @@
   animation: hero-line-in 1.15s var(--ease-out) backwards;
 }
 
+/* The second headline line is the product promise, so it gets a set rule
+   under it. The rule draws in only after the line has landed. */
+@keyframes hero-rule-in {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.hero-mark {
+  position: relative;
+  display: inline-block;
+  padding-bottom: 0.07em;
+}
+
+.hero-mark::after {
+  content: "";
+  position: absolute;
+  right: -0.16em;
+  bottom: 0;
+  left: -0.16em;
+  height: 2px;
+  border-radius: 1px;
+  background-color: currentColor;
+  opacity: 0.5;
+  transform-origin: left center;
+  animation: hero-rule-in 0.85s var(--ease-out) 1.08s backwards;
+}
+
 .hero-fade {
   animation: hero-fade-in 0.9s var(--ease-out) backwards;
 }
 
-.hero-window {
+.hero-stage {
   animation: hero-window-in 1.25s var(--ease-out) 0.3s backwards;
+}
+
+@keyframes bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.bubble-in {
+  animation: bubble-in 0.4s var(--ease-out) backwards;
 }
 
 @keyframes menu-in {
@@ -375,10 +399,6 @@
 
   .btn:active {
     transform: none;
-  }
-
-  .scan-line {
-    display: none;
   }
 }
 

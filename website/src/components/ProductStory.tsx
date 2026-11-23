@@ -1,33 +1,43 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { ArrowDown } from 'lucide-react';
 import { Section, SectionHead } from './ui';
-import { ILLUSTRATIONS } from './illustrations';
-import { STAGES } from '../data/site';
+
+const LENSES = [
+  {
+    id: 'pictures',
+    label: 'Pictures',
+    title: 'What it looks like',
+    body: 'Describe a photo loosely. The wall answers with the pictures that fit.',
+    src: '/media/lens-pictures.webp',
+    alt: 'The app in its pictures lens after searching for “hot air balloons in the sky”: a wall of sixty photos, balloons first, then skies, a landscape and a screenshot.',
+    query: 'hot air balloons in the sky',
+    meta: '60 shown · 52 ms',
+  },
+  {
+    id: 'words',
+    label: 'Words',
+    title: 'The text inside',
+    body: 'Search a word you saw in a screenshot. The matched line is marked.',
+    src: '/media/lens-words.webp',
+    alt: 'The app in its words lens after searching for “invoice”: the Skyline Air invoice first, with the matched line called out beneath it, then photos whose printed text mentions invoices.',
+    query: 'invoice',
+    meta: '60 shown · 30 ms',
+  },
+  {
+    id: 'documents',
+    label: 'Documents',
+    title: 'The page it’s on',
+    body: 'Ask inside PDFs and Word files. Every hit names the page it came from.',
+    src: '/media/lens-documents.webp',
+    alt: 'The app in its documents lens after searching for “sourdough”: a recipe, a menu, a report, an invoice and an itinerary, each row with the matched snippet and the page for the PDFs.',
+    query: 'sourdough',
+    meta: '5 results · 18 ms',
+  },
+] as const;
 
 export const ProductStory: React.FC = () => {
-  const [active, setActive] = useState(STAGES[0].id);
-
-  useEffect(() => {
-    const chapters = STAGES.map((stage) => document.getElementById(`stage-${stage.id}`)).filter(
-      (element): element is HTMLElement => element !== null,
-    );
-    if (!chapters.length) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries
-          .filter((entry) => entry.isIntersecting)
-          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
-        if (visible?.target.id) {
-          setActive(visible.target.id.replace('stage-', ''));
-        }
-      },
-      { rootMargin: '-38% 0px -52% 0px', threshold: 0 },
-    );
-
-    chapters.forEach((chapter) => observer.observe(chapter));
-    return () => observer.disconnect();
-  }, []);
+  const [active, setActive] = useState<(typeof LENSES)[number]['id']>(LENSES[0].id);
+  const lens = LENSES.find((item) => item.id === active) ?? LENSES[0];
 
   return (
     <Section id="product" tone="card" labelledBy="product-title">
@@ -37,123 +47,90 @@ export const ProductStory: React.FC = () => {
           size="large"
           title={
             <>
-              Five stages, one index,
+              Ask the way
               <br />
-              from disk to result.
+              you remember it.
             </>
           }
-          lede="Every file walks the same path. Watch, read, embed, fuse, answer. Nothing is uploaded, nothing is approximated, and every stage runs on the CPU of the machine in front of you."
+          lede="A description, a few words, a number off a page. The same box takes all three, and every result says why it is there."
           aside={
-            <a href="#stage-watch" className="link-arrow">
-              Walk through the pipeline
+            <a href="#demo" className="link-arrow">
+              Try the sample search
               <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
             </a>
           }
         />
       </div>
 
-      <div className="mt-16 grid gap-12 md:mt-24 lg:grid-cols-[15rem_minmax(0,1fr)] lg:gap-16">
-        <nav aria-label="Pipeline stages" className="hidden lg:block">
-          <ol className="sticky top-28 space-y-1">
-            {STAGES.map((stage) => {
-              const isActive = stage.id === active;
+      <div className="mt-14 grid items-start gap-8 md:mt-20 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:gap-14">
+        <div data-reveal>
+          <div role="group" aria-label="Choose a search lens" className="border-t border-line">
+            {LENSES.map((item, index) => {
+              const isActive = item.id === active;
               return (
-                <li key={stage.id}>
-                  <a
-                    href={`#stage-${stage.id}`}
-                    aria-current={isActive ? 'true' : undefined}
-                    className={`group flex items-baseline gap-3 rounded-sm border-l py-2.5 pl-4 transition-colors duration-200 ${
-                      isActive
-                        ? 'border-accent text-ink'
-                        : 'border-line text-ink-muted hover:border-line-strong hover:text-ink-soft'
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setActive(item.id)}
+                  aria-pressed={isActive}
+                  className="group flex w-full items-start gap-4 border-b border-line py-5 text-left"
+                >
+                  <span
+                    className={`mt-1.5 font-mono text-[10px] tabular-nums ${
+                      isActive ? 'text-accent' : 'text-ink-muted'
                     }`}
                   >
+                    {String(index + 1).padStart(2, '0')}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-baseline justify-between gap-3">
+                      <span
+                        className={`font-display text-[1.55rem] leading-none tracking-display transition-colors duration-200 sm:text-[1.8rem] ${
+                          isActive ? 'text-ink' : 'text-ink-soft group-hover:text-ink'
+                        }`}
+                      >
+                        {item.title}
+                      </span>
+                      <span
+                        aria-hidden="true"
+                        className={`h-1.5 w-1.5 shrink-0 rounded-full transition-colors duration-200 ${
+                          isActive ? 'bg-accent' : 'bg-line-strong/60'
+                        }`}
+                      />
+                    </span>
                     <span
-                      className={`font-mono text-[10px] ${
-                        isActive ? 'text-accent' : 'text-ink-muted'
+                      className={`mt-2 block text-[13.5px] leading-relaxed transition-colors duration-200 ${
+                        isActive ? 'text-ink-soft' : 'text-ink-muted'
                       }`}
                     >
-                      {stage.n}
+                      {item.body}
                     </span>
-                    <span className="text-[15px] font-medium leading-none">{stage.title}</span>
-                  </a>
-                  <p className="mb-1 pl-[3.4rem] text-[12px] leading-snug text-ink-muted">
-                    {isActive ? stage.summary : ''}
-                  </p>
-                </li>
+                  </span>
+                </button>
               );
             })}
-          </ol>
-        </nav>
-
-        <div className="min-w-0">
-          {STAGES.map((stage, index) => {
-            const Illustration = ILLUSTRATIONS[stage.id];
-            const flip = index % 2 === 1;
-            return (
-              <article
-                key={stage.id}
-                id={`stage-${stage.id}`}
-                aria-labelledby={`stage-${stage.id}-title`}
-                className="scroll-mt-28 border-t border-line pb-14 pt-9 first:border-t-0 first:pt-0 md:pb-20 md:pt-12 md:first:pt-0"
-              >
-                <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-                  <span className="font-mono text-[11px] text-accent">{stage.n}</span>
-                  <h3
-                    id={`stage-${stage.id}-title`}
-                    className="font-display text-[clamp(2.1rem,3.6vw,3.2rem)] leading-none tracking-display text-ink"
-                  >
-                    {stage.title}
-                  </h3>
-                  <span className="font-mono text-[11px] uppercase tracking-[0.1em] text-ink-muted">
-                    {stage.summary}
-                  </span>
-                </div>
-
-                <div
-                  className={`mt-7 grid gap-7 md:mt-9 md:grid-cols-2 md:items-start md:gap-10 ${
-                    flip ? 'md:[&>*:first-child]:order-2' : ''
-                  }`}
-                >
-                  <div className="min-w-0">
-                    <p className="font-display text-[1.45rem] leading-[1.25] text-ink sm:text-[1.65rem]">
-                      {stage.heading}
-                    </p>
-                    <p className="mt-4 text-[15px] leading-[1.7] text-ink-soft">{stage.body}</p>
-                    <ul className="mt-5 space-y-2.5 border-t border-line pt-5">
-                      {stage.bullets.map((bullet) => (
-                        <li
-                          key={bullet}
-                          className="grid grid-cols-[auto_minmax(0,1fr)] gap-2.5 text-[13.5px] leading-relaxed text-ink-soft"
-                        >
-                          <span
-                            aria-hidden="true"
-                            className="mt-[0.55em] h-1 w-1 rounded-full bg-accent"
-                          />
-                          {bullet}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-
-                  <div className="min-w-0">
-                    <Illustration />
-                    <dl className="mt-4 divide-y divide-line border-t border-line text-[12px]">
-                      {stage.spec.map(([term, value]) => (
-                        <div key={term} className="flex items-baseline justify-between gap-4 py-2">
-                          <dt className="font-mono text-[10px] uppercase tracking-[0.08em] text-ink-muted">
-                            {term}
-                          </dt>
-                          <dd className="text-right text-ink-soft">{value}</dd>
-                        </div>
-                      ))}
-                    </dl>
-                  </div>
-                </div>
-              </article>
-            );
-          })}
+          </div>
         </div>
+
+        <figure data-reveal className="min-w-0">
+          <div className="overflow-hidden rounded-xl border border-line-strong bg-paper shadow-lift">
+            <img
+              key={lens.id}
+              src={lens.src}
+              alt={lens.alt}
+              width={1054}
+              height={768}
+              decoding="async"
+              className="swap-in w-full"
+            />
+          </div>
+          <figcaption className="mt-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 font-mono text-[10px] uppercase tracking-[0.1em] text-ink-muted">
+            <span>
+              Actual app window · <span className="normal-case tracking-normal text-ink-soft">“{lens.query}”</span>
+            </span>
+            <span>{lens.meta}</span>
+          </figcaption>
+        </figure>
       </div>
     </Section>
   );
