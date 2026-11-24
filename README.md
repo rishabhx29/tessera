@@ -94,15 +94,14 @@ cd crates/app
 npx @tauri-apps/cli dev
 ```
 
-To build the installer, put the ONNX Runtime dlls beside the executable first, then merge the bundle config that packages them:
+To build the installer, run the Tauri build:
 
 ```sh
-cargo build --release -p tessera-core
 cd crates/app
-npx @tauri-apps/cli build --config tauri.bundle.conf.json
+npx @tauri-apps/cli build
 ```
 
-The installer lands in `target/release/bundle/nsis/`.
+The installer lands in `target/release/bundle/nsis/`. On MSVC the build links ONNX Runtime statically, so the installer needs no extra dll. A GNU build that links the dll dynamically (`ORT_LIB_LOCATION`) must copy `onnxruntime.dll` beside `Tessera.exe` before bundling.
 
 Gates that must pass before a change merges:
 

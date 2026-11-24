@@ -165,15 +165,24 @@ module already mapped into the process — and reports the version alongside the
 System32 hint, so the failure is a packaging bug someone can act on rather than
 ort's bare panic.
 
-The packaging task is done: `crates/app/tauri.bundle.conf.json` merges
-`onnxruntime.dll` into the installer, and the release workflow builds the engine
-first so ort's `copy-dylibs` has put it in `target/release` before the app's
-build script validates the path. Only the main dll is bundled: the release
-build links ort's prebuilt CPU package, which carries no shared providers
-dll, and Tessera runs no shared execution provider. The
-resources live in the merge file, not `tauri.conf.json`, because the app build
-script checks bundle resources at compile time and a plain `cargo clippy` or
-`cargo test` has no release dlls on disk.
+The two Windows build paths handle this differently, and only the second one
+packages anything.
+
+The **release build** runs on MSVC. ort-sys ships no plain MSVC prebuilt, so
+the resolver picks the pyke `directml` dist, which carries `onnxruntime.lib`
+rather than a dll, and the runtime is linked statically into `Tessera.exe`
+(ORT 1.31, API 23). The installer therefore carries no `onnxruntime.dll`, and
+the System32-copy hazard above cannot occur. That static build does import
+`DirectML.dll`, which ort-sys links for every pyke Windows dist; Windows 10
+1903+ and Windows 11 ship it in System32.
+
+The **local dev build** on this machine uses the GNU toolchain, where
+`cargo-tessera.ps1` sets `ORT_LIB_LOCATION` and `ORT_PREFER_DYNAMIC_LINK=1`
+against the official 1.23.2 package. That path imports the dll, and ort's
+`copy-dylibs` puts it in `target/release`, so a locally built installer needs
+`onnxruntime.dll` beside the executable. Only the main dll is ever needed:
+Tessera runs no shared execution provider, so the providers dll is not linked
+or bundled.
 
 ## Data model (single SQLite file, WAL mode)
 

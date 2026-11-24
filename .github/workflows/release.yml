@@ -31,32 +31,18 @@ jobs:
             crates/core
             crates/app
 
-      # The installer ships the ONNX runtime beside Tessera.exe, and the app
-      # crate validates that resource path while it compiles. The dll arrives
-      # as ort-sys's build step (`copy-dylibs`), and a warm build cache
-      # restores ort-sys already compiled, so that step does not run on a
-      # retry. Cleaning the one crate forces the download and the copy again.
-      # Same pinned package as Cargo.lock; the prebuilt CPU build carries only
-      # the main dll, and Tessera runs no shared execution provider.
-      - name: Force the ort build step to run again
-        run: cargo clean -p ort-sys
-
-      - name: Build the engine so the runtime dll is in place
-        shell: pwsh
-        run: |
-          cargo build --release -p tessera-core
-          if (-not (Test-Path target/release/onnxruntime.dll)) {
-            throw "onnxruntime.dll is not in target/release after the engine build"
-          }
-          Get-Item target/release/onnxruntime.dll | Select-Object FullName, Length
-
+      # No ONNX Runtime dll is shipped, and none has to be. ort-sys has no
+      # plain MSVC prebuilt, so on this runner it resolves the pyke directml
+      # dist, which ships `onnxruntime.lib` and links the runtime statically
+      # into Tessera.exe (the System32 1.17 dll is never consulted). The
+      # dynamic dll path in docs/architecture.md belongs to the local GNU
+      # build, which links the official 1.23.2 dll from ORT_LIB_LOCATION.
       - name: Build and bundle the NSIS installer
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: crates/app
-          args: --config tauri.bundle.conf.json
           tagName: ${{ github.ref_name }}
           releaseName: "Tessera ${{ github.ref_name }}"
           releaseBody: |
