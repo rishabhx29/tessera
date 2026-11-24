@@ -92,9 +92,16 @@ jobs:
             Out-File "$dir/Tessera_x64-setup.exe.sha256" -Encoding ascii
 
           $tag = "${{ github.ref_name }}"
-          $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag" -Headers @{ Authorization = "Bearer ${{ secrets.GITHUB_TOKEN }}" }
-          $headers = @{ Authorization = "Bearer ${{ secrets.GITHUB_TOKEN }}"; "Content-Type": "application/octet-stream" }
+          $auth = @{ Authorization = "Bearer ${{ secrets.GITHUB_TOKEN }}" }
+          $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag" -Headers $auth
+          $assets = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/$($rel.id)/assets" -Headers $auth
+          $headers = @{ Authorization = "Bearer ${{ secrets.GITHUB_TOKEN }}"; "Content-Type" = "application/octet-stream" }
           foreach ($name in @("Tessera_x64-setup.exe", "Tessera_x64-setup.exe.sha256", "SHA256SUMS.txt")) {
+            # A rerun of the job must replace these instead of failing on the
+            # duplicate name GitHub would otherwise reject with a 422.
+            foreach ($asset in @($assets | Where-Object { $_.name -eq $name })) {
+              Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/releases/assets/$($asset.id)" -Method Delete -Headers $auth
+            }
             $upload = "https://uploads.github.com/repos/${{ github.repository }}/releases/$($rel.id)/assets?name=$name"
             Invoke-RestMethod -Uri $upload -Method Post -Headers $headers -InFile (Join-Path $dir $name)
           }
