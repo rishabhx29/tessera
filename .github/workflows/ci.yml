@@ -62,7 +62,7 @@ jobs:
   # the README, and this is what keeps it true.
   macos:
     name: fmt / clippy / test (macos)
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
