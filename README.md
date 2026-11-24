@@ -7,11 +7,15 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-16140F.svg)](LICENSE)
 [![Website](https://img.shields.io/badge/website-tesseraweb.vercel.app-5E7358.svg)](https://tesseraweb.vercel.app)
 
-<img src="website/public/media/app-results.webp" alt="Tessera showing picture results for the search 'a dog in a blanket'" width="820">
-
 A *tessera* is one tile in a mosaic. Every screenshot, photo, page and document on your PC is a fragment. Tessera is the picture they add up to.
 
 Type what you remember, not the filename. Tessera finds the screenshot by the words inside it, the photo by what it shows, and the document by what it says. It runs on your machine and never uploads a file.
+
+## See it
+
+<img src="website/public/media/app-results.webp" alt="Tessera showing picture results for the search 'a dog in a blanket'" width="820">
+
+Search *a dog in a blanket* and the picture comes back, with the reason it matched.
 
 ## Install
 
@@ -113,6 +117,7 @@ cargo test --all
 
 ## Documentation
 
+- [Website](https://tesseraweb.vercel.app): download, FAQ and the privacy page
 - [Product definition](docs/product-definition.md): the locked spec
 - [Architecture](docs/architecture.md): crates, data model, per-format pipelines
 - [Performance log](docs/performance.md): every measured number, with method
