@@ -165,10 +165,12 @@ module already mapped into the process — and reports the version alongside the
 System32 hint, so the failure is a packaging bug someone can act on rather than
 ort's bare panic.
 
-The packaging task is done: `crates/app/tauri.bundle.conf.json` merges the two
-dlls (`onnxruntime.dll`, `onnxruntime_providers_shared.dll`) into the installer,
-and the release workflow builds the engine first so ort's `copy-dylibs` has put
-them in `target/release` before the app's build script validates the paths. The
+The packaging task is done: `crates/app/tauri.bundle.conf.json` merges
+`onnxruntime.dll` into the installer, and the release workflow builds the engine
+first so ort's `copy-dylibs` has put it in `target/release` before the app's
+build script validates the path. Only the main dll is bundled: the release
+build links ort's prebuilt CPU package, which carries no shared providers
+dll, and Tessera runs no shared execution provider. The
 resources live in the merge file, not `tauri.conf.json`, because the app build
 script checks bundle resources at compile time and a plain `cargo clippy` or
 `cargo test` has no release dlls on disk.
