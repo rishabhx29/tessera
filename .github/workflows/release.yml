@@ -31,12 +31,20 @@ jobs:
             crates/core
             crates/app
 
+      # The installer ships the ONNX runtime beside Tessera.exe, and the app
+      # crate validates those resource paths while it compiles. The engine is
+      # built first so ort's `copy-dylibs` has put the dlls in target/release
+      # before that check runs. Same pinned ort version as Cargo.lock.
+      - name: Build the engine so the runtime dlls are in place
+        run: cargo build --release -p tessera-core
+
       - name: Build and bundle the NSIS installer
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: crates/app
+          args: --config tauri.bundle.conf.json
           tagName: ${{ github.ref_name }}
           releaseName: "Tessera ${{ github.ref_name }}"
           releaseBody: |
