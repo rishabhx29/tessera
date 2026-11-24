@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowUpRight, Menu, X } from 'lucide-react';
-import { GithubIcon } from './Icons';
+import { Download, Menu, Star, X } from 'lucide-react';
 import { Mark } from './Mark';
-import { NAV_LINKS, RELEASES, REPO } from '../data/site';
+import { DOWNLOAD, NAV_LINKS, REPO } from '../data/site';
 
 export const Nav: React.FC = () => {
   const [open, setOpen] = useState(false);
@@ -84,19 +83,18 @@ export const Nav: React.FC = () => {
               href={REPO}
               target="_blank"
               rel="noopener noreferrer"
-              className="hidden h-11 w-11 items-center justify-center rounded-md text-ink-soft transition-colors duration-150 hover:text-ink sm:flex"
-              aria-label="Tessera on GitHub"
+              className="hidden h-11 items-center gap-1.5 rounded-md px-2.5 text-ink-soft transition-colors duration-150 hover:text-ink sm:flex"
+              aria-label="Star Tessera on GitHub"
             >
-              <GithubIcon className="h-[18px] w-[18px]" />
+              <Star className="h-[17px] w-[17px]" aria-hidden="true" />
+              <span className="hidden text-[0.9375rem] lg:inline">Star</span>
             </a>
             <a
-              href={RELEASES}
-              target="_blank"
-              rel="noopener noreferrer"
+              href={DOWNLOAD}
               className="btn btn-primary hidden !min-h-10 px-4 text-[0.875rem] sm:inline-flex"
             >
-              Releases
-              <ArrowUpRight className="h-4 w-4" aria-hidden="true" />
+              <Download className="h-4 w-4" aria-hidden="true" />
+              Download
             </a>
             <button
               ref={toggleRef}
@@ -137,13 +135,11 @@ export const Nav: React.FC = () => {
             ))}
             <div className="mt-5 flex gap-2">
               <a
-                href={RELEASES}
-                target="_blank"
-                rel="noopener noreferrer"
+                href={DOWNLOAD}
                 className="btn btn-primary flex-1"
               >
-                Releases
-                <ArrowUpRight className="h-4 w-4" aria-hidden="true" />
+                <Download className="h-4 w-4" aria-hidden="true" />
+                Download
               </a>
               <a
                 href={REPO}
@@ -151,8 +147,8 @@ export const Nav: React.FC = () => {
                 rel="noopener noreferrer"
                 className="btn btn-ghost flex-1"
               >
-                <GithubIcon className="h-4 w-4" />
-                Source
+                <Star className="h-4 w-4" aria-hidden="true" />
+                Star
               </a>
             </div>
           </nav>

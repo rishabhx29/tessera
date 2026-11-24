@@ -1,5 +1,9 @@
 export const REPO = 'https://github.com/rishabhx29/tessera';
 export const RELEASES = `${REPO}/releases`;
+export const LATEST_RELEASE = `${REPO}/releases/latest`;
+// The release workflow uploads a copy with this fixed name next to the
+// versioned installer, so this link keeps working after 0.1.0.
+export const DOWNLOAD = `${LATEST_RELEASE}/download/Tessera_x64-setup.exe`;
 export const ISSUES = `${REPO}/issues`;
 
 export const NAV_LINKS = [
@@ -12,8 +16,12 @@ export const NAV_LINKS = [
 
 export const FAQ = [
   {
-    q: 'When can I download it?',
-    a: 'There is no public release yet. The Windows installer is built and has run on a clean Windows 11 machine. Publishing it to GitHub Releases is the next step, with no date promised. macOS and Linux remain source only.',
+    q: 'How do I install it?',
+    a: 'Download the Windows installer and run it. It installs for the current user, so Windows does not ask for an administrator. On first launch it downloads its models once, about 1.6 GB, and verifies every file against a hash pinned in the binary. Then choose a folder and press Ctrl+Alt+T. Windows 10 and 11 on x64.',
+  },
+  {
+    q: 'Windows shows a warning. Is that expected?',
+    a: 'Yes. The installer is not code-signed yet, so SmartScreen asks you to confirm. Choose More info, then Run anyway. Each release ships SHA-256 checksums, and the model files are verified again on first launch.',
   },
   {
     q: 'What can it search?',

@@ -158,7 +158,7 @@ Numbers come from `docs/performance.md` and carry their machine and sample:
 
 ## 8. Components
 
-1. **`Nav`**: hairline header, section links, release pill, GitHub link, a
+1. **`Nav`**: hairline header, section links, a download pill, a star link, a
    scroll progress rule, and a mobile menu with `aria-expanded` and Escape to
    close.
 2. **`Hero`**: serif headline with an italic accent line, plain lede, two
@@ -176,9 +176,10 @@ Numbers come from `docs/performance.md` and carry their machine and sample:
    be missed.
 7. **`Privacy`**: a data table that becomes a list below `md`, plus four
    promises on hairline rules.
-8. **`Install`**: the night band. Release status, source commands with a copy
-   button, first-run steps and a platform table. It says no installer is hosted
-   on the page.
+8. **`Install`**: the night band. The download, the version, the model size,
+   first-run steps and the unsigned-installer note. Its primary button points
+   at the stable release asset, and a secondary link goes to Releases for
+   checksums.
 9. **`Faq`**: a button accordion with `aria-expanded`, `aria-controls` and a
    pinned region. One item starts open.
 10. **`Footer`**: product, project and document columns, a closing display line
@@ -208,6 +209,8 @@ Numbers come from `docs/performance.md` and carry their machine and sample:
 | Label the sample demo and the illustrations as such. | Present a sample or a mockup as app footage. |
 | Credit the painted backdrop and the real-app photo crops beside the stage. | Stage a mockup without saying it is one, or use real people's photos. |
 | Quote `docs/performance.md` with machine, sample and caveat. | Round up, project, or turn a target into a result. |
-| Say the first release is being prepared. | Claim a shipped v0.1 or a downloadable build. |
+| Point the download at the release asset that exists. | Link a download before the workflow has published the asset. |
+| Say the installer is unsigned and how SmartScreen behaves. | Hide the warning or call the build signed. |
+| Load no third-party script, font or image at runtime. | Add a star-count call or any network request the privacy page denies. |
 | Keep primary controls at least 44 px high. | Hide focus rings or animate keyboard actions. |
 | Keep hover behind a hover-capable pointer check. | Let touch taps stick in hover states. |

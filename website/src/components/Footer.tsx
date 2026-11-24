@@ -19,6 +19,7 @@ const COLUMNS = [
     title: 'Project',
     links: [
       { label: 'Source', href: REPO },
+      { label: 'Star on GitHub', href: REPO },
       { label: 'Releases', href: RELEASES },
       { label: 'Issues', href: ISSUES },
       { label: 'Changelog', href: `${REPO}/blob/main/CHANGELOG.md` },
@@ -54,8 +55,8 @@ export const Footer: React.FC = () => (
           </a>
           <p className="mt-4 text-[13px] leading-relaxed text-ink-muted">
             One search bar for screenshots, PDFs and documents. Local, offline and
-            open source. Windows first, with the first public release still being
-            prepared.
+            open source. Windows 10 and 11 to start, with the rest of the roadmap
+            in the open.
           </p>
           <a
             href={REPO}

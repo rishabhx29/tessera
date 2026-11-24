@@ -1,10 +1,10 @@
 import React, { useEffect, useRef } from 'react';
-import { ArrowDown, ArrowUpRight } from 'lucide-react';
+import { ArrowDown, Download } from 'lucide-react';
 import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { HeroStage } from './HeroStage';
 import { HeroTiles } from './HeroTiles';
-import { FORMAT_RAIL, RELEASES } from '../data/site';
+import { DOWNLOAD, FORMAT_RAIL } from '../data/site';
 import { prefersReducedMotion } from '../lib/motion';
 
 export const Hero: React.FC = () => {
@@ -75,18 +75,13 @@ export const Hero: React.FC = () => {
             className="hero-fade mt-9 flex flex-col items-center gap-3 sm:flex-row"
             style={{ animationDelay: '0.64s' }}
           >
-            <a href="#demo" className="btn btn-primary w-full sm:w-auto">
+            <a href={DOWNLOAD} className="btn btn-primary w-full sm:w-auto">
+              <Download className="h-4 w-4" aria-hidden="true" />
+              Download for Windows
+            </a>
+            <a href="#demo" className="btn btn-ghost w-full sm:w-auto">
               See it work
               <ArrowDown className="h-4 w-4" aria-hidden="true" />
-            </a>
-            <a
-              href={RELEASES}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn btn-ghost w-full sm:w-auto"
-            >
-              Releases on GitHub
-              <ArrowUpRight className="h-4 w-4" aria-hidden="true" />
             </a>
           </div>
 
