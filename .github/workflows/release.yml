@@ -32,13 +32,23 @@ jobs:
             crates/app
 
       # The installer ships the ONNX runtime beside Tessera.exe, and the app
-      # crate validates that resource path while it compiles. The engine is
-      # built first so ort's `copy-dylibs` has put the dll in target/release
-      # before that check runs. Same pinned ort version as Cargo.lock; the
-      # prebuilt CPU package carries no shared providers dll, and Tessera
-      # runs no shared execution provider.
+      # crate validates that resource path while it compiles. The dll arrives
+      # as ort-sys's build step (`copy-dylibs`), and a warm build cache
+      # restores ort-sys already compiled, so that step does not run on a
+      # retry. Cleaning the one crate forces the download and the copy again.
+      # Same pinned package as Cargo.lock; the prebuilt CPU build carries only
+      # the main dll, and Tessera runs no shared execution provider.
+      - name: Force the ort build step to run again
+        run: cargo clean -p ort-sys
+
       - name: Build the engine so the runtime dll is in place
-        run: cargo build --release -p tessera-core
+        shell: pwsh
+        run: |
+          cargo build --release -p tessera-core
+          if (-not (Test-Path target/release/onnxruntime.dll)) {
+            throw "onnxruntime.dll is not in target/release after the engine build"
+          }
+          Get-Item target/release/onnxruntime.dll | Select-Object FullName, Length
 
       - name: Build and bundle the NSIS installer
         uses: tauri-apps/tauri-action@v0
