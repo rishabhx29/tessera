@@ -1,11 +1,21 @@
+<div align="center">
+
+<img src="website/public/favicon.svg" width="72" alt="Tessera logo">
+
 # Tessera
 
-**One search bar for everything your PC can't search: images, screenshots, PDFs and documents. Offline, free and open source.**
+**One search bar for everything your PC can't search.**<br>
+Pictures, screenshots, PDFs and documents. Offline, free and open source.
 
-[![Release](https://img.shields.io/github/v/release/rishabhx29/tessera?color=C2410C)](https://github.com/rishabhx29/tessera/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%20x64-6b4dff)](#install)
+[![Release](https://img.shields.io/github/v/release/rishabhx29/tessera?color=6b4dff)](https://github.com/rishabhx29/tessera/releases)
 [![CI](https://github.com/rishabhx29/tessera/actions/workflows/ci.yml/badge.svg)](https://github.com/rishabhx29/tessera/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-16140F.svg)](LICENSE)
-[![Website](https://img.shields.io/badge/website-tesseraweb.vercel.app-5E7358.svg)](https://tesseraweb.vercel.app)
+[![License: MIT](https://img.shields.io/badge/license-MIT-6b4dff.svg)](LICENSE)
+[![Website](https://img.shields.io/badge/website-tesseraweb.vercel.app-6b4dff.svg)](https://tesseraweb.vercel.app)
+
+**[Download for Windows](https://github.com/rishabhx29/tessera/releases/latest/download/Tessera_x64-setup.exe)** · **[Website](https://tesseraweb.vercel.app)** · [All releases](https://github.com/rishabhx29/tessera/releases)
+
+</div>
 
 A *tessera* is one tile in a mosaic. Every screenshot, photo, page and document on your PC is a fragment. Tessera is the picture they add up to.
 
@@ -13,9 +23,14 @@ Type what you remember, not the filename. Tessera finds the screenshot by the wo
 
 ## See it
 
-<img src="website/public/media/app-results.webp" alt="Tessera showing picture results for the search 'a dog in a blanket'" width="820">
+<img src="website/public/media/app-results.webp" alt="Tessera showing picture results for the query a dog in a blanket" width="860">
 
-Search *a dog in a blanket* and the picture comes back, with the reason it matched.
+Search *a dog in a blanket* and the photo comes back, with the reason it matched.
+
+| Pictures | Words | Documents |
+| :---: | :---: | :---: |
+| <a href="website/public/media/lens-pictures.webp"><img src="website/public/media/lens-pictures.webp" alt="Tessera picture results for hot air balloons in the sky" width="280"></a> | <a href="website/public/media/lens-words.webp"><img src="website/public/media/lens-words.webp" alt="Tessera word results for invoice" width="280"></a> | <a href="website/public/media/lens-documents.webp"><img src="website/public/media/lens-documents.webp" alt="Tessera document results for sourdough" width="280"></a> |
+| *hot air balloons in the sky*: photos by what they show | *invoice*: the text inside a screenshot | *sourdough*: files, with page and snippet |
 
 ## Install
 
@@ -23,13 +38,16 @@ Search *a dog in a blanket* and the picture comes back, with the reason it match
 
 1. Run `Tessera_x64-setup.exe`. It installs for the current user, so Windows does not ask for an administrator.
 2. The installer is not code-signed yet. If SmartScreen asks, choose **More info**, then **Run anyway**.
-3. On first launch Tessera downloads its on-device models once, about 1.6 GB, and checks each file against a SHA-256 pin built into the binary. This is the only network access the app makes.
-4. Choose a folder. Tessera reads it in the background.
+3. On first launch Tessera downloads its on-device models once, about 1.6 GB, and checks each file against a SHA-256 pin compiled into the binary.
+4. Add a folder. Tessera reads it in the background and indexes the newest files first.
 5. Press **Ctrl+Alt+T** from anywhere to search.
 
 Nothing else to install. There is no account, no key and no separate model package.
 
-**Requirements:** Windows 10 or 11 on x64. WebView2, which ships with Windows 11 and current Windows 10; if it is missing, Tessera offers the Microsoft download. About 1.7 GB of disk for the models, plus the index (about 14 MB per 1,000 files).
+> [!NOTE]
+> The first-run model download is the only time Tessera uses the network. Search never makes a network call.
+
+**Requirements:** Windows 10 or 11 on x64. WebView2 ships with Windows 11 and current Windows 10; if it is missing, Tessera offers the Microsoft download. About 1.7 GB of disk for the models, plus about 14 MB of index per 1,000 files.
 
 **Uninstall:** Settings > Apps > Installed apps > Tessera. Your models, index and settings live in `%LOCALAPPDATA%\TesseraData`; remove that folder to reclaim the space.
 
@@ -44,47 +62,75 @@ Nothing else to install. There is no account, no key and no separate model packa
 | Documents | DOCX | The document text |
 | Text | TXT, MD, CSV, LOG | Chunked, with overlap, so a phrase across a boundary is still found |
 
-Four lenses sit above the results. **All** mixes everything and says why each file matched. **Pictures** searches by what a picture looks like. **Words** searches the text inside pictures. **Documents** searches the text inside files.
+Four lenses sit above the results. **All** mixes every format and says why each file matched. **Pictures** searches by what a picture looks like. **Words** searches the text inside pictures. **Documents** searches the text inside files.
 
-Everything is one index in a single SQLite file. A moved file keeps its row, a changed file is re-read, and a cloud-only file is skipped rather than half-read.
+Everything is one index in a single SQLite file. A moved file keeps its row, a changed file is read again, and a cloud-only file is skipped, never downloaded.
+
+## How it works
+
+```
+Ctrl+Alt+T
+    │
+    ▼
+Tauri 2 window  (vanilla ES modules, no bundler)
+    │  search(query, lens, limit)
+    ▼
+tessera-core
+    ├── lexical arm    FTS5 trigram + BM25
+    ├── image arm      SigLIP
+    └── meaning arm    MiniLM
+             │  weighted RRF
+             ▼
+      one SQLite index
+```
+
+- **A pipeline per format.** Each format implements one `Pipeline` trait. Video in v0.2 becomes a new pipeline, and the store and search code do not change.
+- **OCR behind a seam.** Windows OCR is the fast path. PP-OCRv6 on ONNX Runtime is the cross-platform fallback and reads more text.
+- **Watch mode.** Newest files first, up to 4 workers, a pause on battery, and models loaded per drain instead of held at idle.
+- **Moves, not duplicates.** Change detection uses mtime, size and SHA-1, so a renamed or moved file keeps its row.
+
+## Measured, not promised
+
+Every number below comes from [docs/performance.md](docs/performance.md), with its method and caveats. None are targets.
+
+| What | p50 | p95 |
+|---|---|---|
+| Fused search, 5,000 files | **65 ms** | **80 ms** |
+| Keyword arm | 17 ms | 58 ms |
+| Picture arm | 36 ms | 46 ms |
+| Meaning arm | 44 ms | 60 ms |
+| Fused search, 50,000 files | 457 ms (target missed) | 523 ms |
+
+At 50,000 files the 100 ms target is missed. The row stays in the table because a miss is a result. That drain ran at 10.8 files per second, and its index is 686 MB, about 13.7 MB per 1,000 files.
+
+Caveats, all from the log: one machine, one run per configuration, a warm OS file cache, and a corpus that is about 31% real files. The p95 over 32 samples is close to the maximum, not a distribution estimate.
 
 ## Privacy
 
 - No telemetry, no accounts, no ads, no paid tier.
 - No network calls at query time. Search is local.
-- The only network access is the first-run model download, checksum-verified against pins compiled into the binary.
-- The index is your data and stays in your data folder. Nothing leaves the machine.
-- MIT licensed. See [SECURITY.md](SECURITY.md) for the full promise.
-
-## Measured numbers
-
-These are measurements from [`docs/performance.md`](docs/performance.md), not targets. The test machine: Intel Core Ultra 5 225H (14 logical processors), 15 GB RAM, Windows 11 build 26200, mains power, no build running, warm OS file cache. Corpus: 5,000 files, 17,807 chunks, 1,800 images, 0 failed. Method: the gate's five-query sweep, 32 samples for the fused figure.
-
-| What | p50 | p95 |
-|---|---|---|
-| Fused search at 5,000 files | **65 ms** | **80 ms** |
-| Keyword arm | 17 ms | 58 ms |
-| Picture arm | 36 ms | 46 ms |
-| Meaning arm | 44 ms | 60 ms |
-
-At 50,000 files the fused search does **not** meet the 100 ms target: 457 ms p50 and 523 ms p95, mostly in the meaning arm. That row is recorded as a miss. The index for 50,000 files is 686 MB, and the initial drain runs at 10.8 files per second.
-
-Caveats, all from the log: one machine, one run per configuration, a corpus that is about 31% real files (generated screenshots are the easy OCR case), and p95 over 32 samples is close to the maximum rather than a distribution estimate. Numbers are never copied between machines or scaled by wishful arithmetic.
+- The only network access is the first-run model download, checked against pins that are compiled into the binary.
+- The index is one SQLite file in your data folder. Nothing leaves the machine.
+- The source is MIT licensed. [SECURITY.md](SECURITY.md) records the full promise.
 
 ## Status and limits
 
 Tessera is at **v0.1.0**, the first public release, and still early.
 
-- Windows x64 only for the installer. The engine also compiles and tests on Linux and macOS; the desktop shell is Windows-first.
-- No video. Recorded meetings and screen recordings arrive in v0.2.
-- Scanned PDFs have no text layer and are counted, not indexed, until the scheduled OCR pass.
-- XLSX and PPTX are planned, not supported.
+| Track | State |
+|---|---|
+| Windows x64 installer | ✅ Shipping |
+| Engine on Linux and macOS | ✅ Compiles and tests in CI |
+| Search at 50,000 files | ❌ 457 ms measured, target is 100 ms |
+| Video | 🔜 v0.2 |
+| Scanned PDFs with no text layer | 🔜 Recorded as waiting for OCR, not yet searchable |
+| XLSX and PPTX | 🔜 Planned for v0.4 |
 
-The roadmap and its kill criteria live in [ADR-0005](docs/adr/0005-phased-rollout-and-kill-criteria.md). A roadmap item is checked off only when a release contains it.
+Files over 50 MB are skipped and counted, with the reason shown in diagnostics. OneDrive online-only placeholders are skipped, never downloaded. The roadmap and its kill criteria live in [ADR-0005](docs/adr/0005-phased-rollout-and-kill-criteria.md).
 
 ## Build from source
 
-Prerequisites: Rust stable, Node.js 20 or newer, and on Windows the MSVC build tools. The engine downloads a pinned ONNX Runtime during the build.
+Prerequisites: Rust stable, Node.js 20 or newer, and the MSVC build tools on Windows. The build downloads a pinned ONNX Runtime.
 
 ```sh
 git clone https://github.com/rishabhx29/tessera
@@ -98,7 +144,7 @@ cd crates/app
 npx @tauri-apps/cli dev
 ```
 
-To build the installer, run the Tauri build:
+To build the installer:
 
 ```sh
 cd crates/app
@@ -125,14 +171,8 @@ cargo test --all
 - [Shared vocabulary](CONTEXT.md): the terms this project uses
 - [Agent guide](agents.md): commands and phase rules for AI coding agents
 
-## Contributing
+Bug reports and testing plans are the most useful help right now. Read [CONTRIBUTING.md](CONTRIBUTING.md) before you open a PR.
 
-Bug reports and testing plans are the most useful help right now. Read [CONTRIBUTING.md](CONTRIBUTING.md) first. Hard-to-reverse decisions start as discussion and an ADR, not a PR. Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
+---
 
-## Acknowledgements
-
-Tessera stands on open models and open code: the ONNX Runtime, SigLIP for pictures, MiniLM for text, ViT-GPT2 for picture captions, PP-OCRv6 for the cross-platform OCR fallback, and the Windows OCR API for the fast path. Full pins and sources are in [`crates/core/src/models/lock.json`](crates/core/src/models/lock.json).
-
-## License
-
-[MIT](LICENSE).
+[MIT](LICENSE) licensed. Built on open code and open models: ONNX Runtime, SigLIP, MiniLM, ViT-GPT2 and PP-OCRv6, with the Windows OCR API as the fast path. Every pin lives in [`crates/core/src/models/lock.json`](crates/core/src/models/lock.json).
